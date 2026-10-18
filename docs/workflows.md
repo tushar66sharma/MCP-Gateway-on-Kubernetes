@@ -1,10 +1,10 @@
 # Workflows
 
-> **Status (end of Phase 1).** Only the **store** workflows exist today: installing the store, a shopper checking out, and signed REST access to WooCommerce. The gateway, MCP-server and dashboard workflows are **(planned)** for Phases 2-5 and are added here as they are built. Workflow 5 (customer account and order history) is verified by `scripts/dev/customer-order-smoke.ps1`. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
+> **Status (end of Phase 2).** The **store** workflows (installing the store, a shopper checking out, signed REST access to WooCommerce) and the **MCP tool call to the store** (workflow 6) exist today. The gateway and dashboard workflows are **(planned)** for Phases 3-5 and are added here as they are built. Workflow 5 (customer account and order history) is verified by `scripts/dev/customer-order-smoke.ps1`. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
 
 How to read the failure sections: every workflow answers the same questions: what can fail, how it is detected, what is retried, what the timeouts are, how duplicates and half-finished work are handled, what the user sees, and where the logs are. Statements marked **(observed)** were seen during Phase 1; statements marked **(expected)** follow from the Kubernetes/Helm/WooCommerce documented behavior and the chart's settings but were not deliberately triggered.
 
-Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install) | [5. Customer account and order history](#5-customer-account-and-order-history)
+Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install) | [5. Customer account and order history](#5-customer-account-and-order-history) | [6. MCP tool call to the store](#6-mcp-tool-call-to-the-store)
 
 ---
 
@@ -80,7 +80,7 @@ flowchart TD
     R --> G{any product exists?}
     G -- no --> G1[seed 3 sample products] --> K
     G -- yes --> G2[log: products already present, not seeding] --> K
-    K[upsert WooCommerce REST key from Secret store-woo-api] --> Z([SETUP COMPLETE, exit 0])
+    K[ensure the urumi-mcp shop manager, then upsert the WooCommerce REST key from Secret store-woo-api] --> Z([SETUP COMPLETE, exit 0])
 ```
 
 **Reading the diagram.** The Job is a linear script with a "check first, change only if needed" decision at every state-changing step: *already installed?*, *does the installed WooCommerce version equal the pinned one?*, *do products exist?*. Each decision is what makes a re-run harmless. Any command that fails aborts the script (`set -eu`), which fails the Pod. The two wait loops are the only places that loop (60 tries x 5 s = 300 s each).
@@ -95,7 +95,8 @@ flowchart TD
 | Cash on delivery enabled (`woocommerce_cod_settings`) | The only payment method; no external payment provider is needed. |
 | `woocommerce_task_list_hidden_lists = ["setup"]` | Hides the onboarding checklist. The older option `woocommerce_task_list_hidden` fails on WooCommerce 11.2.1 and was replaced. On a fresh store the first Job attempt succeeded, which confirms the replacement works. |
 | Pretty permalinks (`/%postname%/`) | WooCommerce REST paths (`/wp-json/...`) need them. |
-| Upsert of the REST key | Deletes the row with the description `urumi-mcp (managed by Helm; do not edit)` and inserts it again with the key/secret from Secret `store-woo-api`. The consumer key is stored hashed (`wc_api_hash`), so the same Secret always produces a working key. |
+| The `urumi-mcp` key owner | The REST key belongs to a dedicated user `urumi-mcp` with the Shop manager role (least privilege: a leaked key cannot manage plugins or users). The Job creates it with a random password that nobody sees, and marks it with user meta `urumi_managed_key_owner=1`. If a user with that login **already exists without the marker**, the Job **fails** instead of promoting it: with open registration and WooCommerce deriving logins from e-mail addresses, a stranger could otherwise register `urumi-mcp` and be handed the key. Fix: [troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker). |
+| Upsert of the REST key | Looks for the key row by its description `urumi-mcp (managed by Helm; do not edit)`. If it exists it is **updated in place** (same `key_id`, so existing nonces are kept); otherwise it is inserted; duplicate rows are removed. The consumer key is stored hashed (`wc_api_hash`), so the same Secret always produces a working key. The update-then-insert is atomic in the sense that there is no moment without a valid key (verified 2026-10-18: `key_id` stayed 4 across redeploys). |
 
 ### Failure and recovery
 
@@ -183,7 +184,7 @@ sequenceDiagram
 
 ## 3. WooCommerce REST access (OAuth1)
 
-**What it does.** Proves (and will let the Phase 2 MCP server use) the WooCommerce REST API v3 from outside WordPress, authenticated with the consumer key/secret that the setup Job created. Today only `scripts/check-woo-api.ps1` exercises it; the MCP server is **(planned)** for Phase 2. Decision record: [ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md).
+**What it does.** Proves (and lets the Phase 2 MCP server use) the WooCommerce REST API v3 from outside WordPress, authenticated with the consumer key/secret that the setup Job created. `scripts/check-woo-api.ps1` exercises it through a port-forward; the MCP server uses it from inside the cluster (see [workflow 6](#6-mcp-tool-call-to-the-store)). Decision record: [ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md).
 
 **The important rule.** The OAuth 1.0a signature must be computed over the **public store URL** (`http://store.localhost` + path), **not** over the URL the request is actually sent to. WooCommerce checks the signature by rebuilding the URL from its own configuration (`includes/class-wc-rest-authentication.php`, `check_oauth_signature()`):
 
@@ -218,14 +219,13 @@ sequenceDiagram
 
 **Reading the diagram.** Actors: the checker script (Node), a `kubectl port-forward` standing in for "some address that reaches the Service", WordPress, and the key table in MariaDB. The script sends the request to `127.0.0.1:18088` but signs `http://store.localhost/...`; WordPress recomputes the signature from `WP_HOME` and compares. The decision at the end is the proof: the same request signed with the *target* URL gets 401. The script runs three requests and expects 200 / 200 / 401 (verified on the fresh install: `HTTP 200`, `HTTP 200 []` for the second request whose search term matches no product, and `HTTP 401 ... Invalid signature - provided signature does not match.`).
 
-**Details that matter for Phase 2.**
+**Details that matter for the MCP server (built in Phase 2).**
 
 - Signature method `HMAC-SHA256`; the HMAC key is `<consumer secret>&` (there is no token secret). OAuth parameters are sent in the query string.
 - Parameters are sorted by raw key in byte order (like PHP's `uksort( $params, 'strcmp' )`), percent-encoded per RFC 3986, and the whole normalized string is encoded again. `scripts/dev/woo-oauth-check.test.mjs` checks the signer against values generated independently by PHP: run `node --test "scripts/dev/*.test.mjs"` (5 tests pass; the directory form `node --test scripts/dev/` fails on Node 24.0.1).
 - Only unique scalar query keys are supported; send lists comma-separated (`include=1,2`).
-- The signing base is the public store URL (`WP_HOME`) with its scheme replaced by `http`. The port is included only if `WP_HOME` has one (non-default `publicPort`); production https/443 signs `http://store.example.com` with no `:443`. The check script derives the base from the Ingress host only (correct for port 80); the non-default-port case is **not tested**.
-- The spike reached WordPress through `kubectl port-forward`. Access via the in-cluster Service name `wordpress.store.svc.cluster.local` is **expected to behave identically but was not exercised**; confirmed in Phase 2.
-- Only GET was exercised; signed POST/PUT is verified in Phase 2.
+- The signing base is the public store URL (`WP_HOME`) with its scheme replaced by `http`. The port is included only if `WP_HOME` has one (non-default `publicPort`); production https/443 signs `http://store.example.com` with no `:443`. The check script now derives the base with the same rule as the chart helper `urumi.storeSigningBaseUrl` (Task 2.6); the non-default-port case renders correctly in the chart (checked with `helm template --set global.publicPort=8081`) but was **not run end to end**.
+- The Phase 1 spike reached WordPress through `kubectl port-forward`. **Verified in Phase 2 (2026-10-18):** the MCP server reaches `wordpress.store.svc.cluster.local` and its signed GET, POST (`create_product`) and PUT (`update_order_status`) all succeed, so the Service-DNS access and write signing that Phase 1 left open are confirmed.
 
 ### Failure and recovery
 
@@ -318,3 +318,74 @@ sequenceDiagram
 | Store restarting | Pods not ready | 503 or a database error for a short time | Wait until `kubectl -n store get pods` shows `Running`, then reload. |
 
 **Logs and checks.** `kubectl -n store logs deploy/wordpress -c wordpress`; re-run `scripts\dev\customer-order-smoke.ps1`. More: [troubleshooting](troubleshooting.md#i-cannot-see-my-guest-order-in-my-account).
+
+---
+
+## 6. MCP tool call to the store
+
+**What it does.** An MCP client asks the WooCommerce MCP server to run a tool (for example `list_orders` with `period=today`). The server checks the caller, validates the input, calls the store's REST API with a signed request, and returns a short, model-friendly result. Today the only callers are you (MCP Inspector, `scripts\check-mcp-woocommerce.ps1`) through a port-forward; in Phase 3 the gateway calls it on behalf of users. Real captured request and response JSON is in [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md). Run it yourself: [run guide, section 8](run-guide.md#8-woocommerce-mcp-server-phase-2).
+
+**Actors.**
+
+- **MCP client:** Inspector or the SDK client in the smoke script (later: the gateway).
+- **`mcp-woocommerce` pod (namespace `mcp`):** an Express app from `packages/shared` plus the tools in `apps/mcp-woocommerce`.
+- **`WooClient`:** builds the WooCommerce URL, signs it with OAuth 1.0a, sends it, and maps the answer.
+- **WordPress and WooCommerce (namespace `store`):** reached at `http://wordpress.store.svc.cluster.local`. It checks the signature and runs the REST handler.
+- **MariaDB:** where products and orders live.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as MCP client
+    participant M as mcp-woocommerce
+    participant W as WordPress REST API
+    participant D as MariaDB
+
+    C->>M: POST /mcp with Authorization Bearer and JSON-RPC tools/call
+    M->>M: Host header check, then bearer token check (timing-safe)
+    alt Host not allowed
+        M-->>C: 403 JSON-RPC error
+    else token missing or wrong
+        M-->>C: 401 JSON-RPC error
+    end
+    M->>M: parse JSON, SDK validates arguments with the zod schema
+    alt arguments invalid
+        M-->>C: result with isError true and the validation message
+    end
+    M->>M: resolve period to UTC bounds in the store time zone
+    M->>M: sign the request, signing URL is the PUBLIC store URL, fresh nonce and timestamp
+    M->>W: GET or POST or PUT on the Service DNS name, redirects not followed, timeout WOO_TIMEOUT_MS
+    W->>W: rebuild the signature base from WP_HOME and compare
+    W->>D: read or write products and orders
+    D-->>W: rows
+    W-->>M: HTTP 200 and JSON
+    M->>M: trim to the fields a model needs
+    M-->>C: result with content text and structuredContent
+```
+
+**Reading the diagram.** Steps 2-3 happen before any MCP code runs: a wrong `Host` gets 403 and a missing or wrong token gets 401, both as JSON-RPC errors with `id: null` (captured, see the protocol notes). Step 4: the SDK checks the arguments against the same zod schema that produced the tool's JSON Schema; a bad value never reaches WooCommerce and comes back as an `isError` result the model can read and fix. The signing step is the subtle one ([ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md)): the request goes to the in-cluster Service, but the OAuth1 signature is computed over the public store URL with scheme `http` (`WOO_SIGNING_BASE_URL`), because WooCommerce rebuilds the signature base from its own `WP_HOME`. Signing the URL actually requested would give 401. The answer is trimmed (a product becomes id, name, status, prices, stock, permalink) so the model sees little text and no credentials can leak into it.
+
+**No retries, on purpose.** The server never retries a WooCommerce request. WooCommerce stores every OAuth nonce it has seen, so replaying the same request is rejected. A fresh signature would be accepted, but `create_product` is **not idempotent**: after a timeout the first request may still have succeeded, and a blind retry could create a duplicate product. The failure is returned to the caller (the model or the user) with a clear message, and the caller decides.
+
+**Verified.** Through the real cluster on 2026-10-18 and 2026-10-19: all six tools are listed; `ping`, `list_products` and `list_orders` succeed; `create_product` (as a draft) creates product 26 and `update_order_status` performs a signed PUT (via `check-mcp-woocommerce.ps1 -Write`); a wrong token gets 401, a foreign `Host` gets 403, `GET /mcp` gets 405; `get_order` for a missing order returns an `isError` result containing `WooCommerce returned 404: Invalid ID.`; a validation failure returns `isError`. Rows marked *unit-tested* below were exercised by the automated tests with a fake HTTP layer and were not forced live; rows marked *expected* follow from WooCommerce's documented behaviour.
+
+### Failure and recovery
+
+| What can fail | Detected by | Retried? | What the caller sees | Fix |
+|---|---|---|---|---|
+| Bad or missing bearer token | `upstreamAuthMiddleware` | no | HTTP 401, `WWW-Authenticate: Bearer`, JSON-RPC error `-32001 Unauthorized` (**captured**) | Use the token from Secret `mcp-woocommerce-token`: `scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token`. |
+| `Host` header not in `MCP_ALLOWED_HOSTS` | `hostHeaderValidation` | no | HTTP 403, `-32000 Invalid Host: <name>` (**captured**) | Call the Service by one of its names, or through a port-forward to `localhost` or `127.0.0.1`. |
+| Invalid input (page 0, price `"abc"`, `period` together with `after`) | zod schema | no | Normal result with `isError: true`, for example `Input validation error: Invalid arguments for tool create_product: regular_price: ...` (**captured**) | Fix the arguments and call again. |
+| WooCommerce answers 4xx (missing order, bad status, 401 invalid signature) | `res.ok` is false in `WooClient` | no | `isError` result `WooCommerce returned 404: Invalid ID.` (**captured** for 404) | Depends on the status. For 401 see [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature). |
+| WooCommerce answers 5xx | `res.ok` is false | no | `isError` result `WooCommerce returned 500: ...` (*unit-tested*) | Check `kubectl -n store logs deploy/wordpress -c wordpress`; call again once the store is healthy. |
+| WooCommerce does not answer within `WOO_TIMEOUT_MS` (default 10 s) | `AbortSignal.timeout` | no | `isError` result `WooCommerce request failed (timeout): WooCommerce did not respond within 10000ms` (*unit-tested*) | Check the store pods. For a create, **look before calling again**: the product may exist. |
+| Network error (pod or Service down, DNS) | `fetch` throws | no | `isError` result `WooCommerce request failed (network_error): Could not reach WooCommerce (network error)` (*unit-tested*) | `kubectl -n store get pods,svc`. |
+| WooCommerce answers a 301 or 302 redirect (the store URL or permalinks changed) | redirects are not followed, so a 3xx is "not ok" | no | `isError` result `WooCommerce returned 301: HTTP 301: ...` (*unit-tested*) | Check `WOO_BASE_URL`, pretty permalinks and `WP_HOME`. Redirects are not followed because the signature belongs to the original request. |
+| Empty store (no products, or no orders today) | n/a, this is a success | n/a | Normal result with an empty list, for example `Found 0 order(s) on page 1.` (**captured**) | Nothing to fix. |
+| Clock skew greater than 15 minutes between the pod and WooCommerce | WooCommerce rejects the timestamp | no | `isError` result `WooCommerce returned 401: ...`, which looks like a bad signature (*expected*, same cause as workflow 3) | Fix the Docker/WSL2 clock: restart Docker Desktop or run `wsl --shutdown`. |
+| Signing base wrong (`WOO_SIGNING_BASE_URL` differs from `WP_HOME` with scheme http) | WooCommerce signature comparison | no | `isError` result `WooCommerce returned 401: Invalid signature ...` (*expected*; the same failure is shown for the check script in workflow 3) | Correct the Helm values; see [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature). |
+| Missing or invalid environment variable at start | `loadConfig` | Kubernetes restarts the container | Pod in `CrashLoopBackOff`; the log line lists variable names, never values | [Troubleshooting](troubleshooting.md#mcp-woocommerce-crashloopbackoff-with-an-environment-variable-message). |
+
+**Logs.** `kubectl -n mcp logs deploy/mcp-woocommerce` (one `request` line per call: method, path, status, duration; no token, no key, no signed URL). The store side: `kubectl -n store logs deploy/wordpress -c wordpress`.

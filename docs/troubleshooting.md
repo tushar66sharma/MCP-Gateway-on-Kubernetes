@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Status (end of Phase 1).** Covers the local k3d cluster and the store. Gateway, MCP-server and dashboard problems are added in later phases.
+> **Status (end of Phase 2).** Covers the local k3d cluster, the store and the WooCommerce MCP server. Gateway and dashboard problems are added in later phases.
 
 Each entry has a **symptom**, a **diagnosis** command and a **fix**. Entries marked **(observed)** happened while building Phase 1; the others are standard Kubernetes/Helm/WooCommerce behavior that follows from the chart's settings and was not deliberately triggered. Commands run from the repository root in PowerShell; refresh `PATH` first if a tool is "not found". Deployment steps: [deployment.md](deployment.md); how the flows work: [workflows.md](workflows.md).
 
@@ -44,6 +44,16 @@ helm status urumi -n urumi-system
 - [Changing `mariadb.storage` fails on upgrade](#changing-mariadbstorage-fails-on-upgrade)
 - [Running the known-answer tests](#running-the-known-answer-tests)
 - [Pre-created Secrets with the wrong keys](#pre-created-secrets-with-the-wrong-keys)
+- [`mcp-woocommerce` is in ErrImageNeverPull or ImagePullBackOff](#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)
+- [`mcp-woocommerce` CrashLoopBackOff with an environment variable message](#mcp-woocommerce-crashloopbackoff-with-an-environment-variable-message)
+- [The MCP server answers 401 Unauthorized](#the-mcp-server-answers-401-unauthorized)
+- [The MCP server answers 403 Invalid Host](#the-mcp-server-answers-403-invalid-host)
+- [An MCP tool returns WooCommerce 401 Invalid signature](#an-mcp-tool-returns-woocommerce-401-invalid-signature)
+- [An MCP tool times out](#an-mcp-tool-times-out)
+- [The port-forward port (13001) is already in use](#the-port-forward-port-13001-is-already-in-use)
+- [The store-setup Job fails with `missing urumi_managed_key_owner marker`](#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
+- [Inspector prints a libuv assertion at the end (Windows)](#inspector-prints-a-libuv-assertion-at-the-end-windows)
+- [Inspector CLI says `expected string, received number`](#inspector-cli-says-expected-string-received-number)
 - [PowerShell gotchas with kubectl](#powershell-gotchas-with-kubectl)
 
 ---
@@ -356,7 +366,167 @@ Expected: `tests 5`, `pass 5`, `fail 0`. They compare the OAuth1 signer with val
 
 **Symptom.** With `secrets.existing.*` set, a Pod stays in `CreateContainerConfigError` ("couldn't find key ...") or the setup Job fails to start.
 
-**Fix.** Create the Secrets in namespace `store` with exactly these keys: `storeDb`: `root-password` and `password`; `storeAdmin`: `password`; `storeWooApi`: `consumer-key` and `consumer-secret`, with the consumer secret at most **43 characters** (WooCommerce stores it in a `char(43)` column; a longer value cannot be inserted by the setup Job). Diagnose with `kubectl -n store describe pod <name>` and `kubectl -n store describe secret <name>` (shows key names and sizes only, not values).
+**Fix.** Create the Secrets in namespace `store` with exactly these keys: `storeDb`: `root-password` and `password`; `storeAdmin`: `password`; `storeWooApi`: `consumer-key` and `consumer-secret`, with the consumer secret at most **43 characters** (WooCommerce stores it in a `char(43)` column; a longer value cannot be inserted by the setup Job). With `storeWooApi` the same Secret (same name, same two keys) must also exist in namespace `mcp`, and `mcpWoocommerceToken` needs one key, `token`, in namespace `mcp`. Diagnose with `kubectl -n store describe pod <name>` and `kubectl -n store describe secret <name>` (shows key names and sizes only, not values).
+
+## `mcp-woocommerce` is in ErrImageNeverPull or ImagePullBackOff
+
+**Symptom.** `kubectl -n mcp get pods` shows the `mcp-woocommerce` pod in `ErrImageNeverPull` or `ImagePullBackOff` (or `ErrImagePull`). `kubectl -n mcp describe pod -l app.kubernetes.io/name=mcp-woocommerce` names an image such as `urumi/mcp-woocommerce:dev`.
+
+**Cause.** The cluster has no registry; our images are built on your laptop and copied in with `k3d image import`. The pod asks for an image tag the cluster does not hold. The usual reason is that the chart was deployed without the tag file `deploy/.images.local.yaml`, so it fell back to the default tag `dev`, which was never built. `deploy.ps1` printed a yellow `no local image tag; run scripts\build-images.ps1` line when that happened. The chart's pull policy is `IfNotPresent`: the node first looks for the image locally and, when it is missing, tries to pull `urumi/mcp-woocommerce` from Docker Hub, where it does not exist, so you normally see `ErrImagePull` and then `ImagePullBackOff`. `ErrImageNeverPull` appears instead if the pull policy is `Never` (for example if you set `global.imagePullPolicy: Never`). **Expected**: neither state has occurred on the reference machine, because `up.ps1` always builds first.
+
+**Fix.**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1      # builds, imports, writes deploy\.images.local.yaml
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy      # rolls the pod onto the new tag
+kubectl -n mcp get pods
+```
+
+`up.ps1` does both steps by itself whenever it deploys, so this normally only happens after running `deploy.ps1` by hand on a fresh clone, or after recreating the cluster (`cluster-down.ps1` deletes the imported images; run `up.ps1 -Redeploy` afterwards).
+
+**Related: the pod restarts on every redeploy.** If `git status --porcelain` shows any change, even one new untracked file, the image tag is `<sha>-dirty-<timestamp>` and changes on every build, so each `-Redeploy` replaces the pod. A clean tree keeps the tag and the pod is left alone (verified 2026-10-18). Harmless; commit or remove stray files if it bothers you. Explanation: [run guide, build-images](run-guide.md#build-the-program-images-build-imagesps1).
+
+**Related: `docker build` fails.** Make sure Docker Desktop is running (`docker version`). The build needs internet the first time (base image `node:24-alpine`, npm packages).
+
+## `mcp-woocommerce` CrashLoopBackOff with an environment variable message
+
+**Symptom.** `kubectl -n mcp get pods` shows `CrashLoopBackOff`, and `kubectl -n mcp logs deploy/mcp-woocommerce` (add `--previous` if the container restarted) prints one line like:
+
+```text
+Invalid environment: WOO_BASE_URL (required), MCP_AUTH_TOKEN (too small)
+```
+
+The server checks its configuration before it starts and exits if anything is missing or invalid. The message lists variable **names and the kind of problem only**, never values. (This message format is from the code and its tests; the live pod has never crashed this way, so the log text on your machine is **expected**, not observed.)
+
+**Fix.** Find the variable in the table in [apps/mcp-woocommerce/README.md](../apps/mcp-woocommerce/README.md#configuration-environment-variables). In the cluster the values come from the chart, so look at what the pod really received (this prints non-secret values only; secrets show as references):
+
+```powershell
+kubectl -n mcp get deploy mcp-woocommerce -o yaml | Select-String -Pattern 'name: WOO_|name: MCP_|name: STORE_' -Context 0,2
+kubectl -n mcp describe pod -l app.kubernetes.io/name=mcp-woocommerce       # a Secret problem shows as CreateContainerConfigError, not a crash
+```
+
+Common causes: `STORE_TIMEZONE` is not an IANA name such as `Asia/Kolkata` (the message says so); `WOO_SIGNING_BASE_URL` does not start with `http://` (the server insists, see the OAuth1 notes); a pre-created Secret has the wrong keys (see [Pre-created Secrets with the wrong keys](#pre-created-secrets-with-the-wrong-keys)). After fixing the values, run `up.ps1 -Redeploy`.
+
+## The MCP server answers 401 Unauthorized
+
+**Symptom.** A call to `http://127.0.0.1:13001/mcp` (through the port-forward) returns HTTP 401 with `{"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized"},"id":null}` (**observed**, 2026-10-19). `check-mcp-woocommerce.ps1` or Inspector reports an authentication failure.
+
+**Cause.** The `Authorization: Bearer <token>` header is missing, malformed, or holds the wrong token. The server cannot tell you which, on purpose.
+
+**Fix.** Copy the current token again and make sure the header is exactly `Authorization: Bearer ` followed by the token with no spaces or line breaks around it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token
+```
+
+The token is generated once and kept across upgrades; it only changes if you delete the Secret or `kubectl delete ns mcp`. If you use a pre-created Secret (`secrets.existing.mcpWoocommerceToken`) and rotated it, restart the pod so it reads the new value: `kubectl -n mcp rollout restart deploy/mcp-woocommerce` (see [deployment.md](deployment.md#known-limitation-rotating-a-pre-created-woocommerce-key-secret)).
+
+## The MCP server answers 403 Invalid Host
+
+**Symptom.** HTTP 403 with `{"jsonrpc":"2.0","error":{"code":-32000,"message":"Invalid Host: <name>"},"id":null}` (**observed** with a made-up host, 2026-10-19).
+
+**Cause.** The `Host` header of the request is not in `MCP_ALLOWED_HOSTS`. The check compares **hostnames only**, so listing a port makes no difference (verified in the cluster: a request with the Service name plus port passed, a foreign host got 403). By default the chart allows `mcp-woocommerce`, `mcp-woocommerce.mcp`, `mcp-woocommerce.mcp.svc`, `mcp-woocommerce.mcp.svc.cluster.local`, `127.0.0.1` and `localhost`. This is a defence against DNS-rebinding attacks; probes (`/healthz`, `/readyz`) are never checked.
+
+**Fix.** Use `http://127.0.0.1:13001/mcp` or `http://localhost:13001/mcp` through the port-forward, or call the Service by one of the names above from inside the cluster. A custom hostname (for example behind another proxy) must be added to the chart's host list in `charts/urumi-platform/templates/mcp/mcp-woocommerce.yaml`.
+
+## An MCP tool returns WooCommerce 401 Invalid signature
+
+**Symptom.** The MCP call itself succeeds (HTTP 200) but the result has `isError: true` and text like `WooCommerce returned 401: Invalid signature - provided signature does not match.` **(expected from ADR-005; the live server has only produced valid signatures so far)**. `scripts\check-mcp-woocommerce.ps1` fails on its first call.
+
+**Background.** WooCommerce checks the OAuth1 signature against the public store URL it rebuilds from its own configuration. See [ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md) and [workflow 3](workflows.md#3-woocommerce-rest-access-oauth1).
+
+**Causes and fixes, most likely first.**
+
+1. **Wrong signing base.** `WOO_SIGNING_BASE_URL` must be the public store URL with scheme `http` (`http://store.localhost` locally; with `global.publicPort=8081` it is `http://store.localhost:8081`). Check what the pod uses:
+   ```powershell
+   kubectl -n mcp get deploy mcp-woocommerce -o yaml | Select-String -Pattern 'WOO_SIGNING_BASE_URL' -Context 0,1
+   ```
+   The value comes from the chart helper `urumi.storeSigningBaseUrl`; fix `global.storeHost` / `global.publicPort` in your values and run `up.ps1 -Redeploy`.
+2. **Clock skew over 15 minutes** between the MCP pod and the store (both run in the same Docker VM, so this usually means the whole VM clock drifted after the laptop slept). Compare `[DateTime]::UtcNow` with `kubectl -n mcp exec deploy/mcp-woocommerce -- date -u`. Restart Docker Desktop or run `wsl --shutdown`.
+3. **Key out of sync.** The MCP pod holds the key from the `mcp` copy of `store-woo-api`; the store holds the hash of the `store` copy. They are rendered from the same value. If you pre-created either Secret yourself, make sure both match, then `kubectl -n mcp rollout restart deploy/mcp-woocommerce`. To test the key outside MCP run `scripts\check-woo-api.ps1`.
+4. **Pretty permalinks switched off** (REST path no longer `/wp-json/...`). The setup Job turns them on; re-run `up.ps1 -Redeploy`.
+
+The server never prints the key, the secret or a signed URL in logs or results, so these checks look at configuration, not at the failing request.
+
+## An MCP tool times out
+
+**Symptom.** The tool result is `isError: true` with `WooCommerce request failed (timeout): WooCommerce did not respond within 10000ms` **(unit-tested; not triggered live)**. Or your client reports its own timeout first.
+
+**Cause.** WooCommerce (WordPress plus PHP plus MariaDB) did not answer within `WOO_TIMEOUT_MS` (default 10 000 ms), for example while the store pod is starting, under memory pressure, or while the setup Job is busy.
+
+**Fix.**
+
+```powershell
+kubectl -n store get pods                      # wordpress and mariadb-0 should be 1/1 Running
+kubectl -n store logs deploy/wordpress -c wordpress --tail=50
+```
+
+Wait until the store is ready and call again. The server does **not** retry (a retry could duplicate a created product, see [workflow 6](workflows.md#6-mcp-tool-call-to-the-store)); after a timeout on `create_product`, list the products first to see whether it was created. To allow slower answers raise `mcpWoocommerce.timeoutMs` in your values (allowed 1000 to 60000) and run `up.ps1 -Redeploy`.
+
+## The port-forward port (13001) is already in use
+
+**Symptom.** `kubectl port-forward` prints `unable to listen on port 13001` / `bind: Only one usage of each socket address`, or `check-mcp-woocommerce.ps1` says the port-forward exited or did not open port 13001.
+
+**Cause.** Another process holds local port 13001, often a previous `kubectl port-forward` that is still running (for example a forgotten window or a hidden one left by an interrupted script).
+
+**Fix.** Find and stop it, or use another local port:
+
+```powershell
+Get-NetTCPConnection -LocalPort 13001 -State Listen | Select-Object OwningProcess
+Get-Process -Id <OwningProcess>          # make sure it is kubectl, then:  Stop-Process -Id <OwningProcess>
+kubectl -n mcp port-forward svc/mcp-woocommerce 23001:3001      # or pick another free local port; use it in the URL too
+```
+
+`check-mcp-woocommerce.ps1` always uses 13001 and stops its own port-forward when it ends, so close your manual one first.
+
+## The store-setup Job fails with `missing urumi_managed_key_owner marker`
+
+**Symptom.** `deploy.ps1` / `up.ps1` fails, `kubectl -n store get pods -l job-name=store-setup` shows `Error` pods, and `kubectl -n store logs job/store-setup` ends with:
+
+```text
+[store-setup] ERROR: user 'urumi-mcp' exists but was not created by store setup (missing urumi_managed_key_owner marker); refusing to grant shop_manager. ...
+```
+
+**Cause.** The WooCommerce API key used by the MCP server is owned by a dedicated user, `urumi-mcp` (Shop manager). Store setup creates that user and marks it with the user meta `urumi_managed_key_owner=1`. On a later run it only reuses a user that carries the marker. A `urumi-mcp` account **without** the marker is not trusted: with open customer registration and WooCommerce generating logins from e-mail addresses, anyone could register `urumi-mcp@example.com` and obtain that login, and the Job would otherwise hand the key to them. (Task 2.5 proved the refusal by running the Job's PHP check against a throwaway unmarked shop manager; the live shell path was only syntax-checked.)
+
+**Fix, case 1: you do not recognise the account (probably an imposter).** Look at it, then delete or rename it in wp-admin (**Users -> All Users**), or from the terminal:
+
+```powershell
+"SELECT ID, user_login, user_email, user_registered FROM wp_users WHERE user_login LIKE 'urumi-mcp%';" | kubectl -n store exec -i mariadb-0 -- sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" wordpress'
+```
+
+Delete it in wp-admin (it is the safest way, because WordPress cleans up its other tables), then run `up.ps1 -Redeploy`; the Job creates a fresh, marked `urumi-mcp`.
+
+**Fix, case 2: the account is legitimately yours** (for example you created `urumi-mcp` by hand, or the store was installed **before this marker existed**; see the upgrade note below). Add the marker. The `wordpress` image has no WP-CLI, so use a small PHP script through `kubectl exec` (this is the method used in Task 2.5; the snippet below is adapted from it and was **not re-run exactly as written**):
+
+```powershell
+@'
+<?php
+require '/var/www/html/wp-load.php';
+$u = get_user_by('login', 'urumi-mcp');
+if (!$u) { echo "user not found\n"; exit(1); }
+update_user_meta($u->ID, 'urumi_managed_key_owner', '1');
+echo 'marker=' . get_user_meta($u->ID, 'urumi_managed_key_owner', true) . "\n";
+'@ | kubectl -n store exec -i deploy/wordpress -c wordpress -- sh -c 'cat > /tmp/m.php && php /tmp/m.php; rm -f /tmp/m.php'
+```
+
+It should print `marker=1`. Then run `up.ps1 -Redeploy`. Check that you really own the account first (role, e-mail) before adding the marker; the marker is what tells setup to trust it.
+
+**Upgrade note: stores installed before the marker existed.** Before the Phase 2 key-owner fix (Task 2.5), setup created `urumi-mcp` without a marker. If you installed the store earlier and upgrade, the Job will refuse until you add the marker with the case 2 script. A fresh install and any store first set up after the fix need nothing. The reference cluster was migrated this way during Task 2.5 (`marker=1`, then a clean redeploy).
+
+## Inspector prints a libuv assertion at the end (Windows)
+
+**Symptom.** After an `npx -y @modelcontextprotocol/inspector@2.11.0 --cli ...` command prints its JSON, Windows shows an `Assertion failed` message mentioning libuv (and sometimes a non-zero exit code).
+
+**Cause and fix.** A cosmetic teardown problem of Node on Windows inside the Inspector, **not** a server fault (**observed** in Task 2.4 after an `isError` call). The printed result is valid; ignore the message. Nothing to fix.
+
+## Inspector CLI says `expected string, received number`
+
+**Symptom.** `--tool-arg regular_price=12.50` returns an `isError` result: `Input validation error ... regular_price: Invalid input: expected string, received number` (**observed** 2026-10-19).
+
+**Cause.** The Inspector CLI converts numeric-looking values to numbers, but `create_product` requires the price as a **string** (to avoid floating-point rounding).
+
+**Fix.** Quote the value as JSON so it stays a string. From Git Bash: `--tool-arg 'regular_price="12.50"'` (**verified**). In Windows PowerShell 5.1 the inner quotes need escaping, `'regular_price=\"12.50\"'` (**expected; not tested**). Or use the Inspector web UI and type the JSON `{"name":"Demo Mug","regular_price":"12.50"}`.
 
 ## PowerShell gotchas with kubectl
 

@@ -28,11 +28,12 @@ All commands are run from the repository root in **Windows PowerShell 5.1**. The
 5. [Passwords and secrets](#5-passwords-and-secrets)
 6. [Using the store](#6-using-the-store)
 7. [Viewing the store database (MariaDB)](#7-viewing-the-store-database-mariadb)
-8. [The gateway database (Postgres)](#8-the-gateway-database-postgres-planned--phase-3)
-9. [Each part of the project](#9-each-part-of-the-project)
-10. [Health checks and logs](#10-health-checks-and-logs)
-11. [Resetting](#11-resetting)
-12. [Troubleshooting pointers](#12-troubleshooting-pointers)
+8. [WooCommerce MCP server (Phase 2)](#8-woocommerce-mcp-server-phase-2)
+9. [The gateway database (Postgres)](#9-the-gateway-database-postgres-planned--phase-3)
+10. [Each part of the project](#10-each-part-of-the-project)
+11. [Health checks and logs](#11-health-checks-and-logs)
+12. [Resetting](#12-resetting)
+13. [Troubleshooting pointers](#13-troubleshooting-pointers)
 
 ---
 
@@ -49,14 +50,16 @@ flowchart TB
             P1["pod wordpress"]
             P2["pod mariadb-0"]
             P3["pod store-setup (Job, finished)"]
+            P5["pod mcp-woocommerce (namespace mcp, internal only)"]
             P4["Traefik, CoreDNS, ... (kube-system)"]
         end
     end
     W --> D --> K3D
     LB --> P4 --> P1 --> P2
+    P5 -. "REST calls inside the cluster" .-> P1
 ```
 
-Reading it from the outside in: your browser talks to port 80 on Windows. Docker Desktop forwards that to the `k3d-urumi-serverlb` container, which hands it to Traefik (the ingress controller) inside the node, which routes `store.localhost` to the WordPress pod. WordPress stores everything in MariaDB.
+Reading it from the outside in: your browser talks to port 80 on Windows. Docker Desktop forwards that to the `k3d-urumi-serverlb` container, which hands it to Traefik (the ingress controller) inside the node, which routes `store.localhost` to the WordPress pod. WordPress stores everything in MariaDB. The MCP server pod (section 8) has no route in from outside; it only calls WordPress from inside the cluster, which the dotted arrow shows.
 
 **Why Docker Desktop shows only 3 containers (verified 2026-10-18).** They are:
 
@@ -103,7 +106,7 @@ Versions used, and how each tool was installed, are in [learning/00-setup-log.md
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1
 ```
 
-`up.ps1` checks that `docker`, `k3d`, `kubectl` and `helm` exist and that Docker is running, starts (or creates) the cluster, warns if the hosts entry is missing, installs the store **only if it is not installed yet**, waits until the store is ready, and prints a URL block. It never prints passwords.
+`up.ps1` checks that `docker`, `k3d`, `kubectl` and `helm` exist and that Docker is running, starts (or creates) the cluster, warns if the hosts entry is missing, installs the store **only if it is not installed yet**, waits until the store is ready, and prints a URL block. It never prints passwords. Whenever it deploys (first install, repair, or `-Redeploy`) it first runs `build-images.ps1` (below), because our own program images, such as the MCP server, must exist inside the cluster before Helm starts them.
 
 It also reads the Helm release state, because `helm status` succeeds even for a broken release. Release `deployed` and namespace `store` present: it just waits for the pods (fast path). Release `failed`, or the `store` namespace missing: it prints a yellow "previous install did not complete" notice and runs the deploy to repair it. Release `pending-install`, `pending-upgrade` or `pending-rollback` (an interrupted Helm operation): it stops and prints the command to recover; see [troubleshooting](troubleshooting.md#another-operation-is-in-progress-pending-install). The decision function was tested in isolation; the real failed and pending paths were not triggered on the live release. The ending looks like this:
 
@@ -113,6 +116,7 @@ It also reads the Helm release state, because `helm status` succeeds even for a 
   Shop         : http://store.localhost/shop/
   My account   : http://store.localhost/my-account/   (customers: register, log in, see their orders)
   WP admin     : http://store.localhost/wp-admin/     (user: admin)
+  MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1
 
   Admin password - run this to copy it to the clipboard (it is never printed here):
     powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
@@ -127,9 +131,28 @@ Options:
 | Option | Effect |
 |---|---|
 | `-Open` | Also opens the storefront in your browser. |
-| `-Redeploy` | Also runs `helm upgrade` so chart or value changes take effect (a plain `up.ps1` does not touch a healthy installed release). Full form: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`. |
+| `-Redeploy` | Also rebuilds the images and runs `helm upgrade` so code, chart or value changes take effect (a plain `up.ps1` does not touch a healthy installed release). Full form: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`. |
 
 Full form for the options: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Open`.
+
+### Build the program images (`build-images.ps1`)
+
+Our own programs (today only the MCP server) run from container images that you build on your laptop; there is no registry. `up.ps1` runs this for you whenever it deploys. Run it yourself only if you want to rebuild without a full redeploy:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1
+```
+
+It builds `urumi/mcp-woocommerce:<tag>` with Docker, copies it into the k3d cluster (`k3d image import`, because the cluster cannot see your Docker images otherwise), and writes the tag to `deploy/.images.local.yaml`, which `deploy.ps1` passes to Helm. Then run `up.ps1 -Redeploy` to roll the new image out.
+
+**How the image tag is chosen.** The tag is the short git commit id (for example `05ca559`). If `git status --porcelain` shows **any** change, including a new untracked file such as a log, the tag becomes `<sha>-dirty-<timestamp>`. This matters:
+
+| Working tree | Tag | What a redeploy does |
+|---|---|---|
+| Clean (everything committed) | `05ca559` | Same tag as last time, so the pod is **not** restarted (verified 2026-10-18: same pod through a redeploy). |
+| Any change, even one untracked file | `05ca559-dirty-20261018235805` | A new tag every build, so the pod is replaced on every redeploy. Harmless, just slower. |
+
+If you deploy without `deploy/.images.local.yaml` (for example you ran `deploy.ps1` by hand on a fresh clone), the chart falls back to tag `dev`, which does not exist in the cluster, so the pod stays in `ErrImageNeverPull`. `deploy.ps1` prints a yellow warning (`no local image tag; run scripts\build-images.ps1`). Fix: [troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff).
 
 ### Stop
 
@@ -157,6 +180,7 @@ With the default settings (host port 80, **verified**):
 | My orders | <http://store.localhost/my-account/orders/> | A logged-in customer's order history |
 | WordPress admin | <http://store.localhost/wp-admin/> | User `admin`, password: see [section 5](#5-passwords-and-secrets) |
 | Dashboard | **(planned — Phase 4)** | Not built yet |
+| WooCommerce MCP server | **internal only** | No URL on your machine. Reach it with a port-forward, see [section 8](#8-woocommerce-mcp-server-phase-2) |
 | Gateway `/mcp` endpoint | **(planned — Phase 3/4)** | Not built yet |
 
 If you moved the store to port 8081 (see [deployment.md](deployment.md)), add `:8081` to every URL; `up.ps1` should print the right ones (expected; the 8081 case was not re-tested for this script).
@@ -182,7 +206,16 @@ The default admin username is `admin`. If `storeSetup.adminUser` was overridden,
 |---|---|---|
 | `store-admin` | `password` | The WordPress `admin` login; created at install and read by `get-admin-password.ps1`. |
 | `store-db` | `root-password`, `password` | MariaDB. `password` is for the app user `wordpress`, which WordPress and the store-setup Job use. `root-password` is for the MariaDB `root` user (`MARIADB_ROOT_PASSWORD` in the MariaDB pod); only MariaDB and you (inspection, section 7) use it. The store-setup Job does **not** use it. |
-| `store-woo-api` | `consumer-key`, `consumer-secret` | The WooCommerce REST/OAuth1 key created at install for the later MCP server; used by `check-woo-api.ps1`. In the `wp_woocommerce_api_keys` table only the consumer key is hashed; the `consumer_secret` column is stored in **plain text** (OAuth1 needs it). Do not `SELECT *` on that table or screenshot it, and never select `wp_users.user_pass`. |
+| `store-woo-api` | `consumer-key`, `consumer-secret` | The WooCommerce REST/OAuth1 key created at install for the MCP server; used by `check-woo-api.ps1`. A byte-identical copy lives in namespace `mcp`, because Secrets cannot be shared across namespaces; the MCP server reads that copy. The key belongs to the `urumi-mcp` shop manager (section 8). In the `wp_woocommerce_api_keys` table only the consumer key is hashed; the `consumer_secret` column is stored in **plain text** (OAuth1 needs it). Do not `SELECT *` on that table or screenshot it, and never select `wp_users.user_pass`. |
+
+In namespace `mcp` (verified 2026-10-19):
+
+| Secret | Keys | Used by |
+|---|---|---|
+| `store-woo-api` | `consumer-key`, `consumer-secret` | Copy of the store's key; read by the MCP server pod. |
+| `mcp-woocommerce-token` | `token` | The bearer token the MCP server requires. Copy it to your clipboard with `scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token` (add `-Show` to also print it). Phase 3 will copy it into namespace `gateway`. |
+
+`get-secret.ps1` works for any Secret value: `-Namespace`, `-Name` and `-Key` are required, the value goes to the clipboard, and it is printed only with `-Show`. The same clipboard caveat as above applies.
 
 **Rule: never paste a secret into a chat, an issue or a commit.** Secrets are generated per install, so they are not in Git.
 
@@ -328,9 +361,111 @@ HPOS ("high-performance order storage") is **off** (`woocommerce_custom_orders_t
 | Order analytics | `wp_wc_order_stats` (date, status, total; filled by a background job, can lag) |
 | Users and customers | `wp_users`, `wp_usermeta` (role, name) |
 | Settings | `wp_options` |
-| MCP/REST API key | `wp_woocommerce_api_keys` (the consumer key is hashed, but `consumer_secret` is plain text: do not `SELECT *` it or screenshot it) |
+| MCP/REST API key | `wp_woocommerce_api_keys` (the consumer key is hashed, but `consumer_secret` is plain text: do not `SELECT *` it or screenshot it). To see who owns the key without touching secrets: `SELECT k.key_id, u.user_login, k.permissions FROM wp_woocommerce_api_keys k JOIN wp_users u ON u.ID=k.user_id;` returned `4 urumi-mcp read_write` (verified 2026-10-19). |
 
-## 8. The gateway database (Postgres) (planned — Phase 3)
+## 8. WooCommerce MCP server (Phase 2)
+
+### What it is
+
+`mcp-woocommerce` is a small service that speaks the **Model Context Protocol (MCP)**, the standard way for AI tools to call functions ("tools") on another system. This one lets an AI client list and create products and list, read and update orders in the WooCommerce store. It runs as one pod in the namespace `mcp` and talks to the store through WooCommerce's REST API. The protocol itself is explained, with real captured requests, in [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md); the code is documented in [apps/mcp-woocommerce/README.md](../apps/mcp-woocommerce/README.md).
+
+### Why it is internal-only
+
+It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. In Phase 3 the **gateway** will be the single public door: it checks who the caller is, then calls this server with the token. NetworkPolicies that restrict which pods may reach it arrive in Phase 5 (**not built yet**; today any pod in the cluster can reach the Service, but still needs the token).
+
+### How it starts
+
+`scripts\up.ps1` does everything: it builds the image, loads it into the cluster, and deploys it with the rest of the platform (section 3). You do not start it separately. Stopping with `stop.ps1` and starting again brings it back with the cluster.
+
+### Is it healthy?
+
+```powershell
+kubectl -n mcp get pods,svc                          # mcp-woocommerce should be 1/1 Running; the Service type is ClusterIP
+kubectl -n mcp logs deploy/mcp-woocommerce           # JSON log lines: "mcp-woocommerce started", then one "request" line per call
+kubectl get ingress -A                               # only the store: there is no ingress for the MCP server
+```
+
+Verified 2026-10-19: pod `1/1 Running`, 0 restarts. The log never contains the token or the WooCommerce key; each request line shows only method, path, status and duration.
+
+### End-to-end check
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1          # read-only
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1 -Write   # also writes
+```
+
+The script reads the bearer token from the Secret (it never prints it), opens a temporary `kubectl port-forward` on local port 13001, runs `scripts/dev/mcp-smoke.mjs` with the MCP SDK client, and stops the port-forward afterwards. Read-only mode lists the 6 tools, calls `ping`, `list_products` (3 products) and `list_orders` for today. It ends with a green line `WooCommerce MCP server works end to end`.
+
+`-Write` additionally:
+
+1. **Creates one product** named `MCP smoke <timestamp>` with price 1.00 and status **draft** (so it is not visible on the storefront; find it in wp-admin under Products, Drafts). Each run creates another one; delete them in wp-admin when you like.
+2. Calls `update_order_status` on the newest order with the status it **already has**, which proves a signed PUT works without changing anything visible (expected; the run recorded `order 25 kept as processing`).
+
+Verified 2026-10-18 (Task 2.6): read-only run found 6 tools, ping ok, 3 products, 9 orders today; `-Write` run created draft product 26 and kept order 25 as `processing`.
+
+### Explore it with MCP Inspector
+
+MCP Inspector is the official debugging client for MCP servers. Because the server is internal, you reach it through a port-forward and authenticate with its bearer token.
+
+**Step 1.** In terminal 1, open the tunnel and leave it running (Ctrl+C closes it):
+
+```powershell
+kubectl -n mcp port-forward svc/mcp-woocommerce 13001:3001
+```
+
+**Step 2.** In terminal 2, copy the token to the clipboard (it is not printed):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token
+```
+
+**Step 3a. Command-line Inspector (verified).** Needs Node (the first run downloads the Inspector through `npx`). This puts the token in an environment variable of this terminal only:
+
+```powershell
+$env:MCP_TOKEN = Get-Clipboard
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://127.0.0.1:13001/mcp --transport http --header "Authorization: Bearer $env:MCP_TOKEN" --method tools/list
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://127.0.0.1:13001/mcp --transport http --header "Authorization: Bearer $env:MCP_TOKEN" --method tools/call --tool-name ping
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://127.0.0.1:13001/mcp --transport http --header "Authorization: Bearer $env:MCP_TOKEN" --method tools/call --tool-name list_orders --tool-arg period=today
+Remove-Item Env:MCP_TOKEN
+```
+
+Verified 2026-10-19 against the pod in the cluster: `tools/call ping` returned `{"ok": true, "server": "mcp-woocommerce", ...}` (run from Git Bash; the PowerShell form differs only in how the variable is written). `tools/list` returned the 6 tools in Task 2.4. Notes:
+
+- **Numbers become numbers.** `--tool-arg regular_price=12.50` sends the number 12.5, but `create_product` wants a **string**, so the server answers with an `isError` result (`expected string, received number`; verified). To send a string from Git Bash, quote it as JSON: `'regular_price="12.50"'`. The PowerShell 5.1 spelling of that quote is `'regular_price=\"12.50\"'` (expected; not tested). The Inspector UI (below) avoids this problem, because you type the value into a text field.
+- **A libuv assertion at the end** (`Assertion failed: ... src\win\async.c`) can appear on Windows after a command finishes. It is cosmetic noise from the Inspector's shutdown, not from the server (observed in Task 2.4); the result printed above it is valid.
+- The token is on the command line of that process, visible to other programs on your PC while it runs. Acceptable on a single-user development machine; the UI route avoids it.
+- The Inspector's default mode talks the 2025 protocol; add `--protocol-era auto` to use the 2026-07-28 one. Both work ([ADR-007](decisions/ADR-007-mcp-sdk-version.md)).
+
+**Step 3b. Inspector with a web page (UI route; not tested here).** Run `npx -y @modelcontextprotocol/inspector@2.11.0`, open the address it prints, choose transport **Streamable HTTP**, enter URL `http://127.0.0.1:13001/mcp`, add the header `Authorization` with value `Bearer ` followed by the pasted token, and connect. **Tools -> List tools** shows the 6 tools; pick `create_product` and enter `{"name":"Demo Mug","regular_price":"12.50"}`. The product is then visible at <http://store.localhost/shop/> (expected; the UI route was not run, but the same call through the SDK client is covered by `-Write`, which uses status `draft`).
+
+### The tools
+
+| Tool | Does | Changes data? |
+|---|---|---|
+| `list_products` | Lists products (search, status, paging). | No |
+| `create_product` | Creates a simple product (`name`, `regular_price` as a string such as `"12.50"`, optional `description`, `status` `publish` or `draft`). | **Yes**, and calling twice creates two products |
+| `list_orders` | Lists orders, newest first. `period` = `today`, `yesterday` or `last_7_days` in the store time zone (`Asia/Kolkata` locally), or `after`/`before` ISO times. | No |
+| `get_order` | One order with items, totals, customer and payment method. | No |
+| `update_order_status` | Changes an order's status (`processing`, `completed`, `cancelled` ...). | **Yes** |
+| `ping` | Returns `ok` and the server time. Does not touch WooCommerce. | No |
+
+Full input rules are in the [server README](../apps/mcp-woocommerce/README.md#tools). When a tool fails (WooCommerce error, bad input, timeout) the answer is a normal result with `isError: true` and a short message; see [workflows.md](workflows.md#6-mcp-tool-call-to-the-store) for every failure case.
+
+### Who owns the WooCommerce API key (security note)
+
+The REST key the MCP server uses belongs to a dedicated WordPress user **`urumi-mcp`** with the **Shop manager** role, not to the administrator. A leaked key can therefore read and change products and orders but cannot manage plugins, themes or users. The store-setup Job creates that user (random password nobody sees) and marks it with the user meta `urumi_managed_key_owner=1`.
+
+**Why the marker.** Customer registration is open and WooCommerce derives the login from the e-mail address, so anyone could register `urumi-mcp@example.com` and get a customer account whose login is `urumi-mcp`. Without the marker the Job would then promote that stranger to Shop manager and hand them the key. The Job therefore **fails** instead of promoting a user it did not create. If you ever see that failure, see [troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker).
+
+Verified 2026-10-19 with SQL against the live database (section 7): one key row, owner `urumi-mcp`, permissions `read_write`; the user has role `shop_manager` and the marker is `1`. The refusal itself was proven in Task 2.5 by running the Job's PHP check against a throwaway unmarked shop manager (it printed the refusal); the shell branch of `setup.sh` is syntax-checked but was not run live.
+
+### What is not possible yet
+
+- **No external access.** Nothing outside the cluster can call this server. Claude Code, Cursor and the dashboard connect through the **gateway** (Phase 3), which is not built.
+- **No per-user identity.** There is one shared bearer token for the server; user accounts, API keys and the audit log arrive with the gateway.
+- **No NetworkPolicies** yet (Phase 5).
+
+## 9. The gateway database (Postgres) (planned — Phase 3)
 
 Not built yet; there are no commands to run. The gateway will have its **own** Postgres database holding gateway users, hashed API keys, the MCP-server registry and the audit log. It is separate from MariaDB on purpose:
 
@@ -341,21 +476,24 @@ Not built yet; there are no commands to run. The gateway will have its **own** P
 
 Exact steps arrive in Phase 3.
 
-## 9. Each part of the project
+## 10. Each part of the project
 
 | Part | Status | How to run | How to check | Logs |
 |---|---|---|---|---|
 | **Store** (WordPress + WooCommerce + MariaDB) | Available (Phase 1) | `scripts\up.ps1`; stop with `scripts\stop.ps1` (full command form: see the convention at the top) | `kubectl -n store get pods`; `scripts\check-woo-api.ps1`; `scripts\dev\customer-order-smoke.ps1` | `kubectl -n store logs deploy/wordpress -c wordpress`; `kubectl -n store logs mariadb-0`; `kubectl -n store logs job/store-setup` |
-| **WooCommerce MCP server** | (planned — Phase 2) | — | — | — |
+| **WooCommerce MCP server** | Available (Phase 2), internal only | `scripts\up.ps1` builds and deploys it; rebuild with `scripts\build-images.ps1` then `up.ps1 -Redeploy` | `kubectl -n mcp get pods`; `scripts\check-mcp-woocommerce.ps1` (add `-Write` to also create a draft product); explore with MCP Inspector, see [section 8](#8-woocommerce-mcp-server-phase-2) | `kubectl -n mcp logs deploy/mcp-woocommerce` |
 | **Gateway + Postgres** | (planned — Phase 3) | — | — | — |
 | **Dashboard + chat agent** | (planned — Phase 4) | — | — | — |
 
-## 10. Health checks and logs
+## 11. Health checks and logs
 
 ```powershell
 kubectl -n store get pods                                    # wordpress and mariadb-0 should be 1/1 Running; store-setup is Completed
 kubectl -n store logs deploy/wordpress -c wordpress          # Apache access log and PHP errors
 kubectl -n store logs job/store-setup                        # install log; the last line is SETUP COMPLETE
+kubectl -n mcp get pods                                      # mcp-woocommerce should be 1/1 Running
+kubectl -n mcp logs deploy/mcp-woocommerce                   # MCP server log (never contains the token or keys)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1             # MCP server end-to-end check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-woo-api.ps1                       # WooCommerce REST key check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1            # register, order, see it in My Account
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1 -CheckGuestLinking   # also checks guest-order linking
@@ -363,7 +501,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-s
 
 The smoke test leaves a demo customer and order in the store (users like `smoke+<timestamp>@example.com`). It never prints the password it generates.
 
-## 11. Resetting
+## 12. Resetting
 
 | Goal | Command | Effect |
 |---|---|---|
@@ -371,7 +509,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 | Wipe all store data | 1. `helm uninstall urumi --namespace urumi-system`<br>2. `kubectl delete ns store mcp gateway --wait=true --timeout=300s`<br>3. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` | **Destroys all data**: products, orders, users and passwords. Do the uninstall first: if the Helm release stays installed while its namespace is gone, `up.ps1` now notices the missing `store` namespace and redeploys (expected; this exact combination was not re-run after the up.ps1 change), but the clean sequence below is the one verified in Phase 1. After all three steps `up.ps1` builds a brand-new store with new passwords (same sequence as [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept), verified in Phase 1). |
 | Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch. |
 
-## 12. Troubleshooting pointers
+## 13. Troubleshooting pointers
 
 - `up.ps1` says Docker is not running: [troubleshooting](troubleshooting.md#upps1-says-docker-is-not-running)
 - `up.ps1` warns that `store.localhost` is not in the hosts file: [troubleshooting](troubleshooting.md#upps1-warns-that-storelocalhost-is-not-in-the-hosts-file)
@@ -380,4 +518,8 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 - `customer-order-smoke.ps1` fails: [troubleshooting](troubleshooting.md#customer-order-smokeps1-fails)
 - "running scripts is disabled on this system": [troubleshooting](troubleshooting.md#running-scripts-is-disabled-on-this-system)
 - `up.ps1` says "previous install did not complete", or stops with a pending Helm operation: [troubleshooting](troubleshooting.md#upps1-says-previous-install-did-not-complete)
+- `mcp-woocommerce` pod in `ErrImageNeverPull` / `ImagePullBackOff`: [troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)
+- `mcp-woocommerce` pod in `CrashLoopBackOff` with an environment message: [troubleshooting](troubleshooting.md#mcp-woocommerce-crashloopbackoff-with-an-environment-variable-message)
+- The MCP server answers 401: [troubleshooting](troubleshooting.md#the-mcp-server-answers-401-unauthorized); 403 Invalid Host: [troubleshooting](troubleshooting.md#the-mcp-server-answers-403-invalid-host); a tool says WooCommerce 401 Invalid signature: [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature); a tool times out: [troubleshooting](troubleshooting.md#an-mcp-tool-times-out); port 13001 busy: [troubleshooting](troubleshooting.md#the-port-forward-port-13001-is-already-in-use); Inspector oddities: [libuv assertion](troubleshooting.md#inspector-prints-a-libuv-assertion-at-the-end-windows), [string vs number](troubleshooting.md#inspector-cli-says-expected-string-received-number)
+- The store-setup Job fails with `missing urumi_managed_key_owner marker`: [troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
 - Port 80 in use, pods not ready, setup Job failed and the rest: the full list at the top of [troubleshooting.md](troubleshooting.md).
