@@ -10,7 +10,7 @@ Accepted (2026-10-18, Phase 1 spike). The spike passed, so the application-passw
 
 ## Context
 
-`apps/mcp-woocommerce` (namespace `mcp`) must read and write products and orders in WooCommerce (namespace `store`). The assignment asks us to document how the MCP server talks to the store. In-cluster traffic is plain HTTP: the server calls `http://wordpress.store.svc.cluster.local/wp-json/wc/v3/...`, while WordPress's `WP_HOME` is `store.localhost`.
+`apps/mcp-woocommerce` (namespace `mcp`) must read and write products and orders in WooCommerce (namespace `store`). The assignment asks us to document how the MCP server talks to the store. In-cluster traffic is plain HTTP: the server will call `http://wordpress.store.svc.cluster.local/wp-json/wc/v3/...` (Phase 2), while WordPress's `WP_HOME` is `store.localhost`.
 
 ## Decision
 
@@ -30,6 +30,10 @@ $base_request_uri = rawurlencode( get_home_url( null, $request_path, is_ssl() ? 
 `get_home_url()` returns the `WP_HOME` host (`store.localhost`), and the scheme is `http` for any non-TLS request. So the client must compute the signature over `http://<WP_HOME host>[:port]<path>` while sending the request to any reachable address (for example `http://wordpress.store.svc.cluster.local`). The reference signer is `signOAuth1Url()` in `scripts/dev/woo-oauth-check.mjs`.
 
 **Consequence for Phase 2:** `WooClient` takes two URLs: the `baseUrl` it connects to (the in-cluster Service) and a separate `signingBaseUrl` (the public store URL, `http` scheme). Both come from configuration.
+
+**What was and was not exercised.** The spike reached the store through `kubectl port-forward` to the `wordpress` Service (`http://127.0.0.1:<port>`). Requests to the in-cluster Service DNS name (`wordpress.store.svc.cluster.local`) were **not** exercised. Because the signature base comes from `get_home_url()` and not from the Host header, Service-DNS access is expected to behave the same, but that is unverified until Phase 2.
+
+**Timestamp window and nonces.** WooCommerce rejects OAuth timestamps more than 15 minutes (plus or minus) from the server's time, and stores used nonces per consumer key, so a nonce can never be reused. Consequences: clock skew between the client and the cluster larger than 15 minutes produces 401 errors that look like signature failures, and a retry must always generate a fresh nonce (never replay the same request).
 
 **Non-default ports:** if the public URL carries a non-default port (`publicPort` not 80), `signingBaseUrl` must include it, because `get_home_url()` includes the port. `check-woo-api.ps1` derives the signing base from the Ingress host only (no port), which is correct for the local default of 80. This was not tested with a non-default port.
 
@@ -56,3 +60,4 @@ $base_request_uri = rawurlencode( get_home_url( null, $request_path, is_ssl() ? 
 - A WooCommerce upgrade changes how `check_oauth_signature()` builds the base URI (re-run `scripts/check-woo-api.ps1`; it is the regression check).
 - The public URL scheme or port changes (update `signingBaseUrl` accordingly).
 - The store gets in-cluster TLS, which would allow plain Basic auth with the consumer key.
+- TLS is added in Phase 5: the official image's `wp-config.php` may honor `X-Forwarded-Proto` for `is_ssl()`, which would change the required signing scheme to `https`. Not checked yet; verify it then.

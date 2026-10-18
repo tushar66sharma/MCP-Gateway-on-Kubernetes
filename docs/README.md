@@ -7,7 +7,7 @@ This is the index of all project documentation. Status is honest: **Available** 
 If you are new to the project, read in this order:
 
 1. **The design spec:** [superpowers/specs/2026-10-18-mcp-gateway-design.md](superpowers/specs/2026-10-18-mcp-gateway-design.md). The source of truth for what we are building and why.
-2. **The architecture overview:** [architecture.md](architecture.md). The components, how they connect, and which namespaces they live in (target architecture; nothing application-level is built yet).
+2. **The architecture overview:** [architecture.md](architecture.md). The components, how they connect, and which namespaces they live in (target architecture; the store is built, the gateway and MCP servers are still planned).
 3. **The Kubernetes primer:** [learning/01-kubernetes-primer.md](learning/01-kubernetes-primer.md). The Kubernetes concepts the project uses, each tied to a command you can run against the local cluster.
 4. **The decision records:** [decisions/README.md](decisions/README.md). One short ADR per significant choice, with alternatives and trade-offs.
 
@@ -15,17 +15,17 @@ If you are new to the project, read in this order:
 
 | Document | Purpose | Status |
 |---|---|---|
-| [architecture.md](architecture.md) | High-level architecture, components, responsibilities, technology choices | Available (target architecture; components are planned) |
+| [architecture.md](architecture.md) | High-level architecture, components, responsibilities, technology choices | Available (store built in Phase 1; other components are planned) |
 | system-design.md | Detailed design: component interactions, data flow, interfaces, trade-offs | (planned) — Phase 3 (partial), Phase 6 (complete) |
-| workflows.md | Step-by-step explanation of the major workflows | (planned) — Phase 1 (grows each phase), Phase 6 (complete) |
-| [diagrams/](diagrams/README.md) | Architecture, sequence, data-flow and workflow diagrams (Mermaid) | Available (index; diagrams are added per phase) |
+| [workflows.md](workflows.md) | Step-by-step explanation of the major workflows | Available (store workflows from Phase 1; grows each phase, complete in Phase 6) |
+| [diagrams/](diagrams/README.md) | Architecture, sequence, data-flow and workflow diagrams (Mermaid) | Available (index; store diagrams exist since Phase 1, others are added per phase) |
 | ai-integration.md | LLM provider abstraction, key setup, quotas, switching providers | (planned) — Phase 4 |
 | error-handling.md | Failure scenarios, retries, timeouts, fallbacks, user-facing errors | (planned) — Phase 3 (partial), Phase 6 (complete) |
 | security.md | Authentication, authorization, secrets, input validation, hardening | (planned) — Phase 3 (partial), Phase 6 (complete) |
 | testing.md | Test strategy, commands and verification procedures | (planned) — Phase 6 |
 | [decisions/](decisions/README.md) | Architecture decision records (ADR-001 to ADR-014) | Available |
-| troubleshooting.md | Common development, configuration and deployment problems with fixes | (planned) — Phase 1 (grows each phase), Phase 6 (complete) |
-| deployment.md | Beginner-friendly deployment guide (local k3d and k3s on a VPS) | (planned) — Phase 1 (grows each phase), Phase 6 (complete) |
+| [troubleshooting.md](troubleshooting.md) | Common development, configuration and deployment problems with fixes | Available (store problems from Phase 1; grows each phase, complete in Phase 6) |
+| [deployment.md](deployment.md) | Beginner-friendly deployment guide (local k3d and k3s on a VPS) | Available (local k3d from Phase 1; the k3s VPS section is **(planned)** for Phase 5) |
 | system-design-and-tradeoffs.md | Short note: architecture choices, routing and failure handling, what changes for production | (planned) — Phase 6 |
 | threat-model.md | Short note: shared upstream credentials, token passthrough, malicious tool descriptions, compromised upstreams | (planned) — Phase 6 |
 | demo-script.md | Step-by-step script for demonstrating the finished system | (planned) — Phase 5 |

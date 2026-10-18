@@ -2,7 +2,7 @@
 
 A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platform admins register MCP servers once; team members then use all of their tools through a single gateway endpoint and a dashboard chat agent. The whole platform is deployed with one Helm chart to a local k3d cluster or a single-node k3s VPS.
 
-> **Status: under construction.** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: under construction (the store runs on Kubernetes; the gateway is not built yet).** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 ## 1. Project Name and Overview
 
@@ -46,7 +46,25 @@ A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platf
 
 ## 11. Complete Local Installation and Setup
 
-*(written in Phase 6)*
+*(the complete guide, including the gateway and dashboard, is written in Phase 6)*
+
+### Quick start (local store)
+
+This works today and installs the WooCommerce store only (the gateway, dashboard and MCP servers come in later phases). You need Docker Desktop (running), `k3d`, `kubectl` and `helm`; see [docs/deployment.md](docs/deployment.md) for versions and every step explained. From the repository root, in PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-up.ps1    # create/start the local cluster
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1   # optional: hosts entries for Node tools (UAC prompt)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy.ps1        # install the store (about a minute)
+```
+
+Then open <http://store.localhost>. The admin area is <http://store.localhost/wp-admin> (user `admin`); print the generated password with:
+
+```powershell
+[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n store get secret store-admin -o jsonpath='{.data.password}')))
+```
+
+Something wrong? See [docs/troubleshooting.md](docs/troubleshooting.md). To start over completely: [docs/deployment.md](docs/deployment.md#step-9-uninstall-and-what-is-kept).
 
 ## 12. Environment-Variable Configuration
 

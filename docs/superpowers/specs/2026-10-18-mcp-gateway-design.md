@@ -132,13 +132,15 @@ The repo is an **npm workspaces monorepo**: one `package.json` at the root, one 
 
 | Resource | Details |
 |---|---|
-| MariaDB `StatefulSet` (1 replica) | Official `mariadb` LTS image; PVC via `volumeClaimTemplates`; root and app passwords from Secret `store-db`; probes use the image's `healthcheck.sh`. |
-| WordPress `Deployment` (1 replica, `Recreate` strategy) | Official `wordpress` PHP-Apache image; PVC mounted at `/var/www/html` (holds plugins and uploads); DB credentials from Secret; `WORDPRESS_CONFIG_EXTRA` sets `WP_HOME`/`WP_SITEURL` from values. |
-| `store-setup` Job (Helm `post-install,post-upgrade` hook, idempotent) | `wordpress:cli` image on the same PVC. It waits for the DB, then: `wp core install` (if not installed); installs and activates WooCommerce (version pinned); sets the store to USD and the timezone from values; enables **Cash on Delivery**; sets pretty permalinks; seeds 3 sample products (only if none exist); upserts a **WooCommerce REST API key** (read/write) whose consumer key and secret come from Secret `store-woo-api`. The key is written with WooCommerce's own hashing (`wc_api_hash`) through `wp eval`. |
-| Services | `mariadb` (ClusterIP 3306), `wordpress` (ClusterIP 80). |
+| MariaDB `StatefulSet` (1 replica) | Official `mariadb:11.8.9` image, **non-root (uid/gid 999)**; PVC via `volumeClaimTemplates`; root and app passwords from Secret `store-db`; probes use the image's `healthcheck.sh`. |
+| WordPress `Deployment` (1 replica, `Recreate` strategy) | Official `wordpress:7.1.3-php8.3-apache` image, **non-root (uid/gid 33, `www-data`)** with the safe sysctl `net.ipv4.ip_unprivileged_port_start=0` (so Apache can bind port 80 without root or capabilities); a `copy-wordpress` initContainer pre-copies the WordPress files onto the PVC (see §8.5); PVC mounted at `/var/www/html` (holds plugins and uploads); DB credentials from Secret; `WORDPRESS_CONFIG_EXTRA` sets `WP_HOME`/`WP_SITEURL` from values (the image's `wp-config.php` evaluates it from the environment at every start, verified in Task 1.5). |
+| `store-setup` Job (Helm `post-install,post-upgrade` hook, idempotent) | `wordpress:cli-2.12.0-php8.3` image (also uid 33) on the same PVC, scheduled next to the WordPress pod by pod affinity (the volume is `ReadWriteOnce`). It waits for `wp-config.php` and the DB, then: `wp core install` (if not installed); installs and activates WooCommerce 11.2.1 (version pinned); sets the store to USD and the timezone from values; turns **coming-soon mode off** (new WooCommerce stores hide the shop otherwise); **disables shipping** (`woocommerce_ship_to_countries=disabled`) so checkout needs no shipping zones; enables **Cash on Delivery**; hides the onboarding task list (`woocommerce_task_list_hidden_lists`, because the older `woocommerce_task_list_hidden` option fails in 11.2.1); sets pretty permalinks; seeds 3 sample products (only if none exist); upserts a **WooCommerce REST API key** (read/write) whose consumer key and secret come from Secret `store-woo-api`. The key is written with WooCommerce's own hashing (`wc_api_hash`) through `wp eval-file`. `backoffLimit: 3`, `activeDeadlineSeconds: 480` (shorter than the 10 min Helm `--wait` timeout). |
+| Services | `mariadb` (headless, port 3306), `wordpress` (ClusterIP 80). |
 | Ingress | `store.localhost` → `wordpress:80`. |
 
-The WordPress admin password comes from Secret `store-admin`. Helm generates it when it isn't supplied, and `NOTES.txt` prints the `kubectl` command to read it.
+The WordPress admin password comes from Secret `store-admin`. Helm generates it when it isn't supplied, and `NOTES.txt` prints the `kubectl` command to read it. A pre-created `secrets.existing.storeAdmin` Secret must use the key `password`; a pre-created `storeWooApi` Secret needs the keys `consumer-key` and `consumer-secret` (the consumer secret must be at most 43 characters, the width of WooCommerce's `char(43)` column), and a pre-created `storeDb` Secret needs `root-password` and `password`.
+
+**Hook ordering (observed, Task 1.4 Step 11 and Task 1.5).** With `--wait`, Helm 4.3.1 starts the post-install/post-upgrade hook after the release's resources are Ready. On the Task 1.4 upgrade, WordPress became Ready at 10:23:45Z and the Job started at 10:28:34Z. On the fresh install in Task 1.5, WordPress became Ready at 10:46:54Z and the Job started at 10:46:55Z. In both cases the Job started after Ready; the Job's own waits for `wp-config.php` and the database make it safe either way.
 
 ### 5.2 WooCommerce MCP server (`apps/mcp-woocommerce`, namespace `mcp`)
 
@@ -149,9 +151,9 @@ The WordPress admin password comes from Secret `store-admin`. Helm generates it 
 | WP-CLI via `kubectl exec` | The MCP pod would need Kubernetes API credentials with exec rights into the store namespace. That's a large privilege, and the coupling is tied to pod names. |
 | Direct SQL against MariaDB | Bypasses WooCommerce logic (totals, stock, status transitions, hooks, cache) and couples us to its internal schema. |
 | Basic auth with a consumer key | WooCommerce only accepts it over HTTPS; in-cluster traffic is HTTP. |
-| WordPress application passwords | Also require HTTPS unless the environment type is `local`. This is the **fallback** if OAuth1 signing hits the Host-header problem below. |
+| WordPress application passwords | Also require HTTPS unless the environment type is `local`. This was the fallback if OAuth1 signing hit the Host-header problem below; the spike passed, so it is not needed. |
 
-**Known risk:** the OAuth1 signature covers the URL. Because the MCP server calls the in-cluster Service hostname while `WP_HOME` is `store.localhost`, the signature base string must use the exact URL the client requested. The Phase 1/2 spike verifies this.
+**Signing base URL (resolved in Phase 1, [ADR-005](../../decisions/ADR-005-woocommerce-rest-oauth1.md)):** the OAuth1 signature covers the URL, but **not the URL the client requested**. WooCommerce rebuilds the base URI from `get_home_url( null, $path, is_ssl() ? 'https' : 'http' )`, i.e. from `WP_HOME` (`store.localhost`) with the scheme `http` for any non-TLS request. So the client sends the request to the in-cluster Service but signs `http://<WP_HOME host>[:port]<path>`. Verified on WooCommerce 11.2.1 with `scripts/check-woo-api.ps1`: signing the public URL gives 200, signing the URL actually requested gives 401. The MCP server therefore needs two settings, `baseUrl` (where it connects) and `signingBaseUrl` (what it signs). The verification used `kubectl port-forward`; requests to the in-cluster Service DNS name are expected to behave the same but are unverified until Phase 2.
 
 **Tools** (inputs validated with zod; outputs trimmed to the fields a model needs, and also returned as `structuredContent`):
 
@@ -417,15 +419,16 @@ interface LlmProvider {
 charts/urumi-platform/
   Chart.yaml  values.yaml  values.schema.json  templates/NOTES.txt  templates/_helpers.tpl
   templates/namespaces.yaml
-  templates/store/      mariadb-*.yaml wordpress-*.yaml store-setup-job.yaml secrets.yaml ingress.yaml
+  templates/store/      mariadb.yaml wordpress.yaml store-setup.yaml store-secrets.yaml ingress.yaml   (built in Phase 1)
+  files/store-setup/    setup.sh upsert-api-key.php   (mounted into the setup Job via a ConfigMap)
   templates/mcp/        mcp-woocommerce.yaml mcp-notes.yaml mcp-utilities.yaml secrets.yaml
   templates/gateway/    postgres-*.yaml gateway-*.yaml dashboard-*.yaml secrets.yaml configmap.yaml ingress.yaml
   templates/network/    default-deny.yaml allow-*.yaml
 deploy/values-local.yaml   deploy/values-prod.yaml
 ```
 
-- One release (`helm upgrade --install urumi charts/urumi-platform -n urumi-system --create-namespace -f deploy/values-local.yaml`). The chart creates and owns the three namespaces `store`, `mcp` and `gateway`. Namespaces and PVCs carry `helm.sh/resource-policy: keep` so an accidental `helm uninstall` doesn't destroy store data.
-- **Generated secrets** use `lookup` to reuse existing values on upgrade (`randAlphaNum` only on first install). Prod can set `existingSecret` names instead.
+- One release (`helm upgrade --install urumi charts/urumi-platform -n urumi-system --create-namespace -f deploy/values-local.yaml`). The chart creates and owns the three namespaces `store`, `mcp` and `gateway`. Namespaces, the standalone `wordpress-data` PVC **and the generated Secrets** carry `helm.sh/resource-policy: keep` so an accidental `helm uninstall` doesn't destroy store data or the credentials that match it. The MariaDB PVC comes from the StatefulSet's `volumeClaimTemplates`, which Helm does not manage, so it survives `helm uninstall` without any annotation (verified in Task 1.5).
+- **Generated secrets** use the helper `urumi.generatedValue`: a value is looked up in this order: (1) memoised earlier in the same render, (2) the existing Secret in the cluster (`lookup`, so upgrades never rotate credentials), (3) a new `randAlphaNum`. The `lookup` always targets one **canonical namespace** per secret, and every copy of that secret in another namespace must pass the same canonical namespace, so copies cannot diverge. Prod can set `secrets.existing.*` names instead.
 
 ### 8.2 Storage
 
@@ -444,7 +447,7 @@ PVCs use the cluster's default StorageClass (`local-path` on k3s/k3d) unless `gl
 |---|---|---|
 | `store-db` (store) | MariaDB root and app passwords | Helm-generated |
 | `store-admin` (store) | WordPress admin password | Helm-generated |
-| `store-woo-api` (store **and** mcp) | WooCommerce consumer key/secret | Helm-generated, rendered into both namespaces |
+| `store-woo-api` (store **and** mcp) | WooCommerce consumer key/secret | Helm-generated; canonical namespace `store`. Built in Phase 1 for `store`; the `mcp` copy is added in Phase 2 using the same canonical namespace so both match |
 | `mcp-woocommerce-token`, `mcp-notes-token`, `mcp-utilities-key` (mcp **and** gateway) | Upstream credentials | Helm-generated |
 | `gateway-secrets` (gateway) | Postgres password, `GATEWAY_ENCRYPTION_KEY`, `GATEWAY_INTERNAL_TOKEN_SECRET` | Helm-generated |
 | `gateway-bootstrap` (gateway) | Bootstrap admin email + password | Helm-generated / values |
@@ -456,7 +459,14 @@ Upstream-credential Secrets in the `gateway` namespace are used **only to seed**
 
 - `readinessProbe` and `livenessProbe` (HTTP `/readyz` and `/healthz` for our apps; `healthcheck.sh` for MariaDB; `pg_isready` for Postgres; `httpGet /wp-login.php` for WordPress, with a generous `startupProbe`).
 - `resources.requests` and `resources.limits` on every container (starting points in §8.7).
-- `securityContext`: `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`, and `readOnlyRootFilesystem: true` for our Node apps and nginx (with `emptyDir` for `/tmp`). WordPress and MariaDB official images need root at startup; this is a documented exception, mitigated by NetworkPolicy.
+- `securityContext` (every pod): `runAsNonRoot: true` with explicit `runAsUser`/`runAsGroup`/`fsGroup`, `seccompProfile: RuntimeDefault`, `automountServiceAccountToken: false`; (every container): `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`. `readOnlyRootFilesystem: true` for our Node apps and nginx (with `emptyDir` for `/tmp`).
+- **The store runs fully non-root (built and verified in Phase 1); there is no root exception.** This replaces the earlier plan that treated WordPress and MariaDB as root-needing:
+  - MariaDB runs as uid/gid 999, the image's built-in `mysql` user.
+  - WordPress runs as uid/gid 33 (`www-data`). Apache normally needs root to bind port 80; the pod sets the namespaced "safe" sysctl `net.ipv4.ip_unprivileged_port_start=0`, which lets any user bind low ports, so no capability and no root are needed.
+  - The `copy-wordpress` initContainer exists because the official image's entrypoint copies WordPress onto the volume with `tar` and then `chmod`s the volume root; run as non-root, that `chmod` on a root-owned mount fails and the container crashes. The initContainer copies the files first with `cp -R` (which never touches the root directory's mode); the entrypoint then sees `index.php` and skips its own copy, and it still creates `wp-config.php`.
+  - The `store-setup` Job runs as uid 33 too (the `wordpress:cli` image is Alpine where `www-data` is uid 82, but the volume belongs to the Debian image's uid 33).
+  - `readOnlyRootFilesystem` is not set for MariaDB, WordPress or WP-CLI (they write to the volume and `/tmp`; `/tmp` and `/run/mysqld` are `emptyDir`s).
+  - NetworkPolicies (Phase 5) remain defense in depth, not a compensation for root.
 - Our images: multi-stage builds on `node:24-alpine`, running as the `node` user (uid 1000).
 
 ### 8.6 NetworkPolicies (security hardening)
@@ -560,10 +570,10 @@ The CLAUDE.md set (`architecture.md`, `system-design.md`, `workflows.md`, `diagr
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | MCP SDK v2 not yet supported by Claude Code / Inspector | Medium | Compatibility gate at the start of Phase 2; fall back to v1 stateless |
-| OAuth1 signature mismatch (internal Host vs `WP_HOME`) | Medium | Sign the exact requested URL; fallback: application passwords with `WP_ENVIRONMENT_TYPE=local` (documented) |
+| OAuth1 signature mismatch (internal Host vs `WP_HOME`) | **Resolved (Phase 1)** | Sign the **public** store URL (`http://<WP_HOME host>[:port]<path>`), not the URL requested; verified on WooCommerce 11.2.1 by `scripts/check-woo-api.ps1` and a PHP-derived known-answer test ([ADR-005](../../decisions/ADR-005-woocommerce-rest-oauth1.md)). Remaining: Service-DNS access and POST/PUT signing are confirmed in Phase 2 |
 | Groq TPM limit (8K) exceeded by tool schemas | Medium | Concise descriptions, result truncation, model choice in the spike, OpenRouter fallback |
 | RAM pressure on a 15 GB laptop | Medium | `.wslconfig` caps WSL at about 9 GB; small limits; only one cluster running at a time |
-| WordPress image needs root, so it can't be fully hardened | Certain | Documented exception; NetworkPolicy isolation |
+| WordPress image needs root, so it can't be fully hardened | **Resolved (Phase 1)** | Runs as uid 33 with a safe sysctl and a `copy-wordpress` initContainer; MariaDB runs as uid 999 (see §8.5). NetworkPolicies still come in Phase 5 as defense in depth |
 | Port 80 busy on Windows | Low | Use 8081 mapping (8080 is already in use on the dev machine) |
 | Time overrun | High | Strict phase exit checks; extras only after the definition of done passes |
 

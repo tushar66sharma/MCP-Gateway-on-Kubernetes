@@ -15,7 +15,10 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 |---|---|---|---|
 | Architecture overview | Clients, Traefik, the three namespaces, upstream MCP servers, LLM | [architecture.md](../architecture.md) | Available (target architecture; its components are planned) |
 | Hello-world request path | How a request reaches a pod through Traefik, Ingress and Service on the local cluster | [learning/01-kubernetes-primer.md](../learning/01-kubernetes-primer.md) | Available |
-| Store checkout sequence | A customer placing an order on the store | Planned for `workflows.md` | (planned) — Phase 1 |
+| Store install sequence | `deploy.ps1` to Helm to the hook Job, with decision points | [workflows.md](../workflows.md) | Available (Phase 1) |
+| Store checkout sequence | A customer placing a Cash-on-delivery order on the store | [workflows.md](../workflows.md) | Available (Phase 1) |
+| WooCommerce REST (OAuth1) sequence | Signing base URL versus target URL | [workflows.md](../workflows.md) | Available (Phase 1) |
+| Store resource map | The store's Pods, Services, PVCs, Secrets and the Job in namespace `store` | [architecture.md](../architecture.md) | Available (Phase 1) |
 | MCP tool-call sequence | Client to gateway to upstream and back, including routing and failure paths | Planned | (planned) — Phase 3 |
 | Upstream health state machine | Upstream states and transitions driven by health checks | Planned | (planned) — Phase 3 |
 | Credential flow | How client API keys and upstream credentials are kept separate and used | Planned | (planned) — Phase 3 |
