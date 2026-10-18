@@ -2,8 +2,8 @@
 # The request goes to 127.0.0.1 (port-forward) but is signed with the PUBLIC store URL, because
 # WooCommerce rebuilds the signature base URL from get_home_url(), not from the Host header.
 # Signing base = public store URL (WP_HOME) with its scheme replaced by http; the port stays only if
-# WP_HOME has one (publicPort not the default for publicScheme). Limitation: this script derives it from
-# the Ingress host only (no port), which is correct for the local default (80).
+# WP_HOME has one (publicPort not the default for publicScheme). Derived from the release values, like
+# up.ps1 does for the store URL (same rule as the chart's urumi.storeSigningBaseUrl).
 $ErrorActionPreference = 'Stop'
 function Stop-WithError([string]$Message) { Write-Host "ERROR: $Message" -ForegroundColor Red; exit 1 }
 foreach ($tool in 'kubectl', 'node') {
@@ -17,14 +17,18 @@ function Get-SecretValue([string]$Name, [string]$Key) {
 }
 $env:WOO_CONSUMER_KEY = Get-SecretValue 'store-woo-api' 'consumer-key'
 $env:WOO_CONSUMER_SECRET = Get-SecretValue 'store-woo-api' 'consumer-secret'
-$storeHost = kubectl -n store get ingress store -o 'jsonpath={.spec.rules[0].host}'
-if ($LASTEXITCODE -ne 0) { Stop-WithError 'Ingress store not found.' }
+$valuesJson = helm get values urumi --namespace urumi-system --all --output json
+if ($LASTEXITCODE -ne 0) { Stop-WithError 'Could not read the release values (helm get values). Is the release installed?' }
+$g = ($valuesJson | ConvertFrom-Json).global
+$pubPort = [int]$g.publicPort
+$isDefaultPort = ($g.publicScheme -eq 'http' -and $pubPort -eq 80) -or ($g.publicScheme -eq 'https' -and $pubPort -eq 443)
+$signBase = if ($isDefaultPort) { "http://$($g.storeHost)" } else { "http://$($g.storeHost):$pubPort" }
 
 $port = 18088
 $pf = Start-Process kubectl -ArgumentList "-n store port-forward svc/wordpress ${port}:80" -PassThru -WindowStyle Hidden
 try {
   Start-Sleep -Seconds 3
-  node (Join-Path $root 'scripts/dev/woo-oauth-check.mjs') --target "http://127.0.0.1:$port" --sign-base "http://$storeHost"
+  node (Join-Path $root 'scripts/dev/woo-oauth-check.mjs') --target "http://127.0.0.1:$port" --sign-base $signBase
   $code = $LASTEXITCODE
 } finally {
   Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue

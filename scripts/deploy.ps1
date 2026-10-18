@@ -30,8 +30,15 @@ if ($valuesPath -like '*values-local.yaml' -and $context -ne 'k3d-urumi') {
   Stop-WithError "Refusing to deploy local values to context '$context'. Run: kubectl config use-context k3d-urumi"
 }
 
+$helmArgs = @('-f', $valuesPath)
+if ($valuesPath -like '*values-local.yaml') {
+  $imagesFile = Join-Path $root 'deploy/.images.local.yaml'
+  if (Test-Path $imagesFile) { $helmArgs += @('-f', $imagesFile) }
+  else { Write-Host 'no local image tag; run scripts\build-images.ps1 (up.ps1 does this automatically)' -ForegroundColor Yellow }
+}
+
 Write-Host "Deploying release 'urumi' to context '$context' with $valuesPath (timeout $Timeout)..."
-helm upgrade --install urumi $chart --namespace urumi-system --create-namespace -f $valuesPath --wait --timeout $Timeout
+helm upgrade --install urumi $chart --namespace urumi-system --create-namespace @helmArgs --wait --timeout $Timeout
 if ($LASTEXITCODE -ne 0) {
   Stop-WithError 'helm upgrade --install failed. Diagnose with: kubectl get pods -A ; kubectl -n store logs job/store-setup ; see docs/troubleshooting.md'
 }

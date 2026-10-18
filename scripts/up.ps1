@@ -68,6 +68,10 @@ if ($action -eq 'deploy') {
     $why = if ($status -ne 'deployed') { "status: $status" } else { 'namespace "store" is missing' }
     Write-Host "previous install did not complete ($why) - running deploy" -ForegroundColor Yellow
   }
+  # Build and import our images first: with --wait the store setup hook only runs after every workload
+  # (including mcp-woocommerce) is Ready, so the image must already exist in the cluster.
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build-images.ps1')
+  if ($LASTEXITCODE -ne 0) { Stop-WithError 'build-images.ps1 failed (see above).' }
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'deploy.ps1')
   if ($LASTEXITCODE -ne 0) { Stop-WithError 'deploy.ps1 failed (see above).' }
 } else {
@@ -92,6 +96,7 @@ Write-Host "  Storefront   : $storeUrl/"
 Write-Host "  Shop         : $storeUrl/shop/"
 Write-Host "  My account   : $storeUrl/my-account/   (customers: register, log in, see their orders)"
 Write-Host "  WP admin     : $storeUrl/wp-admin/     (user: admin)"
+Write-Host '  MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1'
 Write-Host ''
 Write-Host '  Admin password - run this to copy it to the clipboard (it is never printed here):'
 Write-Host '    powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1'
