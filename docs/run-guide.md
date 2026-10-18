@@ -152,7 +152,7 @@ It builds `urumi/mcp-woocommerce:<tag>` with Docker, copies it into the k3d clus
 | Clean (everything committed) | `05ca559` | Same tag as last time, so the pod is **not** restarted (verified 2026-10-18: same pod through a redeploy). |
 | Any change, even one untracked file | `05ca559-dirty-20261018235805` | A new tag every build, so the pod is replaced on every redeploy. Harmless, just slower. |
 
-If you deploy without `deploy/.images.local.yaml` (for example you ran `deploy.ps1` by hand on a fresh clone), the chart falls back to tag `dev`, which does not exist in the cluster, so the pod stays in `ErrImageNeverPull`. `deploy.ps1` prints a yellow warning (`no local image tag; run scripts\build-images.ps1`). Fix: [troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff).
+If you deploy without `deploy/.images.local.yaml` (for example you ran `deploy.ps1` by hand on a fresh clone), the chart falls back to tag `dev`, which does not exist in the cluster, so the pod cannot start. With the chart's default pull policy `IfNotPresent` it shows `ErrImagePull` and then `ImagePullBackOff` (**expected**; not observed on the reference machine, because `up.ps1` always builds first; `ErrImageNeverPull` appears only if the pull policy is `Never`). `deploy.ps1` prints a yellow warning (`no local image tag; run scripts\build-images.ps1`). Fix: [troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff).
 
 ### Stop
 
@@ -429,7 +429,7 @@ npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://127.0.0.1:13001/mcp -
 Remove-Item Env:MCP_TOKEN
 ```
 
-Verified 2026-10-19 against the pod in the cluster: `tools/call ping` returned `{"ok": true, "server": "mcp-woocommerce", ...}` (run from Git Bash; the PowerShell form differs only in how the variable is written). `tools/list` returned the 6 tools in Task 2.4. Notes:
+**The PowerShell form of these commands was not run**; the equivalent commands were verified 2026-10-19 against the pod in the cluster (from Git Bash): `tools/call ping` returned `{"ok": true, "server": "mcp-woocommerce", ...}` (run from Git Bash; the PowerShell form differs only in how the variable is written). `tools/list` returned the 6 tools in Task 2.4. Notes:
 
 - **Numbers become numbers.** `--tool-arg regular_price=12.50` sends the number 12.5, but `create_product` wants a **string**, so the server answers with an `isError` result (`expected string, received number`; verified). To send a string from Git Bash, quote it as JSON: `'regular_price="12.50"'`. The PowerShell 5.1 spelling of that quote is `'regular_price=\"12.50\"'` (expected; not tested). The Inspector UI (below) avoids this problem, because you type the value into a text field.
 - **A libuv assertion at the end** (`Assertion failed: ... src\win\async.c`) can appear on Windows after a command finishes. It is cosmetic noise from the Inspector's shutdown, not from the server (observed in Task 2.4); the result printed above it is valid.

@@ -53,7 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1
 The MCP server runs from an image that is built from this repository and loaded straight into the cluster (there is no registry locally). `up.ps1` does this automatically. If you deploy with `deploy.ps1` yourself, run this first, **before** step 3:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scriptsuild-images.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1
 ```
 
 **Why before:** `helm --wait` waits for every workload, including `mcp-woocommerce`, to be Ready, and Helm runs the store-setup Job only after that. If the image is missing, the MCP pod cannot start and the install waits until the timeout. **What it does:** `docker build` with `docker/node-app.Dockerfile`, `k3d image import` into cluster `urumi`, and a tag file `deploy/.images.local.yaml` (git-ignored) that `deploy.ps1` passes to Helm. The tag is the git short SHA, with `-dirty-<timestamp>` appended when the working tree has any change (even an untracked file); details in the [run guide](run-guide.md#build-the-program-images-build-imagesps1). Without the tag file the chart uses the tag `dev` and the pod cannot start ([troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)).
@@ -118,7 +118,7 @@ The MCP server (namespace `mcp`):
 ```powershell
 kubectl -n mcp get pods,svc                # mcp-woocommerce 1/1 Running; the Service is ClusterIP
 kubectl get ingress -A                     # only the store: the MCP server has none
-powershell -NoProfile -ExecutionPolicy Bypass -File scriptscheck-mcp-woocommerce.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1
 ```
 
 The check script lists 6 tools and calls a few of them through a temporary port-forward (verified 2026-10-18; details in the [run guide](run-guide.md#8-woocommerce-mcp-server-phase-2)).
@@ -217,7 +217,7 @@ kubectl annotate namespace store meta.helm.sh/release-name=urumi meta.helm.sh/re
 kubectl -n store create secret generic store-admin --from-literal=password=<your-password>
 ```
 
-(Do the same for `mcp` once Phase 2 needs a Secret there.) Then name the Secrets in the values file under `secrets.existing`:
+(Do the same for `mcp`: the `storeWooApi` and `mcpWoocommerceToken` Secrets also live there, see the `mcp` rows in the table below.) Then name the Secrets in the values file under `secrets.existing`:
 
 | Values key | Secret keys required | Notes |
 |---|---|---|

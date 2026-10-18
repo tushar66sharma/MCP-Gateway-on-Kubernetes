@@ -75,6 +75,8 @@ kubectl -n mcp port-forward svc/mcp-woocommerce 13001:3001      # in the backgro
 # logged each HTTP exchange with the Authorization header replaced by "Bearer <token>"
 ```
 
+The capture script is a throwaway kept outside the repository, so it is not in the repo. To reproduce the calls yourself, start the port-forward above and either send the raw requests with `curl.exe` (headers listed in section 3, body as shown below), or run `scripts/dev/mcp-smoke.mjs` (via `scripts\check-mcp-woocommerce.ps1`), which makes the same SDK calls but prints only a summary.
+
 The request/response bodies below are verbatim from the server, except that `tools/list` is trimmed from six tools to two (marked `...`).
 
 ### 5.1 `server/discover` (the client probes it first in `auto` mode)

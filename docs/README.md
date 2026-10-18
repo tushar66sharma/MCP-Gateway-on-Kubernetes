@@ -10,8 +10,8 @@ If you are new to the project, read in this order:
 2. **To run the project:** [run-guide.md](run-guide.md). One command starts it; the guide explains every part.
 3. **The architecture overview:** [architecture.md](architecture.md). The components, how they connect, and which namespaces they live in (target architecture; the store and the WooCommerce MCP server are built, the gateway and the other MCP servers are still planned).
 4. **The Kubernetes primer:** [learning/01-kubernetes-primer.md](learning/01-kubernetes-primer.md). The Kubernetes concepts the project uses, each tied to a command you can run against the local cluster.
-   - **The MCP protocol:** [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md). What MCP is and how our server speaks it, with real captured requests and responses.
-5. **The decision records:** [decisions/README.md](decisions/README.md). One short ADR per significant choice, with alternatives and trade-offs.
+5. **The MCP protocol:** [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md). What MCP is and how our server speaks it, with real captured requests and responses.
+6. **The decision records:** [decisions/README.md](decisions/README.md). One short ADR per significant choice, with alternatives and trade-offs.
 
 ## Document index
 
