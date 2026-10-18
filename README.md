@@ -2,7 +2,7 @@
 
 A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platform admins register MCP servers once; team members then use all of their tools through a single gateway endpoint and a dashboard chat agent. The whole platform is deployed with one Helm chart to a local k3d cluster or a single-node k3s VPS.
 
-> **Status: under construction (the store runs on Kubernetes; the gateway is not built yet).** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: under construction (the store and the WooCommerce MCP server run on Kubernetes; the gateway is not built yet).** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 ## 1. Project Name and Overview
 
@@ -14,7 +14,10 @@ A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platf
 
 ## 3. Key Features and User Capabilities
 
-*(written in Phase 6)*
+*(the full section is written in Phase 6; what works today:)*
+
+- **A WooCommerce store on Kubernetes** at <http://store.localhost>: shop, cart, Cash-on-delivery checkout, customer accounts, admin. One command starts it ([run guide](docs/run-guide.md)).
+- **A WooCommerce MCP server** (Phase 2, internal to the cluster): six tools an AI client can call to list and create products and to list, read and update orders. It uses stateless MCP over HTTP with a bearer token, and talks to the store through signed REST calls with a least-privilege `urumi-mcp` shop-manager key. Not reachable from outside the cluster yet; the gateway (Phase 3) will front it. How to run and explore it with MCP Inspector: [run guide, section 8](docs/run-guide.md#8-woocommerce-mcp-server-phase-2). How the protocol works, with real captured requests: [docs/learning/02-mcp-protocol.md](docs/learning/02-mcp-protocol.md).
 
 ## 4. Main Workflows and How the Application Works
 
@@ -50,18 +53,20 @@ A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platf
 
 ### Quick start (local store)
 
-This works today and installs the WooCommerce store only (the gateway, dashboard and MCP servers come in later phases). You need Docker Desktop (running), `k3d`, `kubectl` and `helm`; see [docs/deployment.md](docs/deployment.md) for versions and every step explained. From the repository root, in PowerShell:
+This works today and installs the WooCommerce store and its MCP server (the gateway and dashboard come in later phases). You need Docker Desktop (running), `k3d`, `kubectl` and `helm`; see [docs/deployment.md](docs/deployment.md) for versions and every step explained. From the repository root, in PowerShell:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1   # optional, once: hosts entries for Node tools (UAC prompt)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1            # start the cluster, install the store if needed, print the URLs
 ```
 
-`up.ps1` typically takes about 2-3 minutes the first time (observed on the reference machine; it downloads images and WooCommerce) and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
+`up.ps1` builds the MCP server image and imports it into the cluster before deploying (so Docker must be running), typically takes about 2-3 minutes the first time (observed on the reference machine; it downloads images and WooCommerce), and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
 ```
+
+Check the MCP server end to end with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1` (read-only; it lists the 6 tools and calls a few). It is internal-only, so there is no URL; see the [run guide](docs/run-guide.md#8-woocommerce-mcp-server-phase-2) for exploring it with MCP Inspector.
 
 Pause with `scripts\stop.ps1` (keeps your data). The complete beginner guide (daily use, customer accounts, viewing the database, resetting) is the [run guide](docs/run-guide.md).
 

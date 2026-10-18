@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status (end of Phase 1).** The local k3d cluster, the Helm chart skeleton and the **store** (WordPress + WooCommerce, MariaDB, the `store-setup` hook Job, the Ingress and the Secrets) are **built and verified**. The `mcp` and `gateway` namespaces exist but are empty. Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today) and the [Phase 1 store details](#the-store-built-in-phase-1).
+> **Status (end of Phase 2).** The local k3d cluster, the Helm chart, the **store** (WordPress + WooCommerce, MariaDB, the `store-setup` hook Job, the Ingress and the Secrets) and the **WooCommerce MCP server** (namespace `mcp`, internal only) are **built and verified**. The `gateway` namespace exists but is empty. Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today), the [Phase 1 store details](#the-store-built-in-phase-1) and the [Phase 2 MCP server details](#the-woocommerce-mcp-server-built-in-phase-2).
 
 ## Purpose
 
@@ -58,23 +58,23 @@ flowchart LR
 |---|---|---|---|
 | `apps/dashboard` | React 19 + Vite + TypeScript + Tailwind + Radix UI + TanStack Query + React Router | UI for servers, team, keys, audit log, chat. Talks only to `/api` on the same origin. | **(planned)** — Phase 4 |
 | `apps/gateway` | Node 24 + Express 5 + TypeScript + MCP TS SDK + Drizzle ORM + pg + pino + zod | Dashboard REST API, auth, API keys, upstream registry and health, aggregated `/mcp`, audit log, chat agent. | **(planned)** — Phase 3 (core), Phase 4 (chat agent) |
-| `apps/mcp-woocommerce` | Node 24 + MCP TS SDK + zod | MCP tools over the WooCommerce REST API v3. | **(planned)** — Phase 2 |
+| `apps/mcp-woocommerce` | Node 24 + MCP TS SDK + zod | MCP tools over the WooCommerce REST API v3. | **Built in Phase 2** (internal only; verified in the cluster) |
 | `apps/mcp-notes` | Node 24 + MCP TS SDK | Upstream #2: simple in-memory notes; bearer-token protected. | **(planned)** — Phase 3 |
 | `apps/mcp-utilities` | Node 24 + MCP TS SDK | Upstream #3: date ranges, current time, calculator; custom-header protected. | **(planned)** — Phase 3 |
-| `packages/shared` | TypeScript | Logger, env config loader, MCP HTTP server bootstrap, health endpoints, auth middleware for upstreams. | **(planned)** — Phase 2 |
+| `packages/shared` | TypeScript | Logger, env config loader, MCP HTTP server bootstrap, health endpoints, auth middleware for upstreams. | **Built in Phase 2** |
 | Store (WordPress + WooCommerce, MariaDB, `store-setup` Job) | Deployment + StatefulSet + Job | The WooCommerce store the MCP server operates on. | **Built in Phase 1** (verified: install, upgrade, uninstall/reinstall, fresh install) |
-| `charts/urumi-platform` | Helm 4 (chart `apiVersion: v2`, also installable with Helm 3.x) | Every Kubernetes resource. | **Store part built in Phase 1**; grows in Phases 2-5 |
+| `charts/urumi-platform` | Helm 4 (chart `apiVersion: v2`, also installable with Helm 3.x) | Every Kubernetes resource. | **Store (Phase 1) and MCP server (Phase 2) built**; grows in Phases 3-5 |
 
 The repo is an **npm workspaces monorepo**: one `package.json` at the root, one lockfile, shared TypeScript config ([ADR-001](decisions/ADR-001-typescript-monorepo.md)).
 
 ## Namespaces and exposure
 
-One Helm release owns three namespaces ([ADR-003](decisions/ADR-003-single-helm-chart-three-namespaces.md)). Only the services behind Traefik are reachable from outside the cluster; everything else is internal. The `store` row is built; the `mcp` and `gateway` rows are **(planned)** (their namespaces exist but are empty), as are the NetworkPolicies.
+One Helm release owns three namespaces ([ADR-003](decisions/ADR-003-single-helm-chart-three-namespaces.md)). Only the services behind Traefik are reachable from outside the cluster; everything else is internal. The `store` row and the `mcp-woocommerce` part of the `mcp` row are built; `mcp-notes`, `mcp-utilities` and the `gateway` row are **(planned)** (the `gateway` namespace exists but is empty), as are the NetworkPolicies.
 
 | Namespace | Workloads | Public via Ingress | Internal only |
 |---|---|---|---|
 | `store` | WordPress + WooCommerce (Deployment, PVC), MariaDB (StatefulSet, PVC), `store-setup` Job | WordPress at `store.localhost` | MariaDB, the setup Job |
-| `mcp` | `mcp-woocommerce`, `mcp-notes`, `mcp-utilities` | Nothing (no Ingress) | All three, reachable only from gateway pods (enforced by NetworkPolicies, Phase 5) |
+| `mcp` | `mcp-woocommerce` (built), `mcp-notes`, `mcp-utilities` (planned) | Nothing (no Ingress; verified for `mcp-woocommerce`) | All three. Reachable only from gateway pods once NetworkPolicies exist (Phase 5, not built); today any pod in the cluster can reach `mcp-woocommerce`, but needs its bearer token |
 | `gateway` | `dashboard`, `gateway`, Postgres (StatefulSet, PVC) | `dashboard` at `app.localhost/`; `gateway` at `app.localhost/api` and `app.localhost/mcp` | Postgres |
 
 Hostnames shown are the local defaults; production uses real DNS names (see [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md)).
@@ -137,9 +137,42 @@ flowchart LR
 - **Why WordPress can be uid 33 and still serve port 80.** Binding a port below 1024 normally needs root. The pod sets the namespaced, Kubernetes-"safe" sysctl `net.ipv4.ip_unprivileged_port_start=0`, which allows any user to bind low ports. No root and no Linux capabilities (`capabilities.drop: [ALL]`) are needed.
 - **Why the `copy-wordpress` initContainer exists.** The official image's entrypoint copies WordPress onto `/var/www/html` with `tar`, which also does a `chmod` on the target root. A fresh PVC root is owned by root, so a non-root user cannot `chmod` it and the container crashes. The initContainer runs the same image as uid 33 and copies with `cp -R` first (which never changes the root directory's mode). The entrypoint then sees `index.php`, skips its own copy, and still generates `wp-config.php`.
 - **`WP_HOME`/`WP_SITEURL` come from the `WORDPRESS_CONFIG_EXTRA` environment variable.** Verified on the running pod: `wp-config.php` contains `if ($configExtra = getenv_docker('WORDPRESS_CONFIG_EXTRA', '')) { eval($configExtra); }`, so the constants are evaluated from the pod's environment at **every start**, not baked into the file. A changed public URL therefore takes effect after a redeploy without editing the volume.
-- **The public URL** is `{publicScheme}://{host}` plus `:{publicPort}` only when the port is not the scheme's default (helper `urumi.publicUrl`). It feeds `WP_HOME`/`WP_SITEURL` (and `NOTES.txt`/`WP_URL`). The Ingress uses the bare `storeHost`. The OAuth1 signing base is derived from it (scheme replaced by `http`, see [ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md)); today `check-woo-api.ps1` computes it from the Ingress host, and a chart helper is planned for Phase 2.
+- **The public URL** is `{publicScheme}://{host}` plus `:{publicPort}` only when the port is not the scheme's default (helper `urumi.publicUrl`). It feeds `WP_HOME`/`WP_SITEURL` (and `NOTES.txt`/`WP_URL`). The Ingress uses the bare `storeHost`. The OAuth1 signing base is derived from it (scheme replaced by `http`, see [ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md)); the chart helper `urumi.storeSigningBaseUrl` computes it for the MCP server (`WOO_SIGNING_BASE_URL`), and `check-woo-api.ps1` derives it by the same rule.
 - **Credentials** (`store-db`, `store-admin`, `store-woo-api`) are generated once by `urumi.generatedValue`, stored only in cluster Secrets, and annotated `helm.sh/resource-policy: keep`. Pre-created Secrets can replace them via `secrets.existing.*` (required keys are listed in [deployment.md](deployment.md)).
+
+## The WooCommerce MCP server (built in Phase 2)
+
+```mermaid
+flowchart LR
+  OP["You: Inspector or check script<br/>via kubectl port-forward"] -- "POST /mcp with Bearer token" --> SVC_MCP
+  subgraph ns_mcp[namespace: mcp]
+    SVC_MCP[Service mcp-woocommerce :3001<br/>ClusterIP, no Ingress]
+    MCP["Deployment mcp-woocommerce<br/>uid 1000, read-only root FS"]
+    T1{{Secret mcp-woocommerce-token}}
+    T2{{Secret store-woo-api<br/>copy}}
+  end
+  subgraph ns_store2[namespace: store]
+    SVC_WP2[Service wordpress :80]
+    WP2[Deployment wordpress<br/>WooCommerce REST v3]
+    DB2[(MariaDB)]
+  end
+  SVC_MCP --> MCP
+  T1 -.-> MCP
+  T2 -.-> MCP
+  MCP -- "OAuth1 signed REST<br/>wordpress.store.svc.cluster.local" --> SVC_WP2 --> WP2 --> DB2
+```
+
+**Reading the diagram.** The MCP server is one Pod behind a ClusterIP Service in the `mcp` namespace. There is no Ingress, so it cannot be reached from outside the cluster; today you reach it with `kubectl port-forward`, and in Phase 3 the gateway will call it. Two Secrets are injected as environment variables (dotted lines): the bearer token that callers must present, and a copy of the WooCommerce REST key (Secrets cannot be shared across namespaces, so the chart renders the same generated value into both namespaces). For each tool call the server validates the input, signs a WooCommerce REST request (OAuth 1.0a) and sends it to the `wordpress` Service by its in-cluster DNS name. The step-by-step flow with every failure case is [workflow 6](workflows.md#6-mcp-tool-call-to-the-store); the protocol with captured JSON is in [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md).
+
+### MCP server design points
+
+- **Stateless Streamable HTTP, SDK v2** ([ADR-007](decisions/ADR-007-mcp-sdk-version.md)). A new `McpServer` is built per request, so there are no sessions and replicas would need no affinity. Packages: `@modelcontextprotocol/server` 2.3.1, `/node` 2.1.1 and `/express` 2.0.2 (server side) and `/client` 2.3.1 (tests, smoke script).
+- **Probes never depend on WooCommerce.** `/healthz` (liveness) and `/readyz` (readiness) check only the process. A fresh install would otherwise deadlock: `helm --wait` waits for this pod, and the store-setup Job that creates the API key only starts after that.
+- **Host check on `/mcp` only.** `MCP_ALLOWED_HOSTS` lists hostnames without ports (the SDK compares hostnames only); probes are exempt because the kubelet sends `Host: <pod IP>:3001`.
+- **Least privilege at both ends.** The pod runs as uid 1000 with a read-only root filesystem, a `/tmp` emptyDir, no service-account token and all Linux capabilities dropped. The WooCommerce key belongs to the `urumi-mcp` **shop manager**, not the administrator, so a leaked key cannot manage plugins or users ([ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md)).
+- **Images are built locally and imported into k3d**, tagged with the git short SHA (plus `-dirty-<timestamp>` for an unclean tree). See the [run guide](run-guide.md#build-the-program-images-build-imagesps1).
+- **No retries** of WooCommerce calls (nonce reuse, non-idempotent writes): [workflow 6](workflows.md#6-mcp-tool-call-to-the-store).
 
 ## What exists today
 
-The local k3d cluster `urumi` with its scripts; the Helm chart `charts/urumi-platform` with the **store** (MariaDB, WordPress + WooCommerce, the `store-setup` hook Job, the `store.localhost` Ingress, Secrets), verified by install, upgrade, uninstall/reinstall and a destructive fresh install (see [deployment.md](deployment.md) and [workflows.md](workflows.md)); the OAuth1 check `scripts/check-woo-api.ps1`; and the learning and decision documents ([setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md)). The gateway, dashboard, MCP servers, Postgres, the LLM integration and NetworkPolicies in the first diagram are **not built yet** (Phases 2-5).
+The local k3d cluster `urumi` with its scripts; the Helm chart `charts/urumi-platform` with the **store** (MariaDB, WordPress + WooCommerce, the `store-setup` hook Job, the `store.localhost` Ingress, Secrets), verified by install, upgrade, uninstall/reinstall and a destructive fresh install (see [deployment.md](deployment.md) and [workflows.md](workflows.md)); the OAuth1 check `scripts/check-woo-api.ps1`; the **WooCommerce MCP server** (`apps/mcp-woocommerce`, `packages/shared`, the image build via `scripts/build-images.ps1`, the `mcp` templates in the chart, `scripts/check-mcp-woocommerce.ps1`), verified in the cluster; and the learning and decision documents ([setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md), [MCP protocol notes](learning/02-mcp-protocol.md)). The gateway, dashboard, the notes and utilities MCP servers, Postgres, the LLM integration and NetworkPolicies in the first diagram are **not built yet** (Phases 3-5).

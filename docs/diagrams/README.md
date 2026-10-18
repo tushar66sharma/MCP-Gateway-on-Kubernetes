@@ -13,15 +13,18 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 
 | Diagram | Shows | Where | Status |
 |---|---|---|---|
-| Architecture overview | Clients, Traefik, the three namespaces, upstream MCP servers, LLM | [architecture.md](../architecture.md) | Available (target architecture; its components are planned) |
+| Architecture overview | Clients, Traefik, the three namespaces, upstream MCP servers, LLM | [architecture.md](../architecture.md) | Available (target architecture; only the store and `mcp-woocommerce` are built) |
 | Hello-world request path | How a request reaches a pod through Traefik, Ingress and Service on the local cluster | [learning/01-kubernetes-primer.md](../learning/01-kubernetes-primer.md) | Available |
 | Store install sequence | `deploy.ps1` to Helm to the hook Job, with decision points | [workflows.md](../workflows.md) | Available (Phase 1) |
 | Store checkout sequence | A customer placing a Cash-on-delivery order on the store | [workflows.md](../workflows.md) | Available (Phase 1; expected flow, verified by the manual exit check) |
 | WooCommerce REST (OAuth1) sequence | Signing base URL versus target URL | [workflows.md](../workflows.md) | Available (Phase 1) |
 | Customer account and order history sequence | A shopper registers, orders and sees the order under My Account → Orders | [workflows.md](../workflows.md#5-customer-account-and-order-history) | Available (Phase 1b; verified by `customer-order-smoke.ps1`) |
-| What runs where | Windows, Docker Desktop, the k3d containers and the pods inside the node | [run-guide.md](../run-guide.md#1-what-runs-where) | Available (Phase 1b) |
+| What runs where | Windows, Docker Desktop, the k3d containers and the pods inside the node (includes the MCP server pod since Phase 2) | [run-guide.md](../run-guide.md#1-what-runs-where) | Available (Phase 1b, updated in Phase 2) |
 | Store resource map | The store's Pods, Services, PVCs, Secrets and the Job in namespace `store` | [architecture.md](../architecture.md) | Available (Phase 1) |
-| MCP tool-call sequence | Client to gateway to upstream and back, including routing and failure paths | Planned | (planned) — Phase 3 |
+| MCP server resource map | The `mcp` namespace (Service, Deployment, Secrets) and its signed calls into the store | [architecture.md](../architecture.md#the-woocommerce-mcp-server-built-in-phase-2) | Available (Phase 2; the pod, Service and Secrets were checked in the cluster) |
+| MCP tool call to the store sequence | Client to `mcp-woocommerce` (Host and bearer checks, zod validation) to WooCommerce REST (OAuth1 signed with the public URL, sent to the Service DNS name) to MariaDB, with failure cases | [workflows.md](../workflows.md#6-mcp-tool-call-to-the-store) | Available (Phase 2; the successful path and the 401, 403 and `isError` paths were run, other failures are unit-tested) |
+| MCP discovery, `tools/list` and `tools/call` flow | The stateless 2026-07-28 flow with captured JSON | [learning/02-mcp-protocol.md](../learning/02-mcp-protocol.md#4-the-flow-we-actually-use) | Available (Phase 2; messages captured from the running server) |
+| MCP tool-call sequence through the gateway | Client to gateway to upstream and back, including routing and failure paths | Planned | (planned) — Phase 3 |
 | Upstream health state machine | Upstream states and transitions driven by health checks | Planned | (planned) — Phase 3 |
 | Credential flow | How client API keys and upstream credentials are kept separate and used | Planned | (planned) — Phase 3 |
 | Auth and API-key lifecycle | Invites, sessions, key creation, use and revocation | Planned | (planned) — Phase 3 |
