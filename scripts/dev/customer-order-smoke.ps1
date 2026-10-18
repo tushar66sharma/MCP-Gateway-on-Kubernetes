@@ -5,7 +5,7 @@
 .DESCRIPTION
   1. Registers smoke+<timestamp>@example.com through the My Account form.
   2. Places a cash-on-delivery order via the WooCommerce Store API as that customer.
-  3. Checks /my-account/orders/ lists the order number.
+  3. Checks /my-account/orders/ links to the order (view-order/<id>/).
   Exit 0 on success, 1 with a clear message on failure.
   The script leaves a demo customer and order in the store (useful demo data).
   The random password is never printed; to log in as a customer, register your own account.
@@ -52,10 +52,10 @@ function Register-Customer($session, [string]$email, [string]$password) {
     $m = [regex]::Match($page.Content, 'value="([^"]+)"[^>]*name="woocommerce-register-nonce"')
   }
   if (-not $m.Success) {
-    Fail "no woocommerce-register-nonce on $BaseUrl/my-account/ (is registration enabled? check woocommerce_enable_myaccount_registration)"
+    throw "no woocommerce-register-nonce on $BaseUrl/my-account/ (is registration enabled? check woocommerce_enable_myaccount_registration)"
   }
   if ($page.Content -notmatch 'reg_password') {
-    Fail 'registration form has no password field (woocommerce_registration_generate_password should be "no")'
+    throw 'registration form has no password field (woocommerce_registration_generate_password should be "no")'
   }
   $form = @{
     email                       = $email
@@ -69,14 +69,14 @@ function Register-Customer($session, [string]$email, [string]$password) {
     $err = [regex]::Match($resp.Content, '(?s)woocommerce-error[^>]*>(.*?)</ul>')
     $detail = ''
     if ($err.Success) { $detail = ' Server said: ' + (($err.Groups[1].Value -replace '<[^>]+>', ' ') -replace '\s+', ' ').Trim() }
-    Fail "registration did not log the customer in.$detail"
+    throw "registration did not log the customer in.$detail"
   }
 }
 
 function Get-FirstProductId {
   $products = Invoke-RestMethod -UseBasicParsing -Uri "$BaseUrl/wp-json/wc/store/v1/products?per_page=1"
   $first = @($products)[0]
-  if ($null -eq $first -or -not $first.id) { Fail 'Store API returned no products' }
+  if ($null -eq $first -or -not $first.id) { throw 'Store API returned no products' }
   return [int]$first.id
 }
 
@@ -85,7 +85,7 @@ function New-CodOrder($session, [string]$email, [int]$productId) {
   # Recent WooCommerce sends "Nonce"; older versions sent "X-WC-Store-API-Nonce".
   $nonce = Get-HeaderValue $cart 'Nonce'
   if (-not $nonce) { $nonce = Get-HeaderValue $cart 'X-WC-Store-API-Nonce' }
-  if (-not $nonce) { Fail 'Store API cart response has no Nonce header' }
+  if (-not $nonce) { throw 'Store API cart response has no Nonce header' }
   $headers = @{ Nonce = $nonce }
 
   $add = @{ id = $productId; quantity = 1 } | ConvertTo-Json -Compress
@@ -93,7 +93,7 @@ function New-CodOrder($session, [string]$email, [int]$productId) {
     Invoke-WebRequest -UseBasicParsing -WebSession $session -Uri "$BaseUrl/wp-json/wc/store/v1/cart/add-item" `
       -Method Post -Headers $headers -ContentType 'application/json' -Body $add | Out-Null
   } catch {
-    Fail "cart/add-item failed: $($_.Exception.Message)"
+    throw "cart/add-item failed: $($_.Exception.Message)"
   }
 
   $addr = [ordered]@{
@@ -122,10 +122,10 @@ function New-CodOrder($session, [string]$email, [int]$productId) {
       $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
       $detail = ' ' + $sr.ReadToEnd()
     } catch {}
-    Fail "checkout failed: $($_.Exception.Message)$detail"
+    throw "checkout failed: $($_.Exception.Message)$detail"
   }
   $order = $resp.Content | ConvertFrom-Json
-  if (-not $order.order_id) { Fail 'checkout response has no order_id' }
+  if (-not $order.order_id) { throw 'checkout response has no order_id' }
   return [int]$order.order_id
 }
 
@@ -146,8 +146,8 @@ try {
 
   Write-Host "3/3 checking My Orders for order #$orderId"
   $orders = Invoke-WebRequest -UseBasicParsing -WebSession $session -Uri "$BaseUrl/my-account/orders/"
-  if ($orders.Content -notmatch "#$orderId\b") {
-    Fail "order #$orderId is not listed at $BaseUrl/my-account/orders/"
+  if ($orders.Content -notmatch "view-order/$orderId/") {
+    throw "order #$orderId is not listed at $BaseUrl/my-account/orders/"
   }
 } catch {
   Fail $_.Exception.Message
@@ -173,7 +173,7 @@ if ($CheckGuestLinking) {
     $acct = New-Object Microsoft.PowerShell.Commands.WebRequestSession
     Register-Customer $acct $gEmail (New-RandomPassword)
     $list = Invoke-WebRequest -UseBasicParsing -WebSession $acct -Uri "$BaseUrl/my-account/orders/"
-    if ($list.Content -match "#$gOrder\b") {
+    if ($list.Content -match "view-order/$gOrder/") {
       Write-Host "  RESULT: linked - guest order #$gOrder shows in the new account's My Orders"
     } else {
       Write-Host "  RESULT: not linked - guest order #$gOrder does not show in the new account's My Orders"
