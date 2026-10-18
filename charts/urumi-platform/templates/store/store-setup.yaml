@@ -36,7 +36,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "urumi.labels" (dict "root" $ "name" "store-setup" "component" "store") | nindent 8 }}
+        {{- include "urumi.podLabels" (dict "root" $ "name" "store-setup" "component" "store") | nindent 8 }}
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false

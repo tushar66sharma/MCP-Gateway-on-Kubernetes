@@ -1,3 +1,4 @@
+{{/* Never render .Values with toYaml: during rendering .Values.__generated holds generated secrets. */}}
 {{/* Common labels. Args: dict root, name, component. */}}
 {{- define "urumi.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version }}
@@ -12,6 +13,14 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "urumi.selectorLabels" -}}
 app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/name: {{ .name }}
+{{- end }}
+
+{{/* Pod template labels: selector labels + stable descriptive labels. No chart version, so chart
+     version bumps do not restart pods. Args: dict root, name, component. */}}
+{{- define "urumi.podLabels" -}}
+{{ include "urumi.selectorLabels" (dict "root" .root "name" .name) }}
+app.kubernetes.io/part-of: urumi-platform
+app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{/*
