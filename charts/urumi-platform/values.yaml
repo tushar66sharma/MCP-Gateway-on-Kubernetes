@@ -26,3 +26,12 @@ secrets:
     storeDb: ""       # keys: root-password, password
     storeAdmin: ""    # keys: password
     storeWooApi: ""   # keys: consumer-key, consumer-secret
+
+mariadb:
+  image: mariadb:11.8.9
+  database: wordpress
+  user: wordpress
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }

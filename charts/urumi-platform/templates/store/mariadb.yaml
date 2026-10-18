@@ -1,0 +1,120 @@
+{{- $ns := .Values.namespaces.store -}}
+{{- $dbSecret := default "store-db" .Values.secrets.existing.storeDb -}}
+{{- if not .Values.secrets.existing.storeDb }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: store-db
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "mariadb" "component" "database") | nindent 4 }}
+  annotations:
+    # Kept on uninstall: the data volume outlives the release and must keep matching passwords.
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  root-password: {{ include "urumi.generatedValue" (dict "root" $ "namespace" $ns "secret" "store-db" "key" "root-password" "length" 32) | b64enc | quote }}
+  password: {{ include "urumi.generatedValue" (dict "root" $ "namespace" $ns "secret" "store-db" "key" "password" "length" 32) | b64enc | quote }}
+{{- end }}
+---
+# Headless Service: gives the StatefulSet pod a stable DNS name (mariadb.store.svc.cluster.local).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "mariadb" "component" "database") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "urumi.selectorLabels" (dict "root" $ "name" "mariadb") | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mariadb
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "mariadb" "component" "database") | nindent 4 }}
+spec:
+  serviceName: mariadb
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (dict "root" $ "name" "mariadb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.labels" (dict "root" $ "name" "mariadb" "component" "database") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # The official image supports running as its built-in mysql user (uid 999).
+        {{- include "urumi.podSecurityContext" (dict "uid" 999 "gid" 999) | nindent 8 }}
+      containers:
+        - name: mariadb
+          image: {{ .Values.mariadb.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "urumi.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: root-password } }
+            - name: MARIADB_DATABASE
+              value: {{ .Values.mariadb.database | quote }}
+            - name: MARIADB_USER
+              value: {{ .Values.mariadb.user | quote }}
+            - name: MARIADB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: password } }
+          ports:
+            - name: mysql
+              containerPort: 3306
+          startupProbe:
+            exec: { command: ["healthcheck.sh", "--connect", "--innodb_initialized"] }
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec: { command: ["healthcheck.sh", "--connect", "--innodb_initialized"] }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec: { command: ["healthcheck.sh", "--connect"] }
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.mariadb.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: run
+              mountPath: /run/mysqld
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  # PVCs created from volumeClaimTemplates are not Helm-managed objects: they survive
+  # `helm uninstall` without any annotation and are deleted only manually.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "urumi.selectorLabels" (dict "root" $ "name" "mariadb") | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.global.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mariadb.storage }}
