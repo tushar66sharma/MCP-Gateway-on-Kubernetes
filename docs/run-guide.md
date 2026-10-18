@@ -6,11 +6,14 @@ Statements are either **verified** (run on the reference machine, with the date)
 
 > **Quick start (TL;DR)**
 >
+> First time on this machine? Do [section 2 (one-time setup)](#2-prerequisites-and-one-time-setup) first.
+>
 > 1. Start **Docker Desktop** and wait until it says "Engine running".
-> 2. In PowerShell, from the repository root: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1`
-> 3. Click the URLs it prints (storefront, shop, my account, wp-admin).
-> 4. Need the admin password? `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1` copies it to your clipboard (user `admin`).
-> 5. Done for the day: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1` (keeps your data).
+> 2. In PowerShell, go to the repository: `cd "<path to MCP-Gateway-on-Kubernetes>"`
+> 3. Start everything: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1`
+> 4. Click the URLs it prints (storefront, shop, my account, wp-admin).
+> 5. Need the admin password? `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1` copies it to your clipboard (user `admin`).
+> 6. Done for the day: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1` (keeps your data).
 
 All commands are run from the repository root in **Windows PowerShell 5.1**. The folder path contains spaces on the reference machine; the scripts quote their own paths, so just `cd` into the folder first.
 
@@ -207,7 +210,7 @@ Log in at <http://store.localhost/wp-admin/> as `admin`.
 |---|---|
 | Administrator | Everything: settings, plugins, users, themes, orders, products. |
 | Shop manager | Manage products, orders and customers, and see WooCommerce reports. Cannot change site-wide WordPress settings or install plugins. |
-| Customer | Buy and view their own orders in My Account. No access to wp-admin. This is the default for registered shoppers. |
+| Customer | Buy and view their own orders in My Account. No access to wp-admin (expected; not exercised). This is the default for registered shoppers. |
 
 The role descriptions follow standard WooCommerce behavior (expected; the Shop manager role was not exercised here).
 
@@ -226,7 +229,16 @@ $pw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n st
 kubectl -n store exec -it mariadb-0 -- mariadb -uroot "-p$pw" wordpress
 ```
 
-Type `exit` to leave. Note: the password is passed as a command argument *inside the pod*, so it is briefly visible in that pod's process list. That is acceptable for a local cluster; do not copy this habit to a shared server.
+Type `exit` to leave. Notes:
+
+- `"-p$pw"` puts the password on the **command line** of the Windows `kubectl.exe` process and again inside the pod, so other local processes that can read command lines could see it. That is acceptable on a local, single-user development machine; do not copy this habit to a shared computer or server. If you want the password kept off command lines, use the GUI route in (b) (port-forward plus the clipboard helper).
+- `kubectl exec -it` needs an interactive terminal. It fails from non-TTY runners such as a VS Code "Run" button; use a normal PowerShell window.
+
+A single query without opening the client (PowerShell 5.1: a double-quoted string with single quotes inside the SQL):
+
+```powershell
+kubectl -n store exec mariadb-0 -- mariadb -uroot "-p$pw" -e "SELECT ID, post_title FROM wordpress.wp_posts WHERE post_type='product';"
+```
 
 Four useful queries (run inside the client, or one at a time with `-e "<sql>"`). They were run against the live database on 2026-10-18 (read-only) and worked:
 
@@ -341,7 +353,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 | Goal | Command | Effect |
 |---|---|---|
 | Remove the store but keep the data | `helm uninstall urumi --namespace urumi-system` | The data volumes and namespace are kept; a later `up.ps1` reinstalls and the data comes back (verified, see [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept)). |
-| Wipe all store data | `kubectl delete ns store mcp gateway` | **Destroys data**: products, orders, users and passwords. The next install makes a brand-new store. |
+| Wipe all store data | 1. `helm uninstall urumi --namespace urumi-system`<br>2. `kubectl delete ns store mcp gateway --wait=true --timeout=300s`<br>3. `scripts\up.ps1` | **Destroys all data**: products, orders, users and passwords. Do the uninstall first: if the Helm release stays installed, `up.ps1` takes its "already installed" branch, waits for MariaDB in a namespace that no longer exists, and fails. After all three steps `up.ps1` builds a brand-new store with new passwords (same sequence as [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept), verified in Phase 1). |
 | Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch. |
 
 ## 12. Troubleshooting pointers
