@@ -111,7 +111,7 @@ flowchart LR
 | `apps/mcp-notes` | Node 24 + MCP TS SDK | Upstream #2: simple in-memory notes; bearer-token protected. |
 | `apps/mcp-utilities` | Node 24 + MCP TS SDK | Upstream #3: date ranges, current time, calculator; custom-header protected. |
 | `packages/shared` | TypeScript | Logger, env config loader, MCP HTTP server bootstrap, health endpoints, auth middleware for upstreams. |
-| `charts/urumi-platform` | Helm 3 | Every Kubernetes resource. |
+| `charts/urumi-platform` | Helm 4 (chart `apiVersion: v2`, also installable with Helm 3.x) | Every Kubernetes resource. |
 
 The repo is an **npm workspaces monorepo**: one `package.json` at the root, one lockfile, shared TypeScript config.
 
@@ -435,7 +435,7 @@ PVCs use the cluster's default StorageClass (`local-path` on k3s/k3d) unless `gl
 
 - **Controller:** Traefik, bundled with k3s and k3d, so the same ingress class is used in both environments. (ingress-nginx is being retired upstream, so it is avoided.)
 - **Hosts (local):** `store.localhost`, `app.localhost`. Browsers resolve `*.localhost` to loopback automatically. Windows/Node-based MCP clients need hosts-file entries (`127.0.0.1 store.localhost app.localhost`), and `scripts/setup-hosts.ps1` adds them (admin prompt).
-- **k3d** maps host port 80 → the cluster load balancer (if 80 is busy, 8080, and the URLs become `http://app.localhost:8080`).
+- **k3d** maps host port 80 → the cluster load balancer (if 80 is busy, 8081, and the URLs become `http://app.localhost:8081`; 8080 is already taken on the dev machine).
 - **Prod:** real DNS A records → VPS IP; optional TLS with cert-manager + Let's Encrypt (`global.tls.enabled`).
 
 ### 8.4 Secrets
@@ -564,7 +564,7 @@ The CLAUDE.md set (`architecture.md`, `system-design.md`, `workflows.md`, `diagr
 | Groq TPM limit (8K) exceeded by tool schemas | Medium | Concise descriptions, result truncation, model choice in the spike, OpenRouter fallback |
 | RAM pressure on a 15 GB laptop | Medium | `.wslconfig` caps WSL at about 9 GB; small limits; only one cluster running at a time |
 | WordPress image needs root, so it can't be fully hardened | Certain | Documented exception; NetworkPolicy isolation |
-| Port 80 busy on Windows | Low | Use 8080 mapping |
+| Port 80 busy on Windows | Low | Use 8081 mapping (8080 is already in use on the dev machine) |
 | Time overrun | High | Strict phase exit checks; extras only after the definition of done passes |
 
 ---
