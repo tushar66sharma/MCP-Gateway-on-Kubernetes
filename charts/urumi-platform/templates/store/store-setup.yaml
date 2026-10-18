@@ -36,7 +36,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "urumi.labels" (dict "root" $ "name" "store-setup" "component" "store") | nindent 8 }}
+        {{- include "urumi.podLabels" (dict "root" $ "name" "store-setup" "component" "store") | nindent 8 }}
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
@@ -80,6 +80,7 @@ spec:
             - { name: ADMIN_EMAIL, value: {{ .Values.storeSetup.adminEmail | quote }} }
             - name: ADMIN_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $adminSecret }}, key: password } }
+            - { name: MCP_KEY_OWNER, value: {{ .Values.storeSetup.mcpKeyOwner | quote }} }
             - { name: WOO_VERSION, value: {{ .Values.storeSetup.woocommerceVersion | quote }} }
             - { name: STORE_CURRENCY, value: {{ .Values.storeSetup.currency | quote }} }
             - { name: STORE_COUNTRY, value: {{ .Values.storeSetup.country | quote }} }

@@ -1,6 +1,6 @@
 # Deployment guide
 
-> **Status (end of Phase 1).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. The gateway, dashboard and MCP servers are not part of the chart yet **(planned, Phases 2-4)**, so today this guide deploys the store only. The **production (k3s VPS)** section is **(planned, Phase 5)**.
+> **Status (end of Phase 2).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. Phase 2 added the **WooCommerce MCP server** to the chart (namespace `mcp`, internal only) and the image build step that `up.ps1` now runs before every deploy. The gateway and dashboard are not part of the chart yet **(planned, Phases 3-4)**. The **production (k3s VPS)** section is **(planned, Phase 5)**.
 
 Cost: the local deployment uses no paid service and no cloud account; everything runs on your machine in Docker. (The reason production is a VPS and not Vercel/Render is in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md).)
 
@@ -10,7 +10,7 @@ Related documents: how the pieces fit together [architecture.md](architecture.md
 
 ### What you are building
 
-A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d) with one Helm release called `urumi` in the namespace `urumi-system`. The release creates the namespaces `store`, `mcp` and `gateway`; today only `store` contains workloads: MariaDB, WordPress with WooCommerce, an Ingress for `store.localhost`, three generated Secrets, and a one-off Job that configures the shop.
+A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d) with one Helm release called `urumi` in the namespace `urumi-system`. The release creates the namespaces `store`, `mcp` and `gateway`; today `store` contains MariaDB, WordPress with WooCommerce, an Ingress for `store.localhost`, three generated Secrets, and a one-off Job that configures the shop, and `mcp` contains the WooCommerce MCP server (one Deployment, a ClusterIP Service, two Secrets, **no Ingress**). `gateway` is still empty.
 
 ### Prerequisites
 
@@ -21,7 +21,7 @@ A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d
 | k3d | v5.9.0 | Creates the cluster | `k3d version` |
 | kubectl | v1.36.1 | Talks to the cluster | `kubectl version --client` |
 | Helm | v4.3.1 | Installs the chart | `helm version` |
-| Node.js | 24 (used: 24.0.1) | Only for the optional REST API check and its tests | `node --version` |
+| Node.js, then `npm ci` once from the repository root | 24 (used: 24.0.1) | Not needed to run the store or the MCP server (their images build inside Docker). Needed for the host-side checks (`check-mcp-woocommerce.ps1` imports the MCP SDK from the repository's `node_modules`, the optional REST API check) and for `npm test` | `node --version` |
 | Free host port 80 (and 443) | - | The cluster publishes them | see [troubleshooting](troubleshooting.md#port-80-is-already-in-use) |
 
 How these were installed on the reference machine, including the WSL2 memory cap, is in [learning/00-setup-log.md](learning/00-setup-log.md). The store's memory limits add up to 1 GiB (MariaDB 512 Mi + WordPress 512 Mi, plus 768 Mi while the setup Job runs), on top of k3s itself, so the 9 GB WSL2 cap in the setup log is ample. Open a **new** terminal after installing a tool so that `PATH` is refreshed.
@@ -47,6 +47,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1
 ```
 
 **Why:** browsers and `curl` resolve `*.localhost` to your own machine automatically, but Node-based tools use the operating system resolver and need a line in the Windows hosts file. This script adds `127.0.0.1 store.localhost app.localhost hello.localhost` (once; it is safe to repeat). **Expected:** a UAC prompt (accept it), then `hosts entries present.` If you will only use a browser (or the scripts in this repository, which do not need it: `scripts\check-woo-api.ps1` connects to 127.0.0.1 through a port-forward and uses `store.localhost` only as a string to sign) you can skip this step.
+
+### Step 3a. Build our program images (new in Phase 2)
+
+The MCP server runs from an image that is built from this repository and loaded straight into the cluster (there is no registry locally). `up.ps1` does this automatically. If you deploy with `deploy.ps1` yourself, run this first, **before** step 3:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1
+```
+
+**Why before:** `helm --wait` waits for every workload, including `mcp-woocommerce`, to be Ready, and Helm runs the store-setup Job only after that. If the image is missing, the MCP pod cannot start and the install waits until the timeout. **What it does:** `docker build` with `docker/node-app.Dockerfile`, `k3d image import` into cluster `urumi`, and a tag file `deploy/.images.local.yaml` (git-ignored) that `deploy.ps1` passes to Helm. The tag is the git short SHA, with `-dirty-<timestamp>` appended when the working tree has any change (even an untracked file); details in the [run guide](run-guide.md#build-the-program-images-build-imagesps1). Without the tag file the chart uses the tag `dev` and the pod cannot start ([troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)).
 
 ### Step 3. Install the store
 
@@ -102,6 +112,16 @@ ingress.networking.k8s.io/store   traefik   store.localhost   172.19.0.3   80
 ```
 
 The exact pod name suffixes and the Ingress address differ on your machine. `RESTARTS` should be 0 on all pods. The setup log ends with `[store-setup] ... SETUP COMPLETE`. Warnings such as `Startup probe failed: HTTP probe failed with statuscode: 500` or `Probe terminated redirects` in `kubectl -n store get events` during the first seconds are normal (see [troubleshooting](troubleshooting.md#probe-warnings-during-first-start)).
+
+The MCP server (namespace `mcp`):
+
+```powershell
+kubectl -n mcp get pods,svc                # mcp-woocommerce 1/1 Running; the Service is ClusterIP
+kubectl get ingress -A                     # only the store: the MCP server has none
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1
+```
+
+The check script lists 6 tools and calls a few of them through a temporary port-forward (verified 2026-10-18; details in the [run guide](run-guide.md#8-woocommerce-mcp-server-phase-2)).
 
 Optional checks:
 
@@ -197,15 +217,28 @@ kubectl annotate namespace store meta.helm.sh/release-name=urumi meta.helm.sh/re
 kubectl -n store create secret generic store-admin --from-literal=password=<your-password>
 ```
 
-(Do the same for `mcp` once Phase 2 needs a Secret there.) Then name the Secrets in the values file under `secrets.existing`:
+(Do the same for `mcp`: the `storeWooApi` and `mcpWoocommerceToken` Secrets also live there, see the `storeWooApi` and `mcpWoocommerceToken` rows in the table below.) Then name the Secrets in the values file under `secrets.existing`:
 
 | Values key | Secret keys required | Notes |
 |---|---|---|
 | `storeDb` | `root-password`, `password` | MariaDB root and application passwords. They must match the data already on the volume. |
 | `storeAdmin` | `password` | WordPress admin password. The key must be named exactly `password`. |
-| `storeWooApi` | `consumer-key`, `consumer-secret` | The consumer secret must be at most **43 characters** (WooCommerce stores it in a `char(43)` column). The chart's own generated secret is `cs_` plus 40 characters = 43. |
+| `storeWooApi` | `consumer-key`, `consumer-secret` | The consumer secret must be at most **43 characters** (WooCommerce stores it in a `char(43)` column). The chart's own generated secret is `cs_` plus 40 characters = 43. **The same Secret must also exist in namespace `mcp`** (the MCP server reads it there; with `storeWooApi` set the chart renders no copy). |
+| `mcpWoocommerceToken` | `token` | The bearer token of the MCP server, in namespace `mcp` (at least 16 characters; the generated one is 48). Phase 3 will need a copy in namespace `gateway`. |
 
-`deploy/values-prod.yaml` already names these Secrets and points to this procedure (and notes that `store-woo-api` must also exist in namespace `mcp` from Phase 2).
+`deploy/values-prod.yaml` already names these Secrets and points to this procedure. It also has two placeholders for our own images, `global.imageRegistry` and `global.imageTag` (both `CHANGE-ME`): production pulls `<registry>/urumi/mcp-woocommerce:<tag>` from a real registry instead of importing it. Pushing images to a registry is **(planned, Phase 5)**; the local import workflow is the only one exercised.
+
+The WooCommerce key owner is the `urumi-mcp` shop manager that the setup Job creates; see [run guide, section 8](run-guide.md#who-owns-the-woocommerce-api-key-security-note). **Upgrade note:** a store upgraded from Phase 1 (`main`) never had a `urumi-mcp` user (the key was owned by `admin` then), so the Job creates and marks the user and the upgrade needs nothing from you. Only a store installed from the intermediate Phase 2 commit that predates the key-owner fix has an unmarked `urumi-mcp` user, and there the setup Job refuses to reuse it until you add the marker ([troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)).
+
+### Known limitation: rotating a pre-created WooCommerce key Secret
+
+The MCP server pod carries a `checksum/secrets` annotation: a hash of the key values **as the chart generates them**. Kubernetes only reads a Secret into a container's environment when the container starts, so a changed key needs a pod restart, and the annotation is what normally triggers one on the next deploy. When you use your own Secret (`secrets.existing.storeWooApi`, as in production), the chart cannot see its values, so the annotation is a hash of the Secret's **name** only. That keeps it stable, so upgrades do not restart the pod for nothing (two `helm template` runs with `--set secrets.existing.storeWooApi=foo` gave the same annotation; verified 2026-10-19), but it also means **rotating the Secret does not restart the pod automatically**: the pod keeps running with the old key (WooCommerce then answers 401 until restart). After rotating, restart it yourself:
+
+```powershell
+kubectl -n mcp rollout restart deploy/mcp-woocommerce
+```
+
+The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from how the template is written (checked in the chart); it was not exercised with a real pre-created Secret.
 
 ### Rolling out, health checks and logs (quick reference)
 
@@ -216,6 +249,7 @@ kubectl -n store create secret generic store-admin --from-literal=password=<your
 | WordPress logs | `kubectl -n store logs deploy/wordpress -c wordpress` |
 | MariaDB logs | `kubectl -n store logs mariadb-0` |
 | Setup Job log | `kubectl -n store logs job/store-setup` |
+| MCP server status and logs | `kubectl -n mcp get pods,svc` and `kubectl -n mcp logs deploy/mcp-woocommerce` |
 | Release state | `helm status urumi -n urumi-system`, `helm history urumi -n urumi-system` |
 | What values are in use? | `helm get values urumi -n urumi-system` |
 

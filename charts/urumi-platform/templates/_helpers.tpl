@@ -1,3 +1,4 @@
+{{/* Never render .Values with toYaml: during rendering .Values.__generated holds generated secrets. */}}
 {{/* Common labels. Args: dict root, name, component. */}}
 {{- define "urumi.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version }}
@@ -12,6 +13,14 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "urumi.selectorLabels" -}}
 app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/name: {{ .name }}
+{{- end }}
+
+{{/* Pod template labels: selector labels + stable descriptive labels. No chart version, so chart
+     version bumps do not restart pods. Args: dict root, name, component. */}}
+{{- define "urumi.podLabels" -}}
+{{ include "urumi.selectorLabels" (dict "root" .root "name" .name) }}
+app.kubernetes.io/part-of: urumi-platform
+app.kubernetes.io/component: {{ .component }}
 {{- end }}
 
 {{/*
@@ -77,4 +86,39 @@ seccompProfile:
 allowPrivilegeEscalation: false
 capabilities:
   drop: ["ALL"]
+{{- end }}
+
+{{/* Image reference for our own images. Args: dict root, repository, tag (optional). */}}
+{{- define "urumi.image" -}}
+{{- $g := .root.Values.global -}}
+{{- /* An unquoted all-digit tag (e.g. git short SHA 1234567) arrives as a number, and plain toString
+     would give "1.234567e+06", so integers go through int64 first. A leading zero cannot be recovered
+     (YAML reads 0123456 as octal), so always quote tags; build-images.ps1 does. */ -}}
+{{- $raw := default $g.imageTag .tag -}}
+{{- $tag := toString $raw -}}
+{{- if or (kindIs "float64" $raw) (kindIs "int64" $raw) (kindIs "int" $raw) -}}
+{{- if or (lt (float64 $raw) 0.0) (gt (float64 $raw) 1e18) -}}
+{{- fail (printf "image tag %v was read as a number YAML cannot keep exactly: quote it in the values file, e.g. imageTag: \"<tag>\"" $raw) -}}
+{{- end -}}
+{{- $tag = int64 $raw | toString -}}
+{{- end -}}
+{{- if $g.imageRegistry -}}
+{{- printf "%s/%s:%s" $g.imageRegistry .repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" .repository $tag -}}
+{{- end -}}
+{{- end }}
+
+{{/* Base URL WooCommerce signs OAuth1 requests against: the public store URL with scheme forced to http
+     (in-cluster calls are never TLS; WooCommerce uses get_home_url(null, $path, 'http')). ADR-005. Args: root. */}}
+{{- define "urumi.storeSigningBaseUrl" -}}
+{{- $public := include "urumi.publicUrl" (dict "root" . "host" .Values.global.storeHost) -}}
+{{- regexReplaceAll "^https?://" $public "http://" -}}
+{{- end }}
+
+{{/* data: block of the store-woo-api Secret. Used for BOTH the store and mcp copies so they always match
+     (same canonical namespace, length and prefix). Args: root. */}}
+{{- define "urumi.storeWooApiData" -}}
+consumer-key: {{ include "urumi.generatedValue" (dict "root" . "namespace" .Values.namespaces.store "secret" "store-woo-api" "key" "consumer-key" "length" 40 "prefix" "ck_") | b64enc | quote }}
+consumer-secret: {{ include "urumi.generatedValue" (dict "root" . "namespace" .Values.namespaces.store "secret" "store-woo-api" "key" "consumer-secret" "length" 40 "prefix" "cs_") | b64enc | quote }}
 {{- end }}

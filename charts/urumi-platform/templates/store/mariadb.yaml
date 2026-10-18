@@ -50,7 +50,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "urumi.labels" (dict "root" $ "name" "mariadb" "component" "database") | nindent 8 }}
+        {{- include "urumi.podLabels" (dict "root" $ "name" "mariadb" "component" "database") | nindent 8 }}
     spec:
       automountServiceAccountToken: false
       securityContext:

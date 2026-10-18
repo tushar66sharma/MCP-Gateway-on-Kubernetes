@@ -10,6 +10,8 @@ global:
   ingressClassName: traefik
   storageClass: ""            # "" = cluster default (local-path on k3s/k3d)
   imagePullPolicy: IfNotPresent
+  imageRegistry: ""          # e.g. ghcr.io/<user> in production; "" = local images imported into k3d
+  imageTag: dev               # overridden locally by deploy/.images.local.yaml written by scripts/build-images.ps1
   tls:
     enabled: false
     clusterIssuer: ""         # cert-manager ClusterIssuer name (production)
@@ -26,6 +28,7 @@ secrets:
     storeDb: ""       # keys: root-password, password
     storeAdmin: ""    # keys: password
     storeWooApi: ""   # keys: consumer-key, consumer-secret
+    mcpWoocommerceToken: ""   # key: token
 
 mariadb:
   image: mariadb:11.8.9
@@ -51,6 +54,8 @@ storeSetup:
   siteTitle: Urumi Demo Store
   adminUser: admin
   adminEmail: admin@example.com
+  # Login of the shop_manager user that owns the MCP server's WooCommerce REST API key.
+  mcpKeyOwner: urumi-mcp
   currency: USD
   country: "US:CA"
   timezone: Asia/Kolkata
@@ -60,3 +65,15 @@ storeSetup:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 768Mi }
+
+mcpWoocommerce:
+  enabled: true
+  image:
+    repository: urumi/mcp-woocommerce
+    tag: ""               # "" = global.imageTag
+  port: 3001
+  timeoutMs: 10000
+  logLevel: info
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 160Mi }

@@ -1,0 +1,108 @@
+{{- if .Values.mcpWoocommerce.enabled }}
+{{- $ns := .Values.namespaces.mcp -}}
+{{- $m := .Values.mcpWoocommerce -}}
+{{- $name := "mcp-woocommerce" -}}
+{{- $wooSecret := default "store-woo-api" .Values.secrets.existing.storeWooApi -}}
+{{- $tokenSecret := default "mcp-woocommerce-token" .Values.secrets.existing.mcpWoocommerceToken -}}
+{{- /* The Host check compares the hostname only (ADR-007), so ports are not listed. */ -}}
+{{- $hosts := list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.cluster.local" $name $ns) "127.0.0.1" "localhost" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" $name "component" "mcp-server") | nindent 4 }}
+spec:
+  selector:
+    {{- include "urumi.selectorLabels" (dict "root" $ "name" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $m.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" $name "component" "mcp-server") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (dict "root" $ "name" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.podLabels" (dict "root" $ "name" $name "component" "mcp-server") | nindent 8 }}
+      annotations:
+        # Restart the pod when the WooCommerce key changes. With a pre-created Secret
+        # (secrets.existing.storeWooApi) the chart cannot see its values, so only the Secret name is
+        # hashed (stable across upgrades); rotating that Secret needs: kubectl -n mcp rollout restart deployment/mcp-woocommerce
+        {{- if .Values.secrets.existing.storeWooApi }}
+        checksum/secrets: {{ printf "existing:%s" .Values.secrets.existing.storeWooApi | sha256sum }}
+        {{- else }}
+        checksum/secrets: {{ include "urumi.storeWooApiData" $ | sha256sum }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "urumi.podSecurityContext" (dict "uid" 1000 "gid" 1000) | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "urumi.image" (dict "root" $ "repository" $m.image.repository "tag" $m.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "urumi.containerSecurityContext" $ | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: {{ $m.port }}
+          env:
+            - name: PORT
+              value: {{ $m.port | quote }}
+            - name: WOO_BASE_URL
+              value: {{ printf "http://wordpress.%s.svc.cluster.local" .Values.namespaces.store | quote }}
+            - name: WOO_SIGNING_BASE_URL
+              value: {{ include "urumi.storeSigningBaseUrl" $ | quote }}
+            - name: WOO_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ $wooSecret }}, key: consumer-key }
+            - name: WOO_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ $wooSecret }}, key: consumer-secret }
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ $tokenSecret }}, key: token }
+            - name: STORE_TIMEZONE
+              value: {{ .Values.storeSetup.timezone | quote }}
+            - name: WOO_TIMEOUT_MS
+              value: {{ $m.timeoutMs | quote }}
+            - name: LOG_LEVEL
+              value: {{ $m.logLevel | quote }}
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ join "," $hosts | quote }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            {{- toYaml $m.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
