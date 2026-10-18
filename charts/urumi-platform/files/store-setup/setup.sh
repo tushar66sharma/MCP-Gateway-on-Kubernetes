@@ -59,6 +59,13 @@ $WP option update woocommerce_cod_settings \
   '{"enabled":"yes","title":"Cash on delivery","description":"Pay with cash upon delivery.","instructions":"Pay with cash upon delivery.","enable_for_methods":[],"enable_for_virtual":"yes"}' \
   --format=json
 
+log "enabling customer accounts (register on My Account and at checkout; customers choose their own password because no mail server is configured)"
+$WP option update woocommerce_enable_myaccount_registration yes
+$WP option update woocommerce_enable_signup_and_login_from_checkout yes
+$WP option update woocommerce_enable_checkout_login_reminder yes
+$WP option update woocommerce_registration_generate_username yes
+$WP option update woocommerce_registration_generate_password no
+
 log "ensuring shop/cart/checkout/my-account pages exist"
 $WP wc tool run install_pages --user="$ADMIN_USER" >/dev/null || log "install_pages tool unavailable; relying on WooCommerce activation"
 
