@@ -31,7 +31,7 @@ processors=8
 swap=4GB
 ```
 
-Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and rarely gives it back. The machine has 15 GB; Windows, the editor, and the browser need roughly 5-6 GB, so Docker/k3d is limited to 9 GB. The cluster (Traefik, CoreDNS, WordPress, MariaDB, Postgres, gateway, MCP servers) must fit in that, which is why every container has CPU/memory requests and limits. `swap=4GB` gives a safety valve against OOM kills at the cost of speed. Changes take effect after `wsl --shutdown` and a Docker Desktop restart. These values were already set before this task; we did not change Docker/WSL settings.
+Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and rarely gives it back. The machine has 15 GB; Windows, the editor, and the browser need roughly 5-6 GB, so Docker/k3d is limited to 9 GB. The cluster (today Traefik, CoreDNS and the other k3s defaults; **(planned)** WordPress, MariaDB, Postgres, the gateway and the MCP servers) must fit in that, which is why every project container will have CPU/memory requests and limits **(planned)**. `swap=4GB` gives a safety valve against OOM kills at the cost of speed. Changes take effect after `wsl --shutdown` and a Docker Desktop restart. The `.wslconfig` file was written in Task 0.1; Docker Desktop's own settings were not changed.
 
 ## Cluster definition
 
@@ -39,7 +39,7 @@ Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and r
 
 ### Port 8080 conflict
 
-k3d's documentation commonly maps `8080:80`. On this machine host port **8080 is already in use by another process**, so we map the standard ports **80 and 443** instead (both were free). Benefits: URLs have no port (`http://store.localhost`), which also matches how production will look. If port 80 is ever taken, `cluster-up.ps1` fails right away at `k3d cluster create` with a clear error and a non-zero exit code (PowerShell 5.1 does not throw on failing native commands, so the script checks each exit code explicitly); free the port or change the left-hand side of `port: 80:80` (and then include the port in every URL).
+k3d's documentation commonly maps `8080:80`. On this machine host port **8080 is already in use by another process**, so we map the standard ports **80 and 443** instead (both were free). Benefits: URLs have no port (`http://store.localhost`), which also matches how production will look. If port 80 is ever taken, `cluster-up.ps1` fails right away at `k3d cluster create` with a clear error and a non-zero exit code (PowerShell 5.1 does not throw on failing native commands, so the script checks each exit code explicitly); free the port or change the left-hand side of `port: 80:80` to the fallback **8081** (matching [ADR-002](../decisions/ADR-002-k3d-k3s-traefik.md) and spec section 8.3), and then include the port in every URL (for example `http://app.localhost:8081`). 8080 is not used as the fallback because it is already taken on this machine.
 
 ## Hosts file (`scripts/setup-hosts.ps1`)
 
