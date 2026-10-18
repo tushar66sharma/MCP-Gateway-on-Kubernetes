@@ -3,6 +3,9 @@
 # The chart owns the namespaces, so create "store" (and "mcp") WITH Helm ownership labels/annotations
 # before creating the Secrets: see "Pre-created Secrets" in docs/deployment.md (expected; verified in Phase 5).
 global:
+  # Our own images (urumi/<app>) are pulled from this registry with this tag. Replace both before deploying.
+  imageRegistry: ghcr.io/CHANGE-ME
+  imageTag: CHANGE-ME
   storeHost: store.example.com
   appHost: app.example.com
   publicScheme: https
@@ -15,3 +18,4 @@ secrets:
     storeDb: store-db            # must exist in namespace "store"
     storeAdmin: store-admin      # must exist in namespace "store"
     storeWooApi: store-woo-api   # must exist in "store" (and in "mcp" from Phase 2)
+    mcpWoocommerceToken: mcp-woocommerce-token   # must exist in "mcp" (key: token)

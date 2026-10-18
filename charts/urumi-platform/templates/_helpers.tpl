@@ -87,3 +87,28 @@ allowPrivilegeEscalation: false
 capabilities:
   drop: ["ALL"]
 {{- end }}
+
+{{/* Image reference for our own images. Args: dict root, repository, tag (optional). */}}
+{{- define "urumi.image" -}}
+{{- $g := .root.Values.global -}}
+{{- $tag := default $g.imageTag .tag -}}
+{{- if $g.imageRegistry -}}
+{{- printf "%s/%s:%s" $g.imageRegistry .repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" .repository $tag -}}
+{{- end -}}
+{{- end }}
+
+{{/* Base URL WooCommerce signs OAuth1 requests against: the public store URL with scheme forced to http
+     (in-cluster calls are never TLS; WooCommerce uses get_home_url(null, $path, 'http')). ADR-005. Args: root. */}}
+{{- define "urumi.storeSigningBaseUrl" -}}
+{{- $public := include "urumi.publicUrl" (dict "root" . "host" .Values.global.storeHost) -}}
+{{- regexReplaceAll "^https?://" $public "http://" -}}
+{{- end }}
+
+{{/* data: block of the store-woo-api Secret. Used for BOTH the store and mcp copies so they always match
+     (same canonical namespace, length and prefix). Args: root. */}}
+{{- define "urumi.storeWooApiData" -}}
+consumer-key: {{ include "urumi.generatedValue" (dict "root" . "namespace" .Values.namespaces.store "secret" "store-woo-api" "key" "consumer-key" "length" 40 "prefix" "ck_") | b64enc | quote }}
+consumer-secret: {{ include "urumi.generatedValue" (dict "root" . "namespace" .Values.namespaces.store "secret" "store-woo-api" "key" "consumer-secret" "length" 40 "prefix" "cs_") | b64enc | quote }}
+{{- end }}

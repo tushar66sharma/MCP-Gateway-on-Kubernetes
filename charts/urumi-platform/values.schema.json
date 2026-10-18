@@ -13,6 +13,8 @@
         "publicPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "ingressClassName": { "type": "string", "minLength": 1 },
         "storageClass": { "type": "string" },
+        "imageRegistry": { "type": "string" },
+        "imageTag": { "type": "string" },
         "imagePullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
         "tls": {
           "type": "object",
