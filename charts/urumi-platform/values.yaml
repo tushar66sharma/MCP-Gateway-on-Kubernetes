@@ -51,6 +51,8 @@ storeSetup:
   siteTitle: Urumi Demo Store
   adminUser: admin
   adminEmail: admin@example.com
+  # Login of the shop_manager user that owns the MCP server's WooCommerce REST API key.
+  mcpKeyOwner: urumi-mcp
   currency: USD
   country: "US:CA"
   timezone: Asia/Kolkata

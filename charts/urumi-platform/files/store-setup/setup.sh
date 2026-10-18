@@ -88,7 +88,17 @@ if [ "$SEED_PRODUCTS" = "true" ]; then
   fi
 fi
 
-log "upserting the WooCommerce REST API key for the MCP server"
+# Least privilege: the MCP key is owned by a dedicated shop_manager, not the admin. Nobody logs in
+# as this user (random password, never printed); it only owns the API key.
+log "ensuring the MCP key owner $MCP_KEY_OWNER (shop_manager)"
+if $WP user get "$MCP_KEY_OWNER" >/dev/null 2>&1; then
+  $WP user set-role "$MCP_KEY_OWNER" shop_manager
+else
+  $WP user create "$MCP_KEY_OWNER" "$MCP_KEY_OWNER@example.invalid" --role=shop_manager     --user_pass="$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 32)" >/dev/null
+  log "created user $MCP_KEY_OWNER"
+fi
+
+log "upserting the WooCommerce REST API key for the MCP server (owner: $MCP_KEY_OWNER)"
 $WP eval-file /scripts/upsert-api-key.php
 
 log "SETUP COMPLETE"
