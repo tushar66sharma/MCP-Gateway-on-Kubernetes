@@ -62,7 +62,16 @@ export class WooClient implements WooApi {
       }
       throw new WooApiError('Could not reach WooCommerce (network error)', 0, 'network_error');
     }
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      const name = err instanceof Error ? err.name : '';
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        throw new WooApiError(`WooCommerce did not respond within ${this.o.timeoutMs}ms`, 0, 'timeout');
+      }
+      throw new WooApiError('Could not read the WooCommerce response (network error)', 0, 'network_error');
+    }
     let data: unknown;
     try {
       data = text.length > 0 ? JSON.parse(text) : null;
@@ -72,10 +81,21 @@ export class WooClient implements WooApi {
     if (!res.ok) {
       const obj = (data ?? {}) as { code?: unknown; message?: unknown };
       const code = typeof obj.code === 'string' ? obj.code : `http_${res.status}`;
-      const message = typeof obj.message === 'string' ? obj.message : `HTTP ${res.status}: ${text.slice(0, 120)}`;
+      const message = typeof obj.message === 'string'
+        ? this.redact(obj.message)
+        : `HTTP ${res.status}: ${this.redact(text).slice(0, 120)}`;
       throw new WooApiError(message.slice(0, 200), res.status, code);
     }
     if (data === undefined) throw new WooApiError('WooCommerce returned a non-JSON response', res.status, 'bad_response');
     return data as T;
+  }
+
+  /** Strips OAuth params and the configured credentials from text that may echo the signed URL. */
+  private redact(text: string): string {
+    let out = text.replace(/oauth_[a-z_]+=[^&\s"'<]*/gi, 'oauth_…=[redacted]');
+    for (const secret of [this.o.consumerKey, this.o.consumerSecret]) {
+      if (secret.length > 0) out = out.split(secret).join('[redacted]');
+    }
+    return out;
   }
 }

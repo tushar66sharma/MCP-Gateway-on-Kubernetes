@@ -36,7 +36,47 @@ async function failure(p: Promise<unknown>): Promise<WooApiError> {
 
 function expectNoSecrets(e: Error): void {
   for (const s of [consumerKey, consumerSecret, 'oauth_signature']) expect(e.message).not.toContain(s);
+  expect(e.message).not.toMatch(/oauth_signature=\S/);
+  expect(e.message).not.toMatch(/oauth_consumer_key=\S/);
 }
+
+describe('WooClient error redaction', () => {
+  it('redacts echoed signed URLs in a redirect page', async () => {
+    const html = '<a href="http://wordpress.store.svc.cluster.local/wp-json/wc/v3/products?oauth_consumer_key=ck_dummy&oauth_signature=abc%3D">moved</a>';
+    const { client } = make(() => Promise.resolve(new Response(html, { status: 302 })));
+    const e = await failure(client.get('/products'));
+    expect(e.message).not.toContain('ck_dummy');
+    expect(e.message).not.toContain('oauth_signature=abc');
+    expect(e.message).toContain('oauth_…=[redacted]');
+    expectNoSecrets(e);
+  });
+
+  it('redacts the consumer secret and key inside a JSON message', async () => {
+    const { client } = make(() =>
+      json(JSON.stringify({ code: 'bad', message: `bad ${consumerSecret} and ${consumerKey}` }), 400));
+    const e = await failure(client.get('/products'));
+    expect(e.message).toBe('bad [redacted] and [redacted]');
+    expectNoSecrets(e);
+  });
+
+  it('maps a timeout during the body read to timeout', async () => {
+    const { client } = make((_url, init) => {
+      const res = { ok: true, status: 200, text: () => Promise.reject(init.signal!.reason ?? new DOMException('t', 'TimeoutError')) };
+      return Promise.resolve(res as unknown as Response);
+    });
+    const e = await failure(client.get('/products'));
+    expect(e.code).toBe('timeout');
+    expectNoSecrets(e);
+  });
+
+  it('maps another body read failure to network_error', async () => {
+    const { client } = make(() =>
+      Promise.resolve({ ok: true, status: 200, text: () => Promise.reject(new TypeError('terminated')) } as unknown as Response));
+    const e = await failure(client.get('/products'));
+    expect(e.code).toBe('network_error');
+    expectNoSecrets(e);
+  });
+});
 
 describe('WooClient', () => {
   it('signs GET requests and drops undefined query values', async () => {
