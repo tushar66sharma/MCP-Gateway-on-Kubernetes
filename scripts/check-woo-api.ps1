@@ -1,8 +1,9 @@
 # Proves the WooCommerce REST API key works with OAuth1 signing from outside the WordPress pod.
 # The request goes to 127.0.0.1 (port-forward) but is signed with the PUBLIC store URL, because
 # WooCommerce rebuilds the signature base URL from get_home_url(), not from the Host header.
-# Limitation: when publicPort is not the scheme default, --sign-base must include the port;
-# this script derives it from the Ingress host only, which is correct for the local default (80).
+# Signing base = public store URL (WP_HOME) with its scheme replaced by http; the port stays only if
+# WP_HOME has one (publicPort not the default for publicScheme). Limitation: this script derives it from
+# the Ingress host only (no port), which is correct for the local default (80).
 $ErrorActionPreference = 'Stop'
 function Stop-WithError([string]$Message) { Write-Host "ERROR: $Message" -ForegroundColor Red; exit 1 }
 foreach ($tool in 'kubectl', 'node') {

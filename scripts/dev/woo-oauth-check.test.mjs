@@ -1,4 +1,4 @@
-// Known-answer tests for the OAuth1 signer. Run: node --test scripts/dev/
+// Known-answer tests for the OAuth1 signer. Run: node --test "scripts/dev/*.test.mjs"
 //
 // The expected base string and signature were produced by an INDEPENDENT PHP implementation of
 // WooCommerce's algorithm (WC_REST_Authentication::check_oauth_signature + normalize_parameters +

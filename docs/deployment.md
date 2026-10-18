@@ -166,7 +166,7 @@ kubectl delete ns store mcp gateway --wait=true --timeout=300s
 kubectl get pv      # should print: No resources found
 ```
 
-> **This destroys all store data: products, orders, users, uploads, and the generated passwords.** The next `deploy.ps1` creates a brand-new store with new credentials. It is the right way to "start over" and was tested this way (a truly fresh install succeeded on the first setup-Job attempt). To remove the whole cluster instead, run `scripts\cluster-down.ps1` (also destroys everything); to pause without losing data use `k3d cluster stop urumi` and resume with `scripts\cluster-up.ps1`.
+> **This destroys all store data: products, orders, users, uploads, and the generated passwords.** The next `deploy.ps1` creates a brand-new store with new credentials. It is the right way to "start over" and was tested this way (a truly fresh install succeeded on the first setup-Job attempt). To remove the whole cluster instead, run `scripts\cluster-down.ps1` (also destroys everything); to pause, `k3d cluster stop urumi` is expected to keep the data (not exercised in Phase 1), and resume with `scripts\cluster-up.ps1`.
 
 ### Step 10. If host port 80 is taken: use 8081
 

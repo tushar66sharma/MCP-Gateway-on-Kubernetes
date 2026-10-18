@@ -1303,7 +1303,7 @@ if ($code -ne 0) { Stop-WithError 'Signed request with the public store URL did 
 Write-Host 'WooCommerce REST API key works (OAuth1, signed with the public store URL).'
 ```
 
-(When `publicPort` isn't the default, `--sign-base` must include the port. Note this limitation in the script comment and in the docs; local default 80 doesn't need it.)
+(The signing base is the public store URL with its scheme replaced by `http`; when `publicPort` isn't the default, WP_HOME carries the port and `--sign-base` must include it. Note this limitation in the script comment and in the docs; local default 80 doesn't need it.)
 
 - [ ] **Step 10: Run the spike**
 

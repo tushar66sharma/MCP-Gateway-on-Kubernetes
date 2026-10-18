@@ -56,11 +56,11 @@ Why: browsers and `curl` resolve any `*.localhost` name to loopback by themselve
 | Goal | Command |
 |---|---|
 | First time / start after reboot | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-up.ps1` (idempotent: creates the cluster if missing, otherwise starts it, then waits for the node and Traefik) |
-| Pause, keeping all data | `k3d cluster stop urumi` |
+| Pause (expected to keep data; not exercised in Phase 1) | `k3d cluster stop urumi` |
 | Resume | `scripts\cluster-up.ps1` again (or `k3d cluster start urumi`) |
 | Wipe everything and start over | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1`, then `cluster-up.ps1` |
 
-**`cluster-down.ps1` runs `k3d cluster delete urumi`, which deletes ALL cluster data**: databases, volumes, Secrets, everything deployed. Use `k3d cluster stop` when you only want to free RAM.
+**`cluster-down.ps1` runs `k3d cluster delete urumi`, which deletes ALL cluster data**: databases, volumes, Secrets, everything deployed. Use `k3d cluster stop` when you only want to free RAM (it is expected to keep data; not exercised in Phase 1).
 
 Note on timing: k3s installs Traefik asynchronously by running a Helm Job, so right after the node is Ready the `traefik` Deployment may not exist yet. `cluster-up.ps1` polls (up to 300 s) until it appears, then waits for its rollout. Every `k3d`/`kubectl` step is followed by an exit-code check, so a failure (for example a busy port 80) stops the script immediately with an `ERROR:` message and exit code 1 instead of continuing.
 

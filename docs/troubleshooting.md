@@ -221,7 +221,7 @@ kubectl -n store logs job/store-setup
 
 **Causes and fixes.**
 
-1. **Wrong signing base.** It must be `http://<WP_HOME host>[:port]`. If you changed `global.publicPort` (e.g. 8081), the base must include the port, but `check-woo-api.ps1` only derives the host: run `node scripts/dev/woo-oauth-check.mjs --target http://127.0.0.1:<pf-port> --sign-base http://store.localhost:8081` yourself with the key in `WOO_CONSUMER_KEY`/`WOO_CONSUMER_SECRET`. Also the scheme is always `http` for non-TLS requests, even if the public URL is `https` behind a proxy that does not forward the scheme.
+1. **Wrong signing base.** It must be the public store URL (`WP_HOME`) with its scheme replaced by `http`. The port is included only if `WP_HOME` has one, i.e. if you changed `global.publicPort` to a non-default value (e.g. 8081, giving `http://store.localhost:8081`); with https on 443 there is no port. `check-woo-api.ps1` omits the port, so for a non-default port run `node scripts/dev/woo-oauth-check.mjs --target http://127.0.0.1:<pf-port> --sign-base http://store.localhost:8081` yourself with the key in `WOO_CONSUMER_KEY`/`WOO_CONSUMER_SECRET`. Also the scheme is always `http` for in-cluster requests, even if the public URL is `https`, because they never use TLS and carry no `X-Forwarded-Proto`.
 2. **Clock skew.** WooCommerce rejects OAuth timestamps more than 15 minutes (plus or minus) away from its own time. After the laptop sleeps, the WSL2/Docker clock can drift. Compare `[DateTime]::UtcNow` with `kubectl -n store exec deploy/wordpress -c wordpress -- date -u`. Fix: restart Docker Desktop or run `wsl --shutdown`.
 3. **Nonce reuse.** WooCommerce stores nonces per consumer key; a replayed request is rejected. The script generates a fresh nonce per request; custom clients must too and must not retry with the same nonce.
 4. **Key out of sync.** The API key row is written by the setup Job from Secret `store-woo-api`. If the Secret changed but the Job did not run, re-run `scripts\deploy.ps1`.
@@ -271,7 +271,7 @@ Expected: `tests 5`, `pass 5`, `fail 0`. They compare the OAuth1 signer with val
 
 **Symptom.** With `secrets.existing.*` set, a Pod stays in `CreateContainerConfigError` ("couldn't find key ...") or the setup Job fails to start.
 
-**Fix.** Create the Secrets in namespace `store` with exactly these keys: `storeDb`: `root-password` and `password`; `storeAdmin`: `password`; `storeWooApi`: `consumer-key` and `consumer-secret`, with the consumer secret at most **43 characters** (WooCommerce stores it in a `char(43)` column; a longer value cannot be inserted by the setup Job). Diagnose with `kubectl -n store describe pod <name>` and `kubectl -n store get secret <name> -o jsonpath='{.data}'` (shows key names; values are base64, do not share them).
+**Fix.** Create the Secrets in namespace `store` with exactly these keys: `storeDb`: `root-password` and `password`; `storeAdmin`: `password`; `storeWooApi`: `consumer-key` and `consumer-secret`, with the consumer secret at most **43 characters** (WooCommerce stores it in a `char(43)` column; a longer value cannot be inserted by the setup Job). Diagnose with `kubectl -n store describe pod <name>` and `kubectl -n store describe secret <name>` (shows key names and sizes only, not values).
 
 ## PowerShell gotchas with kubectl
 

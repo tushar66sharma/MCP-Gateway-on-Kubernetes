@@ -223,7 +223,7 @@ sequenceDiagram
 - Signature method `HMAC-SHA256`; the HMAC key is `<consumer secret>&` (there is no token secret). OAuth parameters are sent in the query string.
 - Parameters are sorted by raw key in byte order (like PHP's `uksort( $params, 'strcmp' )`), percent-encoded per RFC 3986, and the whole normalized string is encoded again. `scripts/dev/woo-oauth-check.test.mjs` checks the signer against values generated independently by PHP: run `node --test "scripts/dev/*.test.mjs"` (5 tests pass; the directory form `node --test scripts/dev/` fails on Node 24.0.1).
 - Only unique scalar query keys are supported; send lists comma-separated (`include=1,2`).
-- If the public URL has a non-default port, the signing base must include it. The check script derives the base from the Ingress host only (correct for port 80); the non-default-port case is **not tested**.
+- The signing base is the public store URL (`WP_HOME`) with its scheme replaced by `http`. The port is included only if `WP_HOME` has one (non-default `publicPort`); production https/443 signs `http://store.example.com` with no `:443`. The check script derives the base from the Ingress host only (correct for port 80); the non-default-port case is **not tested**.
 - The spike reached WordPress through `kubectl port-forward`. Access via the in-cluster Service name `wordpress.store.svc.cluster.local` is **expected to behave identically but was not exercised**; confirmed in Phase 2.
 - Only GET was exercised; signed POST/PUT is verified in Phase 2.
 

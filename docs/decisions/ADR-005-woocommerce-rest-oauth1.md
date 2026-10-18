@@ -27,7 +27,7 @@ We call the **WooCommerce REST API v3** with the store's consumer key/secret, si
 $base_request_uri = rawurlencode( get_home_url( null, $request_path, is_ssl() ? 'https' : 'http' ) );
 ```
 
-`get_home_url()` returns the `WP_HOME` host (`store.localhost`), and the scheme is `http` for any non-TLS request. So the client must compute the signature over `http://<WP_HOME host>[:port]<path>` while sending the request to any reachable address (for example `http://wordpress.store.svc.cluster.local`). The reference signer is `signOAuth1Url()` in `scripts/dev/woo-oauth-check.mjs`.
+`get_home_url()` returns the `WP_HOME` host (`store.localhost`), and the scheme is `http` for any non-TLS request. So the client must compute the signature over the `WP_HOME` URL with its scheme replaced by `http` (plus the path; the port only if `WP_HOME` has one) while sending the request to any reachable address (for example `http://wordpress.store.svc.cluster.local`). The reference signer is `signOAuth1Url()` in `scripts/dev/woo-oauth-check.mjs`.
 
 **Consequence for Phase 2:** `WooClient` takes two URLs: the `baseUrl` it connects to (the in-cluster Service) and a separate `signingBaseUrl` (the public store URL, `http` scheme). Both come from configuration.
 
@@ -35,7 +35,7 @@ $base_request_uri = rawurlencode( get_home_url( null, $request_path, is_ssl() ? 
 
 **Timestamp window and nonces.** WooCommerce rejects OAuth timestamps more than 15 minutes (plus or minus) from the server's time, and stores used nonces per consumer key, so a nonce can never be reused. Consequences: clock skew between the client and the cluster larger than 15 minutes produces 401 errors that look like signature failures, and a retry must always generate a fresh nonce (never replay the same request).
 
-**Non-default ports:** if the public URL carries a non-default port (`publicPort` not 80), `signingBaseUrl` must include it, because `get_home_url()` includes the port. `check-woo-api.ps1` derives the signing base from the Ingress host only (no port), which is correct for the local default of 80. This was not tested with a non-default port.
+**Signing base rule and ports:** WooCommerce builds the base with `get_home_url(null, $path, is_ssl() ? 'https' : 'http')`. In-cluster calls are never TLS, so the scheme is `http`, and `set_url_scheme()` only swaps the scheme. The signing base is therefore the public store URL (`urumi.publicUrl`, i.e. `WP_HOME`) with its scheme replaced by `http`. The port stays only if it is present in `WP_HOME`, which is the case only when `publicPort` is not the default for `publicScheme`. Local: `http://store.localhost`; local on 8081: `http://store.localhost:8081`; production https/443: `http://store.example.com` with no `:443`. `check-woo-api.ps1` derives the base from the Ingress host only (no port), which is correct for the local default of 80. A non-default port was not tested.
 
 ## Alternatives considered
 
@@ -60,4 +60,4 @@ $base_request_uri = rawurlencode( get_home_url( null, $request_path, is_ssl() ? 
 - A WooCommerce upgrade changes how `check_oauth_signature()` builds the base URI (re-run `scripts/check-woo-api.ps1`; it is the regression check).
 - The public URL scheme or port changes (update `signingBaseUrl` accordingly).
 - The store gets in-cluster TLS, which would allow plain Basic auth with the consumer key.
-- TLS is added in Phase 5: the official image's `wp-config.php` may honor `X-Forwarded-Proto` for `is_ssl()`, which would change the required signing scheme to `https`. Not checked yet; verify it then.
+- TLS is added in Phase 5: the official image's `wp-config.php` may honor `X-Forwarded-Proto` for `is_ssl()`, but that only affects browser traffic that passes through Traefik. In-cluster MCP calls bypass Traefik and carry no `X-Forwarded-Proto` header, so `is_ssl()` stays false and the signing scheme stays `http` even with TLS at the Ingress. The MCP client must never send `X-Forwarded-Proto`. Whether the image honors the header at all is not checked yet; verify it in Phase 5.
