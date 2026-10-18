@@ -475,10 +475,12 @@ export function createLogger(name: string): import('pino').Logger;              
 export function loadEnv<S extends z.ZodTypeAny>(schema: S, env?: NodeJS.ProcessEnv): z.infer<S>; // throws EnvValidationError listing every bad var
 export type UpstreamAuth = { kind: 'none' } | { kind: 'bearer'; token: string } | { kind: 'header'; header: string; value: string };
 export function upstreamAuthMiddleware(auth: UpstreamAuth): (req, res, next) => void; // timing-safe compare, 401 JSON-RPC error
-export interface McpHttpServerOptions { name: string; version: string; port: number; auth: UpstreamAuth; logger: Logger;
+export interface McpHttpServerOptions { name: string; version: string; port: number; host?: string; auth: UpstreamAuth; logger: Logger;
+  allowedHosts: string[];   // hostnames WITHOUT ports; Host check on /mcp only (never the probes)
   registerTools: (server: SdkMcpServer) => void; readinessCheck?: () => Promise<boolean>; }
 export function startMcpHttpServer(opts: McpHttpServerOptions): Promise<{ close(): Promise<void>; port: number }>; // POST /mcp, GET /healthz, GET /readyz
 ```
+**As built (Phase 2):** `createLogger(name, level?)`; `SdkMcpServer` is the SDK's `McpServer`; SDK v2 package names are `@modelcontextprotocol/server`, `/client`, `/express` and `/node` (exact versions in ADR-007); `allowedHosts` entries are hostnames only (the SDK ignores ports), and `MCP_ALLOWED_HOSTS` feeds it; `GET`/`DELETE /mcp` return 405; the 401 body is JSON-RPC error `-32001`. Phase 3 test helpers that start servers via `startMcpHttpServer` must pass `allowedHosts` (for example `['127.0.0.1', 'localhost']`) and may pass `host`.
 **Tests:**
 - `loadEnv` rejects a missing var with a readable message.
 - The auth middleware: 401 without a header, 401 with a wrong token, passes with the right one (bearer and header kinds).
@@ -510,18 +512,20 @@ export function resolvePeriod(period: Period, timeZone: string, now?: Date): { a
 ### Task 2.4: Tools
 **Files:** `apps/mcp-woocommerce/src/tools/{listProducts,createProduct,listOrders,getOrder,updateOrderStatus,ping,index,format}.ts`, `src/server.ts`, `src/config.ts`, `test/tools.test.ts`
 
-**Interfaces:** `registerWooTools(server, woo: WooClient, cfg: { storeTimeZone: string }): void`. Each tool returns `{ content: [{type:'text', text}], structuredContent }`; on `WooApiError` it returns `{ isError: true, content: [{type:'text', text:'WooCommerce returned <status>: <message>'}] }`.
+**Interfaces:** `registerWooTools(server, woo: WooClient, cfg: { storeTimeZone: string }): void`. **As built:** `registerWooTools(server: SdkMcpServer, deps: ToolDeps)` with `ToolDeps = { woo: WooApi; storeTimeZone: string; now: () => Date }`, and `WooApi` is an interface (`get`, `post`, `put`) that `WooClient` implements. Each tool returns `{ content: [{type:'text', text}], structuredContent }`; on `WooApiError` it returns `{ isError: true, content: [{type:'text', text:'WooCommerce returned <status>: <message>'}] }`.
 **Tests (with a fake `WooClient`):**
 - Each tool's happy path.
 - Zod rejects bad input (negative price, unknown status).
 - `list_orders({period:'today'})` passes the after/before bounds.
 - An error maps to `isError`.
 
-**Config env:** `PORT=3001`, `WOO_BASE_URL`, `WOO_CONSUMER_KEY`, `WOO_CONSUMER_SECRET`, `MCP_AUTH_TOKEN`, `STORE_TIMEZONE`, `WOO_TIMEOUT_MS=10000`.
+**Config env:** `PORT=3001`, `WOO_BASE_URL`, `WOO_CONSUMER_KEY`, `WOO_CONSUMER_SECRET`, `MCP_AUTH_TOKEN`, `STORE_TIMEZONE`, `WOO_TIMEOUT_MS=10000`. **As built, also:** `WOO_SIGNING_BASE_URL` (required, must start with `http://`), `LOG_LEVEL`, and `MCP_ALLOWED_HOSTS` (default `localhost,127.0.0.1`, hostnames only).
 **Commit(s):** one per 2–3 tools, e.g. `feat(woo-mcp): add product tools`, `feat(woo-mcp): add order tools and server entrypoint`
 
 ### Task 2.5: Container image + Helm
-**Files:** `apps/mcp-woocommerce/Dockerfile` (multi-stage, `node:24-alpine`, `USER node`, `npm ci --workspace`), `.dockerignore` (root), `scripts/build-images.ps1` (builds all app images tagged `urumi/<app>:dev` and runs `k3d image import -c urumi`), `charts/.../templates/mcp/{mcp-woocommerce,secrets}.yaml` (Deployment, ClusterIP Service, **no Ingress**, probes on `/healthz` and `/readyz`, resources, read-only root FS + `/tmp` emptyDir)
+**As built (Phase 2):** one shared `docker/node-app.Dockerfile` (build arg `APP`), images tagged `urumi/<app>:<git short sha>` (plus `-dirty-<timestamp>`), the tag recorded in the git-ignored `deploy/.images.local.yaml`, `up.ps1` builds before deploying, Secret `mcp-woocommerce-token` (key `token`, canonical namespace `mcp`; **Phase 3 copies it into `gateway`** with the same canonical namespace) and a copy of `store-woo-api` in `mcp`. See ADR-005/007 and docs/run-guide.md section 8.
+
+**Files (original plan):** `apps/mcp-woocommerce/Dockerfile` (multi-stage, `node:24-alpine`, `USER node`, `npm ci --workspace`), `.dockerignore` (root), `scripts/build-images.ps1` (builds all app images tagged `urumi/<app>:dev` and runs `k3d image import -c urumi`), `charts/.../templates/mcp/{mcp-woocommerce,secrets}.yaml` (Deployment, ClusterIP Service, **no Ingress**, probes on `/healthz` and `/readyz`, resources, read-only root FS + `/tmp` emptyDir)
 
 **Verify (user):**
 - `kubectl -n mcp port-forward svc/mcp-woocommerce 3001:3001`.
@@ -643,7 +647,7 @@ export function requireSession(): RequestHandler; export function requireRole(ro
 **Files:** `src/api/{servers,audit}.routes.ts`, `src/audit/{writer,query}.ts`, `src/mcp/endpoint.ts`, tests
 **Interfaces:**
 - `AuditWriter.record(e: AuditEntry): Promise<void>`
-- `createMcpEndpoint(deps): RequestHandler`. This uses the SDK's **low-level `Server`** (tools are dynamic, with raw JSON schemas), built per request in stateless mode. It handles `tools/list` → `manager.listTools()` and `tools/call` → `manager.callTool(...)`.
+- `createMcpEndpoint(deps): RequestHandler`. Per ADR-007 (decided in Task 2.1) this uses **`McpServer` with raw `tools/list` and `tools/call` handlers on `mcp.server.setRequestHandler`** (tools are dynamic, with raw JSON schemas; the deprecated low-level `Server` class is not used), built per request via `createMcpHandler`, in stateless mode. Its Host allow-list must include the gateway's public host. It handles `tools/list` → `manager.listTools()` and `tools/call` → `manager.callTool(...)`.
 - On `/mcp`, auth failure → HTTP 401 with JSON-RPC error `-32001 Unauthorized` + audit `auth_rejected`.
 
 **Server API rules:**
@@ -820,28 +824,28 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 
 ### Phase 2
 
-- [ ] **`WooClient` needs two URLs.** Resolution: a separate `signingBaseUrl` (public store URL) from `baseUrl` (in-cluster Service).
-- [ ] **`registerWooTools` depends on the concrete class.** Resolution: take a `WooApi` interface instead of `WooClient` so tests can fake it.
-- [ ] **MCP server `/readyz` must not depend on the setup Job's outputs** (it would deadlock `--wait` on a fresh install). Resolution: readiness checks only the process and its own config.
-- [ ] **No lint setup** (CLAUDE.md §7 requires linting). Resolution: add an ESLint flat config and a `lint` script per workspace, plus a per-workspace tsconfig with `outDir`/`rootDir`.
-- [ ] **Mutable image tags.** `:dev` with `IfNotPresent` leaves stale pods. Resolution: use a per-build tag (git short SHA) or `kubectl rollout restart` in `build-images.ps1`.
-- [ ] **Port the OAuth1 signer from Phase 1.** Port `buildOAuth1BaseString`/`signOAuth1Url` from `scripts/dev/woo-oauth-check.mjs` into the MCP server's `signOAuth1`, and reuse the PHP-derived known-answer vector from `scripts/dev/woo-oauth-check.test.mjs`.
-- [ ] **Signer limits.** Only unique scalar query keys are supported; lists are sent comma-separated (`include=1,2`).
-- [ ] **Signer params hygiene.** Use a `Map` or `Object.create(null)` for params (avoids `__proto__`), and reject caller-supplied `oauth_*` keys.
-- [ ] **`signingBaseUrl` derivation.** `signingBaseUrl` = the public store URL (`urumi.publicUrl`, i.e. `WP_HOME`) with its scheme replaced by `http`; the port stays only if it is present in `WP_HOME`, i.e. only when `publicPort` is not the default for `publicScheme` (local: `http://store.localhost`; local on 8081: `http://store.localhost:8081`; production https/443: `http://store.example.com`, no `:443`). In-cluster calls are never TLS, so WooCommerce signs with `get_home_url(null, $path, 'http')` and `set_url_scheme()` only swaps the scheme.
-- [ ] **Signing base chart helper.** Add helper `urumi.storeSigningBaseUrl` = `urumi.publicUrl` for `storeHost` with `^https?://` replaced by `http://`, and pass it to the MCP server Deployment as env `WOO_SIGNING_BASE_URL`. Derive `check-woo-api.ps1`'s `--sign-base` from the same rule (or from the deployment env) so a non-default `publicPort` works.
-- [ ] **Timestamp window and nonces.** Respect WooCommerce's ±15 min OAuth timestamp window and its per-key nonce store: always use a fresh nonce, and never retry a request with the same nonce.
-- [ ] **`store-woo-api` copy in `mcp`.** Render the `store-woo-api` copy in the `mcp` namespace with `urumi.generatedValue` using canonical namespace `store`, so both copies match (the `store` copy exists since Phase 1).
-- [ ] **Confirm Service-DNS access and POST/PUT signing.** ADR-005's spike used `kubectl port-forward` and only GET; verify `http://wordpress.store.svc.cluster.local` access and signed writes.
-- [ ] **Image helper.** Add `urumi.image` plus `global.imageRegistry`/`global.imageTag` (Task 2.5).
-- [ ] **The `mcp` copy of `store-woo-api`.** Render it only when `secrets.existing.storeWooApi` is empty, annotate it `keep`, and build both copies through ONE shared helper/definition so both call `urumi.generatedValue` with an identical length and prefix (otherwise the first call in a render wins).
-- [ ] **WooCommerce key owner.** Create a dedicated `urumi-mcp` user with the `shop_manager` role and make it the key owner instead of the WordPress administrator. This limits the blast radius of a leaked key to products and orders. Record it in ADR-005 and in the Phase 6 threat model.
-- [ ] **Atomic API-key upsert.** Use UPDATE-then-INSERT (keep key_id/nonces) instead of delete-then-insert.
-- [ ] **`urumi.podLabels` helper.** Selector labels + component + part-of, without `helm.sh/chart`, used for pod templates, so chart version bumps stop restarting MariaDB/WordPress. Migrate the existing pod templates in the same change.
-- [ ] **`_helpers.tpl` comment.** Never `toYaml .Values`, because `__generated` holds generated secrets during render.
-- [ ] **Deploy ordering note.** `deploy.ps1 --wait` gates the post-install hook on ALL release workloads being Ready, so `build-images.ps1`/image import must run before `deploy.ps1`, or the store setup is delayed until timeout.
-- [ ] **Pretty permalinks.** The signer assumes pretty permalinks (the setup Job enforces them). Note this in the MCP server docs.
-- [ ] **Check script port-forward fragility.** Supersede `check-woo-api.ps1`'s port-forward with an in-cluster check.
+- [x] **`WooClient` needs two URLs.** *(Resolved → Task 2.3: `WooClientOptions` has `baseUrl` and `signingBaseUrl`.)* Resolution: a separate `signingBaseUrl` (public store URL) from `baseUrl` (in-cluster Service).
+- [x] **`registerWooTools` depends on the concrete class.** *(Resolved → Task 2.4: `ToolDeps.woo: WooApi`; tests use fakes.)* Resolution: take a `WooApi` interface instead of `WooClient` so tests can fake it.
+- [x] **MCP server `/readyz` must not depend on the setup Job's outputs** *(Resolved → Task 2.4 (`server.ts`: `readinessCheck` is a constant `true`) and Global Constraints (a truly fresh install with the MCP pod present was not re-run in Phase 2).)* (it would deadlock `--wait` on a fresh install). Resolution: readiness checks only the process and its own config.
+- [x] **No lint setup** *(Resolved → Task 2.2: ESLint flat config at the root (`npm run lint`), per-workspace `tsconfig.json` and `tsconfig.build.json`.)* (CLAUDE.md §7 requires linting). Resolution: add an ESLint flat config and a `lint` script per workspace, plus a per-workspace tsconfig with `outDir`/`rootDir`.
+- [x] **Mutable image tags.** *(Resolved → Task 2.6: `build-images.ps1` tags the git short SHA (`-dirty-<timestamp>` when the tree has any change, including untracked files) and writes `deploy/.images.local.yaml`; a clean tree keeps the tag and does not restart the pod (verified).)* `:dev` with `IfNotPresent` leaves stale pods. Resolution: use a per-build tag (git short SHA) or `kubectl rollout restart` in `build-images.ps1`.
+- [x] **Port the OAuth1 signer from Phase 1.** *(Resolved → Task 2.3: `src/woo/oauth1.ts`, tested against the PHP-derived vector.)* Port `buildOAuth1BaseString`/`signOAuth1Url` from `scripts/dev/woo-oauth-check.mjs` into the MCP server's `signOAuth1`, and reuse the PHP-derived known-answer vector from `scripts/dev/woo-oauth-check.test.mjs`.
+- [x] **Signer limits.** *(Resolved → Task 2.3: the signer throws for unsupported query keys; documented in the server README.)* Only unique scalar query keys are supported; lists are sent comma-separated (`include=1,2`).
+- [x] **Signer params hygiene.** *(Resolved → Task 2.3: a `Map` is used, and caller-supplied `oauth_*` keys are rejected.)* Use a `Map` or `Object.create(null)` for params (avoids `__proto__`), and reject caller-supplied `oauth_*` keys.
+- [x] **`signingBaseUrl` derivation.** *(Resolved → Task 2.6: chart helper `urumi.storeSigningBaseUrl`; `check-woo-api.ps1` derives its `--sign-base` by the same rule. The `publicPort=8081` case was rendered with `helm template` but not run end to end.)* `signingBaseUrl` = the public store URL (`urumi.publicUrl`, i.e. `WP_HOME`) with its scheme replaced by `http`; the port stays only if it is present in `WP_HOME`, i.e. only when `publicPort` is not the default for `publicScheme` (local: `http://store.localhost`; local on 8081: `http://store.localhost:8081`; production https/443: `http://store.example.com`, no `:443`). In-cluster calls are never TLS, so WooCommerce signs with `get_home_url(null, $path, 'http')` and `set_url_scheme()` only swaps the scheme.
+- [x] **Signing base chart helper.** *(Resolved → Task 2.6: helper added, passed as env `WOO_SIGNING_BASE_URL`; `check-woo-api.ps1` updated.)* Add helper `urumi.storeSigningBaseUrl` = `urumi.publicUrl` for `storeHost` with `^https?://` replaced by `http://`, and pass it to the MCP server Deployment as env `WOO_SIGNING_BASE_URL`. Derive `check-woo-api.ps1`'s `--sign-base` from the same rule (or from the deployment env) so a non-default `publicPort` works.
+- [x] **Timestamp window and nonces.** *(Resolved → Task 2.3: fresh nonce and timestamp per request, no retries; documented in the server README and workflow 6.)* Respect WooCommerce's ±15 min OAuth timestamp window and its per-key nonce store: always use a fresh nonce, and never retry a request with the same nonce.
+- [x] **`store-woo-api` copy in `mcp`.** *(Resolved → Task 2.6: `urumi.storeWooApiData` renders both copies; the two rendered Secrets were compared and are identical.)* Render the `store-woo-api` copy in the `mcp` namespace with `urumi.generatedValue` using canonical namespace `store`, so both copies match (the `store` copy exists since Phase 1).
+- [x] **Confirm Service-DNS access and POST/PUT signing.** *(Resolved → Task 2.6: verified with `check-mcp-woocommerce.ps1 -Write` (create_product POST, update_order_status PUT); recorded in ADR-005.)* ADR-005's spike used `kubectl port-forward` and only GET; verify `http://wordpress.store.svc.cluster.local` access and signed writes.
+- [x] **Image helper.** *(Resolved → Task 2.6: `urumi.image`, `global.imageRegistry`, `global.imageTag`; `deploy/values-prod.yaml` has `CHANGE-ME` placeholders.)* Add `urumi.image` plus `global.imageRegistry`/`global.imageTag` (Task 2.5).
+- [x] **The `mcp` copy of `store-woo-api`.** *(Resolved → Task 2.6: rendered only when `secrets.existing.storeWooApi` is empty, annotated `keep`, built through the one shared helper.)* Render it only when `secrets.existing.storeWooApi` is empty, annotate it `keep`, and build both copies through ONE shared helper/definition so both call `urumi.generatedValue` with an identical length and prefix (otherwise the first call in a render wins).
+- [x] **WooCommerce key owner.** *(Resolved → Task 2.5: `urumi-mcp` shop manager, plus an ownership marker `urumi_managed_key_owner` after review (the Job refuses to promote an unmarked user); recorded in ADR-005, the run guide and troubleshooting. The Phase 6 threat-model item below is still open.)* Create a dedicated `urumi-mcp` user with the `shop_manager` role and make it the key owner instead of the WordPress administrator. This limits the blast radius of a leaked key to products and orders. Record it in ADR-005 and in the Phase 6 threat model.
+- [x] **Atomic API-key upsert.** *(Resolved → Task 2.5: update in place, else insert; `key_id` stayed 4 across redeploys. The duplicate-row cleanup path was not exercised.)* Use UPDATE-then-INSERT (keep key_id/nonces) instead of delete-then-insert.
+- [x] **`urumi.podLabels` helper.** *(Resolved → Task 2.5: helper added and used by the mariadb, wordpress, store-setup and mcp pod templates.)* Selector labels + component + part-of, without `helm.sh/chart`, used for pod templates, so chart version bumps stop restarting MariaDB/WordPress. Migrate the existing pod templates in the same change.
+- [x] **`_helpers.tpl` comment.** *(Resolved → Task 2.5.)* Never `toYaml .Values`, because `__generated` holds generated secrets during render.
+- [x] **Deploy ordering note.** *(Resolved → Task 2.6: `up.ps1` runs `build-images.ps1` before `deploy.ps1`; `deploy.ps1` warns when the tag file is missing; documented in the run guide and deployment guide.)* `deploy.ps1 --wait` gates the post-install hook on ALL release workloads being Ready, so `build-images.ps1`/image import must run before `deploy.ps1`, or the store setup is delayed until timeout.
+- [x] **Pretty permalinks.** *(Resolved → Task 2.7: apps/mcp-woocommerce/README.md "OAuth 1.0a notes".)* The signer assumes pretty permalinks (the setup Job enforces them). Note this in the MCP server docs.
+- [x] **Check script port-forward fragility.** *(Resolved → Task 2.6: `scripts/check-mcp-woocommerce.ps1` is the end-to-end check (waits for the port, always stops its port-forward); `check-woo-api.ps1` itself still uses a port-forward.)* Supersede `check-woo-api.ps1`'s port-forward with an in-cluster check.
 
 ### Phase 3
 
