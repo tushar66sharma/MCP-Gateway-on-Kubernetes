@@ -21,6 +21,9 @@ if ( ! $owner ) {
 if ( ! user_can( $owner, 'manage_woocommerce' ) ) {
 	WP_CLI::error( 'MCP key owner lacks the manage_woocommerce capability: ' . $owner_login );
 }
+if ( '1' !== get_user_meta( $owner->ID, 'urumi_managed_key_owner', true ) ) {
+	WP_CLI::error( 'MCP key owner ' . $owner_login . ' was not created by store setup (missing urumi_managed_key_owner marker); refusing to own the API key.' );
+}
 if ( ! function_exists( 'wc_api_hash' ) ) {
 	WP_CLI::error( 'WooCommerce is not active (wc_api_hash missing).' );
 }
@@ -42,7 +45,9 @@ $ids = $wpdb->get_col( $wpdb->prepare( "SELECT key_id FROM {$table} WHERE descri
 if ( $ids ) {
 	$keep = (int) array_shift( $ids );
 	foreach ( $ids as $extra ) { // legacy duplicates
-		$wpdb->delete( $table, array( 'key_id' => (int) $extra ) );
+		if ( false === $wpdb->delete( $table, array( 'key_id' => (int) $extra ) ) ) {
+			WP_CLI::error( 'Failed to delete duplicate API key row: ' . $wpdb->last_error );
+		}
 	}
 	$ok = false !== $wpdb->update( $table, $row, array( 'key_id' => $keep ) );
 } else {

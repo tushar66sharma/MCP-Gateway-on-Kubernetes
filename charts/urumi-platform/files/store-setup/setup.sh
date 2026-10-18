@@ -90,11 +90,21 @@ fi
 
 # Least privilege: the MCP key is owned by a dedicated shop_manager, not the admin. Nobody logs in
 # as this user (random password, never printed); it only owns the API key.
+# SECURITY: customer registration is open and WooCommerce derives usernames from the email local part,
+# so anyone can register as urumi-mcp@<anything> and get the login "urumi-mcp". We therefore only
+# (re)grant shop_manager to an account that THIS script created (marked with user meta), never to an
+# account that merely has the same login.
+: "${MCP_KEY_OWNER:?MCP_KEY_OWNER must be set}"
 log "ensuring the MCP key owner $MCP_KEY_OWNER (shop_manager)"
 if $WP user get "$MCP_KEY_OWNER" >/dev/null 2>&1; then
+  marker=$($WP user meta get "$MCP_KEY_OWNER" urumi_managed_key_owner 2>/dev/null || true)
+  if [ "$marker" != "1" ]; then
+    fail "user '$MCP_KEY_OWNER' exists but was not created by store setup (missing urumi_managed_key_owner marker); refusing to grant shop_manager. Rename/delete that user, or if it is legitimately yours add the marker: wp user meta update $MCP_KEY_OWNER urumi_managed_key_owner 1"
+  fi
   $WP user set-role "$MCP_KEY_OWNER" shop_manager
 else
-  $WP user create "$MCP_KEY_OWNER" "$MCP_KEY_OWNER@example.invalid" --role=shop_manager     --user_pass="$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 32)" >/dev/null
+  $WP user create "$MCP_KEY_OWNER" "$MCP_KEY_OWNER@example.invalid" --role=shop_manager --user_pass="$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 32)" >/dev/null
+  $WP user meta update "$MCP_KEY_OWNER" urumi_managed_key_owner 1 >/dev/null
   log "created user $MCP_KEY_OWNER"
 fi
 
