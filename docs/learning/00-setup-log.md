@@ -10,7 +10,8 @@ Windows 11 Home, 15 GB RAM, PowerShell 5.1 and Git Bash, Docker Desktop on the W
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Docker Desktop | 29.6.2 | Runs containers; k3d runs the whole cluster as Docker containers |
+| Docker Desktop | 4.85.0 | Runs the Docker Engine on WSL2; k3d runs the whole cluster as Docker containers |
+| Docker Engine | 29.6.2 | The engine inside Docker Desktop (what `docker --version` reports) |
 | k3d | v5.9.0 | Creates/manages k3s clusters inside Docker |
 | k3s (via k3d default image) | v1.35.5-k3s1 (`rancher/k3s:v1.35.5-k3s1`) | Lightweight certified Kubernetes distribution |
 | kubectl | v1.36.1 | Command-line client for the Kubernetes API |
@@ -38,7 +39,7 @@ Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and r
 
 ### Port 8080 conflict
 
-k3d's documentation commonly maps `8080:80`. On this machine host port **8080 is already in use by another process**, so we map the standard ports **80 and 443** instead (both were free). Benefits: URLs have no port (`http://store.localhost`), which also matches how production will look. If port 80 is ever taken, `cluster-up.ps1` will fail at the port-binding step; free the port or change the left-hand side of `port: 80:80` (and then include the port in every URL).
+k3d's documentation commonly maps `8080:80`. On this machine host port **8080 is already in use by another process**, so we map the standard ports **80 and 443** instead (both were free). Benefits: URLs have no port (`http://store.localhost`), which also matches how production will look. If port 80 is ever taken, `cluster-up.ps1` fails right away at `k3d cluster create` with a clear error and a non-zero exit code (PowerShell 5.1 does not throw on failing native commands, so the script checks each exit code explicitly); free the port or change the left-hand side of `port: 80:80` (and then include the port in every URL).
 
 ## Hosts file (`scripts/setup-hosts.ps1`)
 
@@ -48,7 +49,7 @@ Adds this line to `C:\Windows\System32\drivers\etc\hosts`:
 127.0.0.1 store.localhost app.localhost hello.localhost
 ```
 
-Why: browsers and `curl` resolve any `*.localhost` name to loopback by themselves (RFC 6761), so the hosts file is not needed for them. But **Node.js-based MCP clients use the operating system resolver**, which on Windows does not reliably resolve `*.localhost`. An explicit hosts entry makes every client behave the same. Editing the hosts file requires administrator rights, so the script re-launches itself elevated (a UAC prompt appears) and only appends the line if it is not already there, so it is safe to run repeatedly. If you change or add Ingress hostnames, add them to this script's line too.
+Why: browsers and `curl` resolve any `*.localhost` name to loopback by themselves (RFC 6761), so the hosts file is not needed for them. But **Node.js-based MCP clients use the operating system resolver**, and on this machine `node -e "require('dns').lookup('zzz-not-in-hosts.localhost', ...)"` returns `ENOTFOUND`, while a name listed in the hosts file (`hello.localhost`) resolves to `127.0.0.1`. So the hosts entry is required for those clients, and it makes every client behave the same. Editing the hosts file requires administrator rights, so the script re-launches itself elevated (a UAC prompt appears) and only appends the line if it is not already there, so it is safe to run repeatedly. If you change or add Ingress hostnames, add them to this script's line too.
 
 ## Daily use
 
@@ -61,7 +62,7 @@ Why: browsers and `curl` resolve any `*.localhost` name to loopback by themselve
 
 **`cluster-down.ps1` runs `k3d cluster delete urumi`, which deletes ALL cluster data**: databases, volumes, Secrets, everything deployed. Use `k3d cluster stop` when you only want to free RAM.
 
-Note on timing: k3s installs Traefik asynchronously by running a Helm Job, so right after the node is Ready the `traefik` Deployment may not exist yet. `cluster-up.ps1` polls (up to 300 s) until it appears, then waits for its rollout.
+Note on timing: k3s installs Traefik asynchronously by running a Helm Job, so right after the node is Ready the `traefik` Deployment may not exist yet. `cluster-up.ps1` polls (up to 300 s) until it appears, then waits for its rollout. Every `k3d`/`kubectl` step is followed by an exit-code check, so a failure (for example a busy port 80) stops the script immediately with an `ERROR:` message and exit code 1 instead of continuing.
 
 ## Verification performed
 
