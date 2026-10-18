@@ -86,7 +86,7 @@ A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platf
 
 ## 21. Links to Documentation in `docs/`
 
-*(written in Phase 6)*
+See the [documentation map](docs/README.md) for an index of all project documentation.
 
 ## 22. Known Limitations, Assumptions, and Future Improvements
 
