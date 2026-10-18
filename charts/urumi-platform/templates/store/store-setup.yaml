@@ -1,0 +1,107 @@
+{{- if .Values.storeSetup.enabled }}
+{{- $ns := .Values.namespaces.store -}}
+{{- $dbSecret := default "store-db" .Values.secrets.existing.storeDb -}}
+{{- $adminSecret := default "store-admin" .Values.secrets.existing.storeAdmin -}}
+{{- $wooSecret := default "store-woo-api" .Values.secrets.existing.storeWooApi -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: store-setup-scripts
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "store-setup" "component" "store") | nindent 4 }}
+data:
+  setup.sh: |-
+    {{- .Files.Get "files/store-setup/setup.sh" | nindent 4 }}
+  upsert-api-key.php: |-
+    {{- .Files.Get "files/store-setup/upsert-api-key.php" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: store-setup
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "store-setup" "component" "store") | nindent 4 }}
+  annotations:
+    # Runs after install/upgrade. With --wait, Helm starts it only after the release's
+    # workloads are Ready. The previous Job is deleted right before a new one is created,
+    # so its logs stay readable until the next deploy.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: {{ .Values.storeSetup.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.labels" (dict "root" $ "name" "store-setup" "component" "store") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        # wordpress:cli is Alpine (www-data = uid 82) but the volume is owned by the
+        # Debian WordPress image's www-data (uid 33), so run as 33.
+        {{- include "urumi.podSecurityContext" (dict "uid" 33 "gid" 33) | nindent 8 }}
+      affinity:
+        # The WordPress volume is ReadWriteOnce: schedule next to the WordPress pod.
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "urumi.selectorLabels" (dict "root" $ "name" "wordpress") | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: setup
+          image: {{ .Values.storeSetup.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "/scripts/setup.sh"]
+          workingDir: /var/www/html
+          securityContext:
+            {{- include "urumi.containerSecurityContext" . | nindent 12 }}
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: WP_CLI_CACHE_DIR, value: /tmp/wp-cli-cache }
+            - name: WORDPRESS_DB_HOST
+              value: "mariadb.{{ $ns }}.svc.cluster.local:3306"
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.mariadb.database | quote }}
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.mariadb.user | quote }}
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: password } }
+            - name: WORDPRESS_TABLE_PREFIX
+              value: {{ .Values.wordpress.tablePrefix | quote }}
+            - name: WP_URL
+              value: {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) | quote }}
+            - { name: SITE_TITLE, value: {{ .Values.storeSetup.siteTitle | quote }} }
+            - { name: ADMIN_USER, value: {{ .Values.storeSetup.adminUser | quote }} }
+            - { name: ADMIN_EMAIL, value: {{ .Values.storeSetup.adminEmail | quote }} }
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $adminSecret }}, key: password } }
+            - { name: WOO_VERSION, value: {{ .Values.storeSetup.woocommerceVersion | quote }} }
+            - { name: STORE_CURRENCY, value: {{ .Values.storeSetup.currency | quote }} }
+            - { name: STORE_COUNTRY, value: {{ .Values.storeSetup.country | quote }} }
+            - { name: STORE_TIMEZONE, value: {{ .Values.storeSetup.timezone | quote }} }
+            - { name: SEED_PRODUCTS, value: {{ .Values.storeSetup.seedProducts | quote }} }
+            - name: WOO_CONSUMER_KEY
+              valueFrom: { secretKeyRef: { name: {{ $wooSecret }}, key: consumer-key } }
+            - name: WOO_CONSUMER_SECRET
+              valueFrom: { secretKeyRef: { name: {{ $wooSecret }}, key: consumer-secret } }
+          resources:
+            {{- toYaml .Values.storeSetup.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/www/html }
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: wordpress-data
+        - name: scripts
+          configMap:
+            name: store-setup-scripts
+        - name: tmp
+          emptyDir: {}
+{{- end }}

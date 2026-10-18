@@ -43,3 +43,20 @@ wordpress:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 512Mi }
+
+storeSetup:
+  enabled: true
+  image: wordpress:cli-2.12.0-php8.3
+  woocommerceVersion: "11.2.1"
+  siteTitle: Urumi Demo Store
+  adminUser: admin
+  adminEmail: admin@example.com
+  currency: USD
+  country: "US:CA"
+  timezone: Asia/Kolkata
+  seedProducts: true
+  # Must be shorter than deploy.ps1's --timeout (10m) so a stuck Job fails the release with a clear reason.
+  activeDeadlineSeconds: 480
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 768Mi }
