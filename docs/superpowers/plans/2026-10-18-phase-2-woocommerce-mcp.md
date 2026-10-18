@@ -165,6 +165,7 @@ export function upstreamAuthMiddleware(auth: UpstreamAuth): import('express').Re
 export interface McpHttpServerOptions {
   name: string; version: string; port: number; host?: string;      // host default '0.0.0.0'
   auth: UpstreamAuth; logger: Logger;
+  allowedHosts: string[];            // DNS-rebinding Host check applied to /mcp ONLY (never to /healthz,/readyz — kubelet probes use the pod IP); ADR-007 snippet 2
   registerTools: (server: SdkMcpServer) => void;                     // SdkMcpServer = the server class per ADR-007
   readinessCheck?: () => Promise<boolean>;                           // default: always ready
 }
@@ -260,6 +261,7 @@ Configuration files:
     - `/readyz` → 200; with `readinessCheck: async () => false` → 503.
     - `GET /mcp` → 405.
     - `POST /mcp` with no auth → 401.
+  - Host check (ADR-007 snippet 2): with `allowedHosts: ['mcp-woocommerce.mcp.svc.cluster.local:3001','127.0.0.1:<port>']`, a POST with `Host: evil.example` → 403, a POST with a listed Host → accepted; `/healthz` with `Host: 10.42.0.15:3001` → 200 (probes are never host-checked). Empty entries from a trailing comma are ignored.
     - The SDK client from ADR-007, with the right bearer header, connects. `listTools` contains `ping`, and `callTool('ping')` returns the text.
     - `close()` resolves, after which the port is free.
 
@@ -651,6 +653,7 @@ export function fail(err: unknown): ToolResult;   // WooApiError → "WooCommerc
 - `STORE_TIMEZONE` (default `UTC`; validated by `new Intl.DateTimeFormat('en-US', {timeZone})`)
 - `WOO_TIMEOUT_MS` (default 10000, 1000–60000)
 - `LOG_LEVEL` (default `info`)
+- `MCP_ALLOWED_HOSTS` (comma-separated Host header values accepted on `/mcp`; empty entries ignored; default `localhost,127.0.0.1` — fail closed; ADR-007)
 
 **`main.ts`:**
 1. Load the config. On `EnvValidationError`, log only the message and exit with code 1.
@@ -842,6 +845,7 @@ Add `secrets.existing.mcpWoocommerceToken: ""` (key `token`). Extend `values.sch
   - `MCP_AUTH_TOKEN`: from `mcp-woocommerce-token` key `token`
   - `STORE_TIMEZONE`: `.Values.storeSetup.timezone`
   - `WOO_TIMEOUT_MS`, `LOG_LEVEL`
+  - `MCP_ALLOWED_HOSTS`: the Service's in-cluster names with and without port (`mcp-woocommerce.<mcp ns>.svc.cluster.local[:3001]`, `mcp-woocommerce.<mcp ns>.svc[:3001]`, `mcp-woocommerce.<mcp ns>[:3001]`, `mcp-woocommerce[:3001]`) plus `127.0.0.1:13001` and `localhost:13001` for `check-mcp-woocommerce.ps1`'s port-forward. Match whatever form ADR-007 snippet 2 proved (with or without port) and verify in the cluster.
 - **Probes:**
   - readinessProbe: `/readyz` every 10s, timeout 3s.
   - livenessProbe: `/healthz` every 20s, timeout 3s, failureThreshold 3.
