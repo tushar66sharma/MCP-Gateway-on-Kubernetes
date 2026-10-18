@@ -80,6 +80,14 @@ if ($action -eq 'deploy') {
   if ($LASTEXITCODE -ne 0) { Stop-WithError 'MariaDB did not become ready. See docs/troubleshooting.md.' }
   kubectl -n store rollout status deployment/wordpress --timeout=300s
   if ($LASTEXITCODE -ne 0) { Stop-WithError 'WordPress did not become ready. See docs/troubleshooting.md.' }
+  # The MCP server exists only when mcpWoocommerce.enabled. A slow start is a warning, not a failure.
+  cmd /c "kubectl -n mcp get deployment mcp-woocommerce >nul 2>&1"
+  if ($LASTEXITCODE -eq 0) {
+    kubectl -n mcp rollout status deployment/mcp-woocommerce --timeout=120s
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host 'WARNING: mcp-woocommerce is not ready yet (kubectl -n mcp get pods). The store works without it; see docs/troubleshooting.md.' -ForegroundColor Yellow
+    }
+  }
 }
 
 # 5. Compute the public store URL from the release's values (same rule as the chart's urumi.publicUrl).

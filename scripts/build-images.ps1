@@ -35,5 +35,7 @@ foreach ($app in $apps) {
 }
 
 $out = Join-Path $root 'deploy/.images.local.yaml'
-[IO.File]::WriteAllText($out, "global:`n  imageTag: $tag`n")
+# Quoted: an all-digit short SHA (e.g. 1234567) would otherwise be read by YAML as a number and fail the
+# chart schema (imageTag must be a string).
+[IO.File]::WriteAllText($out, "global:`n  imageTag: `"$tag`"`n")
 Write-Host "Image tag: $tag (written to deploy/.images.local.yaml)" -ForegroundColor Green

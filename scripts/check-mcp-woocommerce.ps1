@@ -12,15 +12,22 @@ foreach ($tool in 'kubectl', 'node') {
 }
 $root = Split-Path -Parent $PSScriptRoot
 
+# The smoke client (scripts/dev/mcp-smoke.mjs) imports the MCP SDK from the repository's node_modules.
+if (-not (Test-Path (Join-Path $root 'node_modules/@modelcontextprotocol/client'))) {
+  Stop-WithError 'Dependencies not installed: run `npm ci` from the repository root (needs Node 24), then run this again.'
+}
+
 $b64 = kubectl -n mcp get secret mcp-woocommerce-token -o 'jsonpath={.data.token}'
 if ($LASTEXITCODE -ne 0 -or -not $b64) { Stop-WithError 'Could not read secret mcp/mcp-woocommerce-token. Is the platform deployed (scripts\up.ps1)?' }
-$env:MCP_TOKEN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
 
 $port = 13001
 $pf = $null
 $code = 1
 try {
   $pf = Start-Process kubectl -ArgumentList "-n mcp port-forward svc/mcp-woocommerce ${port}:3001" -PassThru -WindowStyle Hidden
+  # Set only after kubectl has started, so the port-forward process does not inherit the token.
+  $env:MCP_TOKEN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+  $b64 = $null
   $ready = $false
   for ($i = 0; $i -lt 30; $i++) {
     if ($pf.HasExited) { break }

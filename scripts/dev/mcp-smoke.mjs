@@ -27,6 +27,10 @@ async function call(name, argumentsObj) {
   return res.structuredContent ?? {};
 }
 
+function assert(condition, message) {
+  if (!condition) throw new Error(`assertion failed: ${message}`);
+}
+
 try {
   await client.connect(
     new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }),
@@ -36,27 +40,35 @@ try {
   console.log(`tools (6): ${tools.map((t) => t.name).join(', ')}`);
 
   const ping = await call('ping', {});
+  assert(ping.ok === true, 'ping did not return structuredContent.ok === true');
   console.log(`ping: ok=${ping.ok}`);
 
   const products = await call('list_products', { per_page: 3 });
-  const plist = products.products ?? [];
+  assert(Array.isArray(products.products), 'list_products did not return a products array');
+  const plist = products.products;
   console.log(`list_products: ${plist.length} returned, ids=[${plist.map((p) => p.id).join(', ')}]`);
 
   const today = await call('list_orders', { period: 'today' });
-  console.log(`list_orders today: ${(today.orders ?? []).length} order(s)`);
+  assert(Array.isArray(today.orders), 'list_orders did not return an orders array');
+  console.log(`list_orders today: ${today.orders.length} order(s)`);
 
   if (write) {
+    // A JSON number price exercises the string|number schema (normalised to "1.00").
     const created = await call('create_product', {
       name: `MCP smoke ${new Date().toISOString()}`,
-      regular_price: '1.00',
+      regular_price: 1,
       status: 'draft',
     });
-    console.log(`create_product: id=${created.product?.id} status=${created.product?.status}`);
+    const id = created.product?.id;
+    assert(typeof id === 'number' && Number.isInteger(id) && id > 0, 'create_product did not return a numeric product.id');
+    console.log(`create_product: id=${id} status=${created.product?.status} regular_price=${created.product?.regular_price}`);
 
     const latest = await call('list_orders', { per_page: 1 });
-    const order = (latest.orders ?? [])[0];
+    assert(Array.isArray(latest.orders), 'list_orders did not return an orders array');
+    const order = latest.orders[0];
     if (order) {
       const updated = await call('update_order_status', { order_id: order.id, status: order.status });
+      assert(updated.order?.id === order.id, 'update_order_status returned a different order id');
       console.log(`update_order_status: order ${order.id} kept as ${updated.order?.status} (signed PUT ok)`);
     } else {
       console.log('update_order_status: skipped (no orders yet)');
