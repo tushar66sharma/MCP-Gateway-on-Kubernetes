@@ -1,0 +1,28 @@
+# Default values. Environment-specific overrides live in deploy/values-*.yaml.
+# Never put secrets in any values file: credentials are generated into Kubernetes
+# Secrets by the chart, or supplied as pre-created Secrets via secrets.existing.*.
+
+global:
+  storeHost: store.localhost
+  appHost: app.localhost
+  publicScheme: http          # http locally; https in production
+  publicPort: 80              # host port users browse on; omitted from URLs when it is the scheme default
+  ingressClassName: traefik
+  storageClass: ""            # "" = cluster default (local-path on k3s/k3d)
+  imagePullPolicy: IfNotPresent
+  tls:
+    enabled: false
+    clusterIssuer: ""         # cert-manager ClusterIssuer name (production)
+    secretNamePrefix: urumi-tls
+
+namespaces:
+  store: store
+  mcp: mcp
+  gateway: gateway
+
+# Pre-created Secrets (production). Empty = the chart generates them.
+secrets:
+  existing:
+    storeDb: ""       # keys: root-password, password
+    storeAdmin: ""    # keys: password
+    storeWooApi: ""   # keys: consumer-key, consumer-secret

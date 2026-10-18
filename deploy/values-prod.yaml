@@ -1,0 +1,15 @@
+# Production-like k3s VPS environment — STUB, completed in Phase 5 (see docs/deployment.md).
+# Never put secrets in this file: create the Secrets named below with kubectl first.
+global:
+  storeHost: store.example.com
+  appHost: app.example.com
+  publicScheme: https
+  publicPort: 443
+  tls:
+    enabled: true
+    clusterIssuer: letsencrypt-prod
+secrets:
+  existing:
+    storeDb: store-db            # must exist in namespace "store"
+    storeAdmin: store-admin      # must exist in namespace "store"
+    storeWooApi: store-woo-api   # must exist in "store" (and in "mcp" from Phase 2)

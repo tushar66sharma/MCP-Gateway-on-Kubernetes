@@ -1,0 +1,12 @@
+{{- range $key, $ns := .Values.namespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" $ns "component" "namespace") | nindent 4 }}
+  annotations:
+    # Survive `helm uninstall` so store data (PVCs, Secrets) is never deleted by accident.
+    helm.sh/resource-policy: keep
+{{- end }}

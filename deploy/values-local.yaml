@@ -1,0 +1,7 @@
+# Local k3d environment. Only differences from charts/urumi-platform/values.yaml belong here.
+# Never put secrets in this file.
+global:
+  storeHost: store.localhost
+  appHost: app.localhost
+  publicScheme: http
+  publicPort: 80        # change to 8081 if host port 80 is taken (also change deploy/k3d-config.yaml)
