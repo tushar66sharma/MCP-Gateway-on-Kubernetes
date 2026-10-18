@@ -8,7 +8,7 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/package.json
 COPY apps/${APP}/package.json apps/${APP}/package.json
-RUN npm ci --workspace @urumi/shared --workspace @urumi/${APP}
+RUN npm ci --include-workspace-root --workspace @urumi/shared --workspace @urumi/${APP}
 COPY packages/shared packages/shared
 COPY apps/${APP} apps/${APP}
 RUN npm run build -w @urumi/shared && npm run build -w @urumi/${APP}
