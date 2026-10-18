@@ -29,7 +29,7 @@
 - **Project root:** `C:\Users\Lenovo\Desktop\MCP Gateway on Kubernetes\MCP-Gateway-on-Kubernetes`. Everything lives inside it.
 - **Secrets:** never in source, values files, or git. `.env` is git-ignored; `.env.example` holds placeholders only. LLM keys reach the cluster via `scripts/create-secrets.ps1` → Secret `llm-api-keys`.
 - **No Gemini** API or keys anywhere.
-- **Line endings:** LF for everything (`.gitattributes`). Shell scripts executed inside containers break with CRLF.
+- **Line endings:** LF for everything except `*.ps1` (CRLF), per `.gitattributes`. Shell scripts executed inside containers break with CRLF.
 - **Node:** `>=24` (`engines` field). TypeScript `strict: true`. ES modules (`"type": "module"`).
 - **Tool names** exposed by the gateway match `^[a-zA-Z0-9_-]{1,64}$`. Slugs match `^[a-z][a-z0-9-]{1,15}$`. The separator is `__`.
 - **Timeouts:** upstream health check 5000 ms every 15000 ms; upstream tool call 20000 ms; WooCommerce HTTP 10000 ms; LLM request 30000 ms; chat turn 60000 ms; max 8 agent steps; tool result truncated to 6000 chars for the LLM.
@@ -43,7 +43,7 @@
 
 | Phase | Branch | Target | Exit criterion (the user runs it) |
 |---|---|---|---|
-| 0 Setup, scaffolding, K8s primer | `phase-0-setup-and-planning` | Day 1 AM | `kubectl get nodes` shows Ready; `http://hello.localhost` answers through Traefik; repo scaffold + ADRs committed |
+| 0 Setup, scaffolding, K8s primer | `phase-0-setup-and-planning` | Day 1 AM | `kubectl get nodes` shows Ready; `http://hello.localhost` answers through Traefik after `kubectl apply -f deploy/examples/hello.yaml` (the example is deleted after verification); repo scaffold + ADRs committed |
 | 1 Store on Kubernetes | `phase-1-store` | Day 1 PM | Checkout with COD at `http://store.localhost`, order visible in wp-admin, data survives `kubectl delete pod` |
 | 2 WooCommerce MCP server | `phase-2-woocommerce-mcp` | Day 2 AM | MCP Inspector (via port-forward) lists 6 tools and creates a product that shows on the storefront |
 | 3 Gateway core + upstreams | `phase-3-gateway` | Day 2 PM → Day 3 AM | Inspector at `http://app.localhost/mcp` with an API key lists all prefixed tools; revoke / disable / kill-pod behave as specified; audit rows exist |
@@ -800,6 +800,65 @@ Every page has loading, empty and error states; member/admin gating is backed by
 - `docs/learning/03-interview-qa.md`: the about 30 likeliest questions with answers grounded in our code (file:line pointers).
 - `docs/demo-video-outline.md`: the 6 required sections, timing, and what to show on screen.
 - **Commit:** `docs: add MCP internals walkthrough, interview Q&A and demo video outline`
+
+---
+
+## Carry-forward issues (from Phase 0 final review)
+
+The whole-branch review of Phase 0 found issues that belong to later phases. They are recorded here so they are not lost. **Each phase plan MUST resolve the items for its phase** (tick the box and say how in the phase plan or the relevant ADR/spec section).
+
+### Phase 1
+
+- [ ] **Generated Secrets diverge across namespaces.** `randAlphaNum` runs per copy and `lookup` only sees its own namespace. Resolution: generate each value once per render (memoise in a dict in `_helpers.tpl`), always `lookup` one canonical namespace (e.g. `store` for `store-woo-api`, `mcp` for upstream tokens), and document that prod `existingSecret`s must exist in both namespaces.
+- [ ] **`resource-policy: keep` covers PVCs but not Secrets**, so DB logins and the encryption key break after uninstall and reinstall. Resolution: also annotate generated credential Secrets with `keep`. In ADR-003, note that PVCs from `volumeClaimTemplates` are not Helm-managed (they survive uninstall anyway), so `keep` matters only for the standalone WordPress PVC.
+- [ ] **Security contexts.** `capabilities.drop: [ALL]` breaks the root-running WordPress (needs NET_BIND_SERVICE, SETUID, SETGID, CHOWN, possibly DAC_OVERRIDE/FOWNER; verify). Resolution: run MariaDB non-root (`runAsUser: 999`, `fsGroup: 999`) and correct ADR-004 (cite spec §8.5); give Postgres an explicit `runAsUser: 999`; run the `wordpress:cli` Job (Alpine, www-data uid 82) as uid/gid 33 on the shared PVC, and make it wait for `wp-config.php` as well as the DB. Update the Global Constraints and spec §8.5 accordingly.
+- [ ] **`--wait` plus post-install hooks.** Resolution: verify the Helm 4.3.1 ordering empirically (install, upgrade, uninstall, reinstall), and keep the setup Job's `activeDeadlineSeconds` below the `--timeout 10m`.
+- [ ] **OAuth1 signing URL.** WooCommerce rebuilds the base URI from `get_home_url()` (`WP_HOME` host, scheme from the request, i.e. http in-cluster), not from the Host header. Resolution: the spike must first try signing with `http://store.localhost/wp-json/...` while sending to the in-cluster Service; then correct ADR-005 and spec §5.2/§13.
+- [ ] **8081 fallback has no values-interface support.** Resolution: add `global.publicPort` (or full public URLs) so `WP_HOME`, `PUBLIC_APP_URL` and the CSRF Origin check work on non-80 ports.
+- [ ] **Script ergonomics.** `setup-hosts.ps1`: add `-Wait` to the elevation and re-check afterwards. `cluster-up.ps1` and `deploy.ps1`: add a prerequisite check (`Get-Command k3d, kubectl, helm`) with a friendly message, including the PATH-refresh hint.
+- [ ] **Root `npm` workspace scripts exit 1 ("No workspaces found") until Phase 2.** Resolution: no Phase 1 verification may run `npm test` or `npm run build`.
+
+### Phase 2
+
+- [ ] **`WooClient` needs two URLs.** Resolution: a separate `signingBaseUrl` (public store URL) from `baseUrl` (in-cluster Service).
+- [ ] **`registerWooTools` depends on the concrete class.** Resolution: take a `WooApi` interface instead of `WooClient` so tests can fake it.
+- [ ] **MCP server `/readyz` must not depend on the setup Job's outputs** (it would deadlock `--wait` on a fresh install). Resolution: readiness checks only the process and its own config.
+- [ ] **No lint setup** (CLAUDE.md §7 requires linting). Resolution: add an ESLint flat config and a `lint` script per workspace, plus a per-workspace tsconfig with `outDir`/`rootDir`.
+- [ ] **Mutable image tags.** `:dev` with `IfNotPresent` leaves stale pods. Resolution: use a per-build tag (git short SHA) or `kubectl rollout restart` in `build-images.ps1`.
+
+### Phase 3
+
+- [ ] **`type Db = NodePg… | Pglite…` will not type-check** (union of generic/overloaded methods). Resolution: use Drizzle's `PgDatabase<PgQueryResultHKT, typeof schema>`; `runMigrations` dispatches to the driver-specific migrator. Align spec §11 ("Postgres test container") with PGlite.
+- [ ] **`GATEWAY_ENCRYPTION_KEY` must be 32 random bytes in base64.** Resolution: Sprig `randBytes 32` (not `randAlphaNum`), and validate the decoded length at startup.
+- [ ] **`audit_logs.server_id` FK** needs `ON DELETE SET NULL`.
+- [ ] **Internal chat token handling.** Resolution: verify with `algorithms: ['HS256']`, and make `/mcp` re-check `users.disabled_at` for internal tokens (deny). Update ADR-010.
+- [ ] **ADR-009 crypto details.** Resolution: 96-bit random nonce per encryption; use AAD = server row id.
+- [ ] **`BearerAuthResult` failure variant** should carry `apiKeyId` for the audit row.
+- [ ] **`AppDeps.llm` references `LlmProvider` before Phase 4.** Resolution: define the interface in Phase 3, or type it `unknown | null` and narrow later.
+- [ ] **Missing LLM keys must not crash the pod.** Resolution: the gateway Deployment's `llm-api-keys` `secretKeyRef` is `optional: true` (missing gives `LLM_NOT_CONFIGURED`, not CreateContainerConfigError). Add a task creating `scripts/create-secrets.ps1`, decide a single owner for `gateway-bootstrap` (Helm), and map the LLM_* non-secrets (LLM_PROVIDER, LLM_MODEL, LLM_FALLBACK_PROVIDER) and BOOTSTRAP_ADMIN_* to Helm values (see the header of `.env.example`).
+- [ ] **HTTP edge cases.** Resolution: `GET /mcp` returns 405 JSON (not Express HTML 404); if the SDK's DNS-rebinding protection is on, `allowedHosts` includes the loopback; redact `/api/invites/:token` paths in logs (ADR-013 leakage vectors).
+- [ ] **Verify text and counts.** Disabled/dead upstream tools disappear within about 20 s (15 s interval + 5 s timeout), not "within 15 s" (fix the plan's verify text). The tool count is 15 (6 + 5 + 4), not 16.
+
+### Phase 4
+
+- [ ] **`LlmProvider` result keeps `usage?`** (spec §6.10). `AgentToolTrace.arguments` vs spec `args`: pick one and align the spec. A `ToolCall.arguments` JSON parse failure is returned to the model as a tool error.
+- [ ] **LLM retry-after sleeps must stop at the 60 s turn deadline.**
+- [ ] **nginx SPA fallback must return 404 for `/.well-known/*`** (MCP clients probe OAuth metadata after a 401).
+- [ ] **`Referrer-Policy: no-referrer`** on the invite page.
+- [ ] **Dashboard tsconfig** overrides `moduleResolution: Bundler` and adds the DOM lib.
+
+### Phase 5
+
+- [ ] **NetworkPolicy probe matrix** asserts "no HTTP response" (refused or timeout), not strictly "timeout". DNS egress allows UDP and TCP 53 to `k8s-app=kube-dns` in `kube-system` (labels verified on the cluster: Traefik `app.kubernetes.io/name=traefik`, CoreDNS `k8s-app=kube-dns`, namespaces `kubernetes.io/metadata.name`).
+- [ ] **Missing verification tooling.** Resolution: add `scripts/smoke-test.ps1` (spec §11) and an `npm audit` security check.
+- [ ] **Production TLS header handling.** WordPress behind TLS-terminating Traefik needs `X-Forwarded-Proto` handling in `WORDPRESS_CONFIG_EXTRA`.
+
+### Accepted as-is (no change)
+
+- `cluster-down.ps1` errors if the cluster is absent (failing loudly is fine).
+- Several primer concepts list 2-3 commands.
+- `hello.yaml` has no securityContext (it is a teaching example).
+- The built versions of the Task 0.2/0.3 files differ from the plan's code (`.superpowers/` in `.gitignore`, the hardened `cluster-up.ps1`); the built versions are better.
 
 ---
 
