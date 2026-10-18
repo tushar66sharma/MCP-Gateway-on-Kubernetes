@@ -3,3 +3,7 @@
 # without losing data use:  k3d cluster stop urumi
 $ErrorActionPreference = 'Stop'
 k3d cluster delete urumi
+if ($LASTEXITCODE -ne 0) {
+  Write-Host 'ERROR: k3d cluster delete urumi failed. See the k3d output above.' -ForegroundColor Red
+  exit 1
+}
