@@ -91,7 +91,17 @@ capabilities:
 {{/* Image reference for our own images. Args: dict root, repository, tag (optional). */}}
 {{- define "urumi.image" -}}
 {{- $g := .root.Values.global -}}
-{{- $tag := default $g.imageTag .tag -}}
+{{- /* An unquoted all-digit tag (e.g. git short SHA 1234567) arrives as a number, and plain toString
+     would give "1.234567e+06", so integers go through int64 first. A leading zero cannot be recovered
+     (YAML reads 0123456 as octal), so always quote tags; build-images.ps1 does. */ -}}
+{{- $raw := default $g.imageTag .tag -}}
+{{- $tag := toString $raw -}}
+{{- if or (kindIs "float64" $raw) (kindIs "int64" $raw) (kindIs "int" $raw) -}}
+{{- if or (lt (float64 $raw) 0.0) (gt (float64 $raw) 1e18) -}}
+{{- fail (printf "image tag %v was read as a number YAML cannot keep exactly: quote it in the values file, e.g. imageTag: \"<tag>\"" $raw) -}}
+{{- end -}}
+{{- $tag = int64 $raw | toString -}}
+{{- end -}}
 {{- if $g.imageRegistry -}}
 {{- printf "%s/%s:%s" $g.imageRegistry .repository $tag -}}
 {{- else -}}

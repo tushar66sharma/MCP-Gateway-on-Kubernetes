@@ -14,7 +14,7 @@
         "ingressClassName": { "type": "string", "minLength": 1 },
         "storageClass": { "type": "string" },
         "imageRegistry": { "type": "string" },
-        "imageTag": { "type": "string" },
+        "imageTag": { "type": ["string", "integer"] },
         "imagePullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
         "tls": {
           "type": "object",

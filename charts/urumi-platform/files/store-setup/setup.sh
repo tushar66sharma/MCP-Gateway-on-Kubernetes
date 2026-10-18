@@ -103,7 +103,9 @@ if $WP user get "$MCP_KEY_OWNER" >/dev/null 2>&1; then
   fi
   $WP user set-role "$MCP_KEY_OWNER" shop_manager
 else
-  $WP user create "$MCP_KEY_OWNER" "$MCP_KEY_OWNER@example.invalid" --role=shop_manager --user_pass="$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9 | head -c 32)" >/dev/null
+  # No --user_pass (it would sit in the process arguments): WP-CLI generates a random password and
+  # prints it on stdout, which goes to /dev/null so it is never shown or logged.
+  $WP user create "$MCP_KEY_OWNER" "$MCP_KEY_OWNER@example.invalid" --role=shop_manager >/dev/null
   $WP user meta update "$MCP_KEY_OWNER" urumi_managed_key_owner 1 >/dev/null
   log "created user $MCP_KEY_OWNER"
 fi
