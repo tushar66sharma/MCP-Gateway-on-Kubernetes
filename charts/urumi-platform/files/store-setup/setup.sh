@@ -59,6 +59,9 @@ $WP option update woocommerce_cod_settings \
   '{"enabled":"yes","title":"Cash on delivery","description":"Pay with cash upon delivery.","instructions":"Pay with cash upon delivery.","enable_for_methods":[],"enable_for_virtual":"yes"}' \
   --format=json
 
+# DEMO-STORE SETTING: open registration has no email verification and no CAPTCHA, so anyone who can
+# reach the store can create accounts (and, with COD guest checkout, fake orders). A values toggle
+# (storeSetup.customerRegistration, off or with anti-spam for production) is planned for Phase 5.
 log "enabling customer accounts (register on My Account and at checkout; customers choose their own password because no mail server is configured)"
 $WP option update woocommerce_enable_myaccount_registration yes
 $WP option update woocommerce_enable_signup_and_login_from_checkout yes

@@ -57,7 +57,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1   # 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1            # start the cluster, install the store if needed, print the URLs
 ```
 
-`up.ps1` takes about 2-3 minutes the first time (it downloads images and WooCommerce) and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
+`up.ps1` typically takes about 2-3 minutes the first time (observed on the reference machine; it downloads images and WooCommerce) and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1

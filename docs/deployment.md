@@ -26,7 +26,7 @@ A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d
 
 How these were installed on the reference machine, including the WSL2 memory cap, is in [learning/00-setup-log.md](learning/00-setup-log.md). The store's memory limits add up to 1 GiB (MariaDB 512 Mi + WordPress 512 Mi, plus 768 Mi while the setup Job runs), on top of k3s itself, so the 9 GB WSL2 cap in the setup log is ample. Open a **new** terminal after installing a tool so that `PATH` is refreshed.
 
-> **Shortcut.** `scripts\up.ps1` does steps 1, 3 and 4 below in one go (cluster, install if missing, wait, print the URLs) and `scripts\stop.ps1` pauses the cluster while keeping the data (verified 2026-10-18). The steps below explain what happens underneath. See the [run guide](run-guide.md) for daily use.
+> **Shortcut.** `scripts\up.ps1` does steps 1 and 3 below in one go (cluster, install if missing, wait) and prints the step 6 URLs; it does not run the step 4 verification and `scripts\stop.ps1` pauses the cluster while keeping the data (verified 2026-10-18). The steps below explain what happens underneath. See the [run guide](run-guide.md) for daily use.
 
 All commands below are run from the repository root. The path contains spaces on the reference machine, which is fine because the scripts quote their paths.
 

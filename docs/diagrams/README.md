@@ -18,6 +18,8 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 | Store install sequence | `deploy.ps1` to Helm to the hook Job, with decision points | [workflows.md](../workflows.md) | Available (Phase 1) |
 | Store checkout sequence | A customer placing a Cash-on-delivery order on the store | [workflows.md](../workflows.md) | Available (Phase 1; expected flow, verified by the manual exit check) |
 | WooCommerce REST (OAuth1) sequence | Signing base URL versus target URL | [workflows.md](../workflows.md) | Available (Phase 1) |
+| Customer account and order history sequence | A shopper registers, orders and sees the order under My Account → Orders | [workflows.md](../workflows.md#5-customer-account-and-order-history) | Available (Phase 1b; verified by `customer-order-smoke.ps1`) |
+| What runs where | Windows, Docker Desktop, the k3d containers and the pods inside the node | [run-guide.md](../run-guide.md#1-what-runs-where) | Available (Phase 1b) |
 | Store resource map | The store's Pods, Services, PVCs, Secrets and the Job in namespace `store` | [architecture.md](../architecture.md) | Available (Phase 1) |
 | MCP tool-call sequence | Client to gateway to upstream and back, including routing and failure paths | Planned | (planned) — Phase 3 |
 | Upstream health state machine | Upstream states and transitions driven by health checks | Planned | (planned) — Phase 3 |

@@ -18,6 +18,9 @@ helm status urumi -n urumi-system
 
 - [`up.ps1` says Docker is not running](#upps1-says-docker-is-not-running)
 - [`up.ps1` warns that `store.localhost` is not in the hosts file](#upps1-warns-that-storelocalhost-is-not-in-the-hosts-file)
+- ["running scripts is disabled on this system"](#running-scripts-is-disabled-on-this-system)
+- [`up.ps1` says "previous install did not complete"](#upps1-says-previous-install-did-not-complete)
+- [Another operation is in progress (pending-install)](#another-operation-is-in-progress-pending-install)
 - [Docker Desktop's Kubernetes tab shows no cluster](#docker-desktops-kubernetes-tab-shows-no-cluster)
 - [I cannot see my guest order in My Account](#i-cannot-see-my-guest-order-in-my-account)
 - [`customer-order-smoke.ps1` fails](#customer-order-smokeps1-fails)
@@ -51,13 +54,46 @@ helm status urumi -n urumi-system
 
 **Diagnosis.** `docker info` fails or hangs.
 
-**Fix.** Start Docker Desktop and wait until it shows "Engine running" (this can take a minute after a reboot), then run `scripts\up.ps1` again. The cluster lives in Docker containers, so nothing works without it. If Docker Desktop will not start, run `wsl --shutdown` and start it again **(expected)**.
+**Fix.** Start Docker Desktop and wait until it shows "Engine running" (this can take a minute after a reboot), then run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` again. The cluster lives in Docker containers, so nothing works without it. If Docker Desktop will not start, run `wsl --shutdown` and start it again **(expected)**.
 
 ## `up.ps1` warns that `store.localhost` is not in the hosts file
 
 **Symptom.** `WARNING: store.localhost is not in the hosts file. Run: ... scripts\setup-hosts.ps1`. It is a warning, not an error; `up.ps1` continues.
 
 **Fix.** Browsers and `curl` resolve `*.localhost` by themselves, so you can ignore it if you only use a browser. Node-based MCP tools need the entry: run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1` and accept the UAC prompt (safe to repeat). Background: [deployment.md, step 2](deployment.md#step-2-make-localhost-names-resolve-for-every-tool).
+
+## "running scripts is disabled on this system"
+
+**Symptom.** Typing `scripts\up.ps1` (or any `scripts\x.ps1`) gives `... cannot be loaded because running scripts is disabled on this system`.
+
+**Cause.** Windows 11's default PowerShell execution policy blocks script files typed directly (expected; standard Windows behavior).
+
+**Fix.** Run the script through a child PowerShell with the policy bypassed for that one process, from the repository root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1
+```
+
+Do not change the machine-wide policy; this form does not need to. Where the docs write `scripts\x.ps1 [args]` for short, use this form.
+
+## `up.ps1` says "previous install did not complete"
+
+**Symptom.** A yellow notice `previous install did not complete (status: failed) - running deploy` (or `(namespace "store" is missing)`), followed by the deploy output.
+
+**Cause.** `helm status` succeeds for every release state, so `up.ps1` reads the release status and the `store` namespace. A `failed` release or a missing namespace is repaired by the deploy (`helm upgrade --install` fixes failed releases and recreates namespaces). The decision logic was tested in isolation; a real failed release was not produced (expected behavior).
+
+**Fix.** Nothing to do if the deploy then succeeds. If it fails again, read the cause: `helm status urumi -n urumi-system`, `kubectl -n store logs job/store-setup`, and the entries below.
+
+## Another operation is in progress (pending-install)
+
+**Symptom.** `up.ps1` stops with `a previous helm operation on release urumi was interrupted (status: pending-install)` (or `pending-upgrade` / `pending-rollback`), or Helm itself says `another operation (install/upgrade/rollback) is in progress`.
+
+**Cause.** A previous `helm install` or `helm upgrade` was killed (closed terminal, Ctrl+C, reboot) and left the release locked in a `pending-*` state. `up.ps1` deliberately does not fix this automatically (expected behavior; not reproduced on the live release).
+
+**Fix.** Check with `helm status urumi --namespace urumi-system`, then:
+
+- `pending-install`: `helm uninstall urumi --namespace urumi-system` (your data is kept because of the `keep` policy), then run `up.ps1` again.
+- `pending-upgrade` or `pending-rollback`: `helm rollback urumi --namespace urumi-system`, then run `up.ps1` again.
 
 ## Docker Desktop's Kubernetes tab shows no cluster
 
@@ -79,11 +115,13 @@ helm status urumi -n urumi-system
 
 | Message | Likely cause | Fix |
 |---|---|---|
-| `no woocommerce-register-nonce ...` or `registration form has no password field` | Registration options not applied | `scripts\up.ps1 -Redeploy`, then retry. |
+| `no woocommerce-register-nonce ...` or `registration form has no password field` | Registration options not applied | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`, then retry. |
 | `registration did not log the customer in` | Registration was rejected, or the store is not ready | Try `/my-account/` in a browser; check `kubectl -n store get pods`. |
 | `Store API returned no products`, `cart/add-item failed` or `checkout failed` | No products, a product out of stock, or the store not ready | Check the shop page and stock in wp-admin; `kubectl -n store logs deploy/wordpress -c wordpress`. |
-| `order #N is not listed at .../my-account/orders/` | The order was not tied to the customer | Re-run once; if it persists, check the order's customer in WooCommerce → Orders. |
-| Connection errors | Cluster stopped or Docker not running | `scripts\up.ps1` |
+| `Store API cart response has no Nonce header` | The Store API did not return a nonce (store not ready, or a WooCommerce version that changed the header) | Check `kubectl -n store get pods` and open `/wp-json/wc/store/v1/cart` in a browser; retry once the store is ready. |
+| `checkout response has no order_id` | Checkout returned a response without an order (for example a validation problem) | Place an order in the browser to see the visible error; check `kubectl -n store logs deploy/wordpress -c wordpress`. |
+| `order #N is not listed at .../my-account/orders/` | The order was not tied to the customer (the check looks for the order link `view-order/N/`) | Re-run once; if it persists, check the order's customer in WooCommerce → Orders. |
+| Connection errors | Cluster stopped or Docker not running | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` |
 
 Pass `-BaseUrl` if your store URL differs (for example port 8081). Likely causes are **(expected)**; they were not each triggered.
 

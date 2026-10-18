@@ -879,6 +879,9 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 - [ ] **`deploy.ps1` reverse context guard.** Refuse prod values on `k3d-urumi`.
 - [ ] **Pod Security Admission.** Add `pod-security.kubernetes.io/enforce: restricted` labels on the store namespace (verify the pods comply; the sysctl is on the PSS safe list).
 - [ ] **Pre-created Secret docs.** The "wrong keys" troubleshooting entry and the values-prod comments should mention the namespace ownership-metadata step. Quote placeholder passwords, or use `--from-file`/`Read-Host -AsSecureString` instead of `--from-literal`.
+- [ ] **Customer registration toggle (from the Phase 1b review).** Add a `storeSetup.customerRegistration` values toggle: off, or on with anti-spam (CAPTCHA, email verification), in `values-prod.yaml`. Open registration plus COD guest checkout lets bots create fake accounts and orders.
+- [ ] **Bind k3d ports to loopback.** Consider `127.0.0.1` for ports 80/443 in `deploy/k3d-config.yaml` so the local store is not reachable from the LAN. This requires recreating the cluster, which deletes data.
+- [ ] **Password helpers for production.** `scripts/get-admin-password.ps1` and `get-db-password.ps1` hard-code namespace `store` and the Secret names; make them honor `namespaces.store` and `secrets.existing.*`.
 - [ ] **Optional `tcpSocket` liveness probe for WordPress** (it doesn't depend on the DB).
 - [ ] **Document** Docker Hub anonymous pull limits and the dependency on downloads.wordpress.org on fresh installs.
 

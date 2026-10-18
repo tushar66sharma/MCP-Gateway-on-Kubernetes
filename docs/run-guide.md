@@ -11,11 +11,13 @@ Statements are either **verified** (run on the reference machine, with the date)
 > 1. Start **Docker Desktop** and wait until it says "Engine running".
 > 2. In PowerShell, go to the repository: `cd "<path to MCP-Gateway-on-Kubernetes>"`
 > 3. Start everything: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1`
-> 4. Click the URLs it prints (storefront, shop, my account, wp-admin).
+> 4. Ctrl+click the URLs it prints (Windows Terminal and VS Code make them links), or add `-Open` to open the storefront for you (storefront, shop, my account, wp-admin).
 > 5. Need the admin password? `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1` copies it to your clipboard (user `admin`).
 > 6. Done for the day: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1` (keeps your data).
 
 All commands are run from the repository root in **Windows PowerShell 5.1**. The folder path contains spaces on the reference machine; the scripts quote their own paths, so just `cd` into the folder first.
+
+**Script invocation convention.** Where these docs write `scripts\x.ps1 [args]` for short, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\x.ps1 [args]` from the repository root. Typing `scripts\x.ps1` directly is usually blocked by Windows' default execution policy (see [troubleshooting](troubleshooting.md#running-scripts-is-disabled-on-this-system)).
 
 ## Contents
 
@@ -89,7 +91,7 @@ Optional graphical tools (not required; **not tested on the reference machine**)
 | 3 | Memory cap in `C:\Users\<you>\.wslconfig` | On the reference machine (15 GB RAM) the file sets `memory=9GB`, `processors=8`, `swap=4GB`. Without a cap WSL2 may take half the RAM. After editing run `wsl --shutdown` and restart Docker Desktop. |
 | 4 | `winget install --id Helm.Helm -e` and `winget install --id k3d.k3d -e` | Then open a **new** terminal so PATH refreshes. `kubectl` ships with Docker Desktop. |
 | 5 | Hosts entries (optional) | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1` (UAC prompt, safe to repeat). Browsers do not need it; Node-based MCP tools do. |
-| 6 | The first `up.ps1` | Creates the cluster, downloads images and WooCommerce, installs the store. **Expected: about 2–3 minutes** the first time. |
+| 6 | The first `up.ps1` | Creates the cluster, downloads images and WooCommerce, installs the store. **Typically about 2–3 minutes** the first time (observed on the reference machine). |
 
 Versions used, and how each tool was installed, are in [learning/00-setup-log.md](learning/00-setup-log.md). The long-form deployment steps are in [deployment.md](deployment.md).
 
@@ -101,7 +103,9 @@ Versions used, and how each tool was installed, are in [learning/00-setup-log.md
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1
 ```
 
-`up.ps1` checks that `docker`, `k3d`, `kubectl` and `helm` exist and that Docker is running, starts (or creates) the cluster, warns if the hosts entry is missing, installs the store **only if it is not installed yet**, waits until the store is ready, and prints a URL block. It never prints passwords. The ending looks like this:
+`up.ps1` checks that `docker`, `k3d`, `kubectl` and `helm` exist and that Docker is running, starts (or creates) the cluster, warns if the hosts entry is missing, installs the store **only if it is not installed yet**, waits until the store is ready, and prints a URL block. It never prints passwords.
+
+It also reads the Helm release state, because `helm status` succeeds even for a broken release. Release `deployed` and namespace `store` present: it just waits for the pods (fast path). Release `failed`, or the `store` namespace missing: it prints a yellow "previous install did not complete" notice and runs the deploy to repair it. Release `pending-install`, `pending-upgrade` or `pending-rollback` (an interrupted Helm operation): it stops and prints the command to recover; see [troubleshooting](troubleshooting.md#another-operation-is-in-progress-pending-install). The decision function was tested in isolation; the real failed and pending paths were not triggered on the live release. The ending looks like this:
 
 ```text
 ================ Urumi platform is running ================
@@ -110,7 +114,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1
   My account   : http://store.localhost/my-account/   (customers: register, log in, see their orders)
   WP admin     : http://store.localhost/wp-admin/     (user: admin)
 
-  Admin password (copied to clipboard, not printed):
+  Admin password - run this to copy it to the clipboard (it is never printed here):
     powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
   Stop everything (keeps data):
     powershell -ExecutionPolicy Bypass -File scripts\stop.ps1
@@ -123,7 +127,9 @@ Options:
 | Option | Effect |
 |---|---|
 | `-Open` | Also opens the storefront in your browser. |
-| `-Redeploy` | Also runs `helm upgrade` so chart or value changes take effect (a plain `up.ps1` does not touch an installed release). |
+| `-Redeploy` | Also runs `helm upgrade` so chart or value changes take effect (a plain `up.ps1` does not touch a healthy installed release). Full form: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`. |
+
+Full form for the options: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Open`.
 
 ### Stop
 
@@ -135,7 +141,7 @@ This runs `k3d cluster stop urumi`, which frees the RAM. **Data survives a stop 
 
 ### After a laptop restart
 
-Start Docker Desktop, wait for "Engine running", then run `up.ps1` again. The cluster is stopped after a reboot; `up.ps1` starts it and keeps your data.
+Start Docker Desktop, wait for "Engine running", then run `up.ps1` again. The k3d containers use the Docker restart policy `unless-stopped`, so after a reboot the cluster may already be running or may be stopped (expected; not tested across a reboot). `up.ps1` handles both and keeps your data.
 
 ## 4. URLs
 
@@ -153,7 +159,7 @@ With the default settings (host port 80, **verified**):
 | Dashboard | **(planned — Phase 4)** | Not built yet |
 | Gateway `/mcp` endpoint | **(planned — Phase 3/4)** | Not built yet |
 
-If you moved the store to port 8081 (see [deployment.md](deployment.md)), add `:8081` to every URL; `up.ps1` prints the right ones.
+If you moved the store to port 8081 (see [deployment.md](deployment.md)), add `:8081` to every URL; `up.ps1` should print the right ones (expected; the 8081 case was not re-tested for this script).
 
 ## 5. Passwords and secrets
 
@@ -161,8 +167,12 @@ If you moved the store to port 8081 (see [deployment.md](deployment.md)), add `:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1          # copies to the clipboard (user: admin)
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1 -Show    # prints it instead
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1 -Show    # copies AND prints it
 ```
+
+The default admin username is `admin`. If `storeSetup.adminUser` was overridden, find it with `helm get values urumi --namespace urumi-system --all --output json` and look at `storeSetup.adminUser`.
+
+**Clipboard caveat.** If Windows clipboard history (Win+V) or cloud clipboard sync is on, a copied password persists or syncs to other devices. Clear the history, or use `-Show` in a private terminal. If the clipboard is unavailable the script says `Could not copy to the clipboard; re-run with -Show.`
 
 **Why scripts never print passwords.** Console output ends up in scrollback, screenshots, shared terminals and chat logs. The scripts print the *command that retrieves* a secret instead. The only exception is the `-Show` switch, which you type on purpose.
 
@@ -171,8 +181,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.p
 | Secret | Keys | Used by |
 |---|---|---|
 | `store-admin` | `password` | The WordPress `admin` login; created at install and read by `get-admin-password.ps1`. |
-| `store-db` | `root-password`, `password` | MariaDB. `password` is for the app user `wordpress`, which WordPress uses; `root-password` is for the MariaDB `root` user, used by you for inspection (section 7) and by the store-setup Job. |
-| `store-woo-api` | `consumer-key`, `consumer-secret` | The WooCommerce REST/OAuth1 key created at install for the later MCP server; used by `check-woo-api.ps1`. The key is stored hashed in the `wp_woocommerce_api_keys` table. |
+| `store-db` | `root-password`, `password` | MariaDB. `password` is for the app user `wordpress`, which WordPress and the store-setup Job use. `root-password` is for the MariaDB `root` user (`MARIADB_ROOT_PASSWORD` in the MariaDB pod); only MariaDB and you (inspection, section 7) use it. The store-setup Job does **not** use it. |
+| `store-woo-api` | `consumer-key`, `consumer-secret` | The WooCommerce REST/OAuth1 key created at install for the later MCP server; used by `check-woo-api.ps1`. In the `wp_woocommerce_api_keys` table only the consumer key is hashed; the `consumer_secret` column is stored in **plain text** (OAuth1 needs it). Do not `SELECT *` on that table or screenshot it, and never select `wp_users.user_pass`. |
 
 **Rule: never paste a secret into a chat, an issue or a commit.** Secrets are generated per install, so they are not in Git.
 
@@ -189,11 +199,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.p
 
 Customer accounts are enabled (**verified 2026-10-18** by `scripts\dev\customer-order-smoke.ps1`).
 
-- Register at <http://store.localhost/my-account/> or tick "Create an account" at checkout. The username is generated for you, and you choose your own **password**, because there is no mail server to send a generated one.
+- Register at <http://store.localhost/my-account/> or tick "Create an account" at checkout (the checkout sign-up is **expected**: only the `checkoutAllowsSignup` setting was confirmed, the tick-box flow was not exercised). The username is generated for you, and you choose your own **password**, because there is no mail server to send a generated one.
 - After logging in, **My Account → Orders** lists your orders with date, status and total; **View** opens the details.
 - **Guest orders are NOT linked to a later account.** In WooCommerce 11.2.1 an order placed as a guest stays a guest order, even if you later register with the same email. It will not show in My Account → Orders (**verified 2026-10-18**: a guest order stayed `customer_id 0` and was absent from My Orders). Guest orders are visible only to the admin, in WooCommerce → Orders. To see an order under My Account, log in **before** you check out.
 
 The full flow is in [workflows.md](workflows.md#5-customer-account-and-order-history).
+
+> **Security note (demo setting).** Open registration is a demo-store choice. Anyone who can reach the store can register an account. There is no email verification and no CAPTCHA. The password-strength meter runs in the browser only, so a direct POST accepts weak passwords. The "already registered" error reveals which emails have accounts. With cash-on-delivery guest checkout, bots could create fake accounts and orders.
+>
+> k3d publishes ports 80 and 443 without a host IP, so Docker is **expected** to bind them on all interfaces; the store is then likely reachable from your local network (for example café Wi-Fi). This was **not verified** on this machine. On untrusted networks stop the cluster with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1`. A production toggle is planned for Phase 5.
 
 ### As the admin
 
@@ -222,25 +236,26 @@ The store keeps everything in MariaDB: database `wordpress` (48 tables, verified
 
 ### (a) Quick SQL in the terminal
 
-This reads the root password from the Secret into a variable **without printing it**, then opens the `mariadb` client inside the pod:
+The pod already has the root password in its own environment variable `MARIADB_ROOT_PASSWORD`, so this route never puts the password on the Windows command line:
 
 ```powershell
-$pw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n store get secret store-db -o 'jsonpath={.data.root-password}')))
-kubectl -n store exec -it mariadb-0 -- mariadb -uroot "-p$pw" wordpress
+kubectl -n store exec -it mariadb-0 -- sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" wordpress'
 ```
 
 Type `exit` to leave. Notes:
 
-- `"-p$pw"` puts the password on the **command line** of the Windows `kubectl.exe` process and again inside the pod, so other local processes that can read command lines could see it. That is acceptable on a local, single-user development machine; do not copy this habit to a shared computer or server. If you want the password kept off command lines, use the GUI route in (b) (port-forward plus the clipboard helper).
-- `kubectl exec -it` needs an interactive terminal. It fails from non-TTY runners such as a VS Code "Run" button; use a normal PowerShell window.
+- `kubectl exec -it` needs an interactive terminal. It fails from non-TTY runners such as a VS Code "Run" button; use a normal PowerShell window. (The interactive `-it` form itself was not run here because the test harness has no terminal; the identical command with `-i` and SQL piped in was verified on 2026-10-18.)
+- The password is read inside the pod from `MARIADB_ROOT_PASSWORD`; you never see or type it.
 
-A single query without opening the client (PowerShell 5.1: a double-quoted string with single quotes inside the SQL):
+A single query without opening the client. In PowerShell 5.1, passing the SQL through `-e "..."` breaks (the quotes are mangled and MariaDB reports a syntax error; **tried 2026-10-18**), so pipe it in instead (**verified 2026-10-18**):
 
 ```powershell
-kubectl -n store exec mariadb-0 -- mariadb -uroot "-p$pw" -e "SELECT ID, post_title FROM wordpress.wp_posts WHERE post_type='product';"
+"SELECT ID, post_title FROM wp_posts WHERE post_type='product';" | kubectl -n store exec -i mariadb-0 -- sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" wordpress'
 ```
 
-Four useful queries (run inside the client, or one at a time with `-e "<sql>"`). They were run against the live database on 2026-10-18 (read-only) and worked:
+Alternative (puts the password on the command line): `$pw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n store get secret store-db -o 'jsonpath={.data.root-password}')))` followed by `kubectl -n store exec -it mariadb-0 -- mariadb -uroot "-p$pw" wordpress`. `"-p$pw"` is visible in the command line of the Windows `kubectl.exe` process and inside the pod, so other local processes that can read command lines could see it. That is acceptable on a single-user development machine only. The GUI route in (b) (port-forward plus `scripts\get-db-password.ps1`, which copies the password to the clipboard) also keeps it off command lines.
+
+Four useful queries (run inside the client, or piped in one at a time as above). They were run against the live database on 2026-10-18 (read-only) and worked:
 
 ```sql
 -- 1. Products
@@ -296,7 +311,7 @@ Create a connection with these standard MySQL/MariaDB settings:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-db-password.ps1          # copies the root password to the clipboard
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-db-password.ps1 -Show    # prints it instead
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-db-password.ps1 -Show    # copies AND prints it
 ```
 
 Press Ctrl+C in terminal 1 to close the tunnel when you are done.
@@ -313,7 +328,7 @@ HPOS ("high-performance order storage") is **off** (`woocommerce_custom_orders_t
 | Order analytics | `wp_wc_order_stats` (date, status, total; filled by a background job, can lag) |
 | Users and customers | `wp_users`, `wp_usermeta` (role, name) |
 | Settings | `wp_options` |
-| MCP/REST API key | `wp_woocommerce_api_keys` (the consumer key is stored hashed) |
+| MCP/REST API key | `wp_woocommerce_api_keys` (the consumer key is hashed, but `consumer_secret` is plain text: do not `SELECT *` it or screenshot it) |
 
 ## 8. The gateway database (Postgres) (planned — Phase 3)
 
@@ -330,7 +345,7 @@ Exact steps arrive in Phase 3.
 
 | Part | Status | How to run | How to check | Logs |
 |---|---|---|---|---|
-| **Store** (WordPress + WooCommerce + MariaDB) | Available (Phase 1) | `scripts\up.ps1`; stop with `scripts\stop.ps1` | `kubectl -n store get pods`; `scripts\check-woo-api.ps1`; `scripts\dev\customer-order-smoke.ps1` | `kubectl -n store logs deploy/wordpress -c wordpress`; `kubectl -n store logs mariadb-0`; `kubectl -n store logs job/store-setup` |
+| **Store** (WordPress + WooCommerce + MariaDB) | Available (Phase 1) | `scripts\up.ps1`; stop with `scripts\stop.ps1` (full command form: see the convention at the top) | `kubectl -n store get pods`; `scripts\check-woo-api.ps1`; `scripts\dev\customer-order-smoke.ps1` | `kubectl -n store logs deploy/wordpress -c wordpress`; `kubectl -n store logs mariadb-0`; `kubectl -n store logs job/store-setup` |
 | **WooCommerce MCP server** | (planned — Phase 2) | — | — | — |
 | **Gateway + Postgres** | (planned — Phase 3) | — | — | — |
 | **Dashboard + chat agent** | (planned — Phase 4) | — | — | — |
@@ -353,7 +368,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 | Goal | Command | Effect |
 |---|---|---|
 | Remove the store but keep the data | `helm uninstall urumi --namespace urumi-system` | The data volumes and namespace are kept; a later `up.ps1` reinstalls and the data comes back (verified, see [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept)). |
-| Wipe all store data | 1. `helm uninstall urumi --namespace urumi-system`<br>2. `kubectl delete ns store mcp gateway --wait=true --timeout=300s`<br>3. `scripts\up.ps1` | **Destroys all data**: products, orders, users and passwords. Do the uninstall first: if the Helm release stays installed, `up.ps1` takes its "already installed" branch, waits for MariaDB in a namespace that no longer exists, and fails. After all three steps `up.ps1` builds a brand-new store with new passwords (same sequence as [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept), verified in Phase 1). |
+| Wipe all store data | 1. `helm uninstall urumi --namespace urumi-system`<br>2. `kubectl delete ns store mcp gateway --wait=true --timeout=300s`<br>3. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` | **Destroys all data**: products, orders, users and passwords. Do the uninstall first: if the Helm release stays installed while its namespace is gone, `up.ps1` now notices the missing `store` namespace and redeploys (expected; this exact combination was not re-run after the up.ps1 change), but the clean sequence below is the one verified in Phase 1. After all three steps `up.ps1` builds a brand-new store with new passwords (same sequence as [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept), verified in Phase 1). |
 | Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch. |
 
 ## 12. Troubleshooting pointers
@@ -363,4 +378,6 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 - Docker Desktop's Kubernetes tab shows no cluster: [troubleshooting](troubleshooting.md#docker-desktops-kubernetes-tab-shows-no-cluster)
 - A guest order is missing from My Account: [troubleshooting](troubleshooting.md#i-cannot-see-my-guest-order-in-my-account)
 - `customer-order-smoke.ps1` fails: [troubleshooting](troubleshooting.md#customer-order-smokeps1-fails)
+- "running scripts is disabled on this system": [troubleshooting](troubleshooting.md#running-scripts-is-disabled-on-this-system)
+- `up.ps1` says "previous install did not complete", or stops with a pending Helm operation: [troubleshooting](troubleshooting.md#upps1-says-previous-install-did-not-complete)
 - Port 80 in use, pods not ready, setup Job failed and the rest: the full list at the top of [troubleshooting.md](troubleshooting.md).

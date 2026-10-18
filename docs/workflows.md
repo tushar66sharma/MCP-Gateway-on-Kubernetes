@@ -1,6 +1,6 @@
 # Workflows
 
-> **Status (end of Phase 1).** Only the **store** workflows exist today: installing the store, a shopper checking out, and signed REST access to WooCommerce. The gateway, MCP-server and dashboard workflows are **(planned)** for Phases 2-5 and are added here as they are built. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
+> **Status (end of Phase 1).** Only the **store** workflows exist today: installing the store, a shopper checking out, and signed REST access to WooCommerce. The gateway, MCP-server and dashboard workflows are **(planned)** for Phases 2-5 and are added here as they are built. Workflow 5 (customer account and order history) is verified by `scripts/dev/customer-order-smoke.ps1`. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
 
 How to read the failure sections: every workflow answers the same questions: what can fail, how it is detected, what is retried, what the timeouts are, how duplicates and half-finished work are handled, what the user sees, and where the logs are. Statements marked **(observed)** were seen during Phase 1; statements marked **(expected)** follow from the Kubernetes/Helm/WooCommerce documented behavior and the chart's settings but were not deliberately triggered.
 
@@ -305,11 +305,13 @@ sequenceDiagram
 
 **Guest orders are not linked.** An order placed as a guest keeps customer id `0`. In WooCommerce 11.2.1, registering later with the same email does **not** attach it (**verified 2026-10-18** with `customer-order-smoke.ps1 -CheckGuestLinking`: guest order 19 stayed customer 0 and did not appear in My Orders). Guest orders are visible only to the admin, in WooCommerce → Orders. To have an order in My Account, log in (or register) before checking out.
 
+> **Security note (demo setting).** Open registration is a demo-store choice. Anyone who can reach the store can register; there is no email verification and no CAPTCHA. The password-strength meter is client-side only, so a direct POST accepts weak passwords. The "already registered" error reveals which emails have accounts. With cash-on-delivery guest checkout, bots could create fake accounts and orders. k3d publishes ports 80/443 without a host IP, so Docker is **expected** to bind them on all interfaces and the store is then likely reachable from the local network (for example café Wi-Fi); this was **not verified** on this machine. Stop the cluster (`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1`) on untrusted networks. A production toggle is planned for Phase 5.
+
 ### Failure and recovery
 
 | What can fail | Detected by | What the shopper sees | Recovery |
 |---|---|---|---|
-| Registration is disabled (options not applied) | `customer-order-smoke.ps1` reports no `woocommerce-register-nonce` on My Account | No Register form on `/my-account/` | Run `scripts\up.ps1 -Redeploy` so the setup Job re-applies the options. |
+| Registration is disabled (options not applied) | `customer-order-smoke.ps1` reports no `woocommerce-register-nonce` on My Account | No Register form on `/my-account/` | Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy` so the setup Job re-applies the options. |
 | Registering with an email that already has an account | WooCommerce form error | "An account is already registered with your email address" | Log in instead. |
 | Order placed as a guest | The order is absent from My Account → Orders | An orders list without that order | Expected, see above. The admin sees it in WooCommerce → Orders. |
 | Order e-mails are not delivered | There is no mail server in the cluster | No confirmation e-mail | Known limitation; the order itself is created and visible. |
