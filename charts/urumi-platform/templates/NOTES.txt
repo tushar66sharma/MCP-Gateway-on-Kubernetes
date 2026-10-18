@@ -1,3 +1,12 @@
 Release {{ .Release.Name }} (chart {{ .Chart.Name }}-{{ .Chart.Version }}) is deployed in namespace {{ .Release.Namespace }}.
 
 Namespaces: {{ .Values.namespaces.store }}, {{ .Values.namespaces.mcp }}, {{ .Values.namespaces.gateway }}
+
+Storefront:  {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}
+Store admin: {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}/wp-admin   (user: {{ (.Values.storeSetup | default dict).adminUser | default "admin" }})
+
+Admin password (PowerShell):
+  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n {{ .Values.namespaces.store }} get secret {{ default "store-admin" .Values.secrets.existing.storeAdmin }} -o jsonpath='{.data.password}')))
+
+Store setup log:
+  kubectl -n {{ .Values.namespaces.store }} logs job/store-setup

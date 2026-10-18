@@ -1,0 +1,30 @@
+{{- $ns := .Values.namespaces.store -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: store
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "wordpress" "component" "store") | nindent 4 }}
+  {{- if and .Values.global.tls.enabled .Values.global.tls.clusterIssuer }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.global.tls.clusterIssuer }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.global.ingressClassName }}
+  {{- if .Values.global.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.global.storeHost | quote }}]
+      secretName: {{ printf "%s-store" .Values.global.tls.secretNamePrefix }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.global.storeHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wordpress
+                port:
+                  name: http

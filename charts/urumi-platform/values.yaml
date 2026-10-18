@@ -35,3 +35,11 @@ mariadb:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: 500m, memory: 512Mi }
+
+wordpress:
+  image: wordpress:7.1.3-php8.3-apache
+  tablePrefix: wp_
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
