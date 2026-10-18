@@ -5,8 +5,8 @@ Namespaces: {{ .Values.namespaces.store }}, {{ .Values.namespaces.mcp }}, {{ .Va
 Storefront:  {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}
 Store admin: {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}/wp-admin   (user: {{ (.Values.storeSetup | default dict).adminUser | default "admin" }})
 
-Admin password (PowerShell):
-  [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n {{ .Values.namespaces.store }} get secret {{ default "store-admin" .Values.secrets.existing.storeAdmin }} -o jsonpath='{.data.password}')))
+Admin password (copied to the clipboard, never printed; run from the repository root):
+  powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
 
 Store setup log:
   kubectl -n {{ .Values.namespaces.store }} logs job/store-setup
