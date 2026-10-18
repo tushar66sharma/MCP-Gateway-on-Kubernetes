@@ -864,6 +864,10 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 - [ ] **Gateway copy of `mcp-woocommerce-token`.** Render it in namespace `gateway` through `urumi.generatedValue` with canonical namespace `mcp` (the token's canonical home), so both copies hold the same value.
 - [ ] **Tests for malformed JSON and the 413 body limit** on the shared server (the gateway relies on the same error handler).
 - [ ] **Consider logging aborted requests** for the audit log (the request log is written on `finish` only today, so a client that disconnects early leaves no line).
+- [ ] **Per-action logging lives in the gateway audit log (user decision, 2026-10-19).**
+  - Phase 2's `mcp-woocommerce` logs only HTTP-level lines: method, path, status and duration. It does not log the tool name or the tool outcome; a tool `isError` still returns HTTP 200.
+  - The user chose not to add a per-tool log line to the upstream. Phase 3's `audit_logs` table must therefore be the complete record of every tool call: who, which server and tool, outcome, duration and error.
+  - The gateway logs must also carry the tool name. A Phase 3 check verifies that a failed tool call (`isError`) is recorded with outcome `error`.
 
 ### Phase 4
 
