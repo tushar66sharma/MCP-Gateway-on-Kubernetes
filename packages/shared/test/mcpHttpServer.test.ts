@@ -144,6 +144,23 @@ describe('startMcpHttpServer', () => {
     expect(res.status).toBe(403);
   });
 
+  it('lowercases allowedHosts entries (the SDK compares the lowercase URL hostname)', async () => {
+    const { port } = await start({ allowedHosts: ['MCP-WooCommerce.MCP.svc:3001'] });
+    const res = await rawRequest(port, { method: 'POST', path: '/mcp', host: 'mcp-woocommerce.mcp.svc:3001', headers: postHeaders, body: initBody });
+    expect(res.status).toBe(200);
+    const upper = await rawRequest(port, { method: 'POST', path: '/mcp', host: 'MCP-WOOCOMMERCE.mcp.svc', headers: postHeaders, body: initBody });
+    expect(upper.status).toBe(200);
+  });
+
+  it('refuses to start when allowedHosts is empty after filtering', async () => {
+    await expect(start({ allowedHosts: ['', '  '] })).rejects.toThrow(/allowedHosts is empty/);
+    await expect(start({ allowedHosts: [] })).rejects.toThrow(/allowedHosts is empty/);
+  });
+
+  it('refuses to start with an empty configured auth secret', async () => {
+    await expect(start({ auth: { kind: 'bearer', token: '' } })).rejects.toThrow(/bearer token is empty/);
+  });
+
   it('works with the SDK client: listTools and callTool', async () => {
     const { port } = await start();
     const client = new Client({ name: 'test-client', version: '0.0.1' }, { versionNegotiation: { mode: 'auto' } });

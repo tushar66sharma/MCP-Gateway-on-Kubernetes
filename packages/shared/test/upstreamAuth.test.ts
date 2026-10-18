@@ -64,6 +64,17 @@ describe('upstreamAuthMiddleware header', () => {
   });
 });
 
+describe('upstreamAuthMiddleware configuration', () => {
+  it.each<[string, UpstreamAuth, RegExp]>([
+    ['empty bearer token', { kind: 'bearer', token: '' }, /bearer token is empty/],
+    ['blank bearer token', { kind: 'bearer', token: '   ' }, /bearer token is empty/],
+    ['empty header name', { kind: 'header', header: '', value: 'k-123' }, /header name is empty/],
+    ['empty header value', { kind: 'header', header: 'x-utilities-key', value: '' }, /header value is empty/],
+  ])('throws at construction on %s', (_label, auth, message) => {
+    expect(() => upstreamAuthMiddleware(auth)).toThrow(message);
+  });
+});
+
 describe('upstreamAuthMiddleware none', () => {
   it('200 without header', async () => {
     expect((await fetch(await start({ kind: 'none' }))).status).toBe(200);

@@ -18,7 +18,22 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
   return Array.isArray(value) ? value[0] : value;
 }
 
+const blank = (s: string): boolean => s.trim().length === 0;
+
+/**
+ * Throws at construction (server start) on an empty configured secret or header name: an empty
+ * expected value would accept an empty header (e.g. `X-Utilities-Key:`). Messages never include values.
+ */
 export function upstreamAuthMiddleware(auth: UpstreamAuth): RequestHandler {
+  if (auth.kind === 'bearer' && blank(auth.token)) {
+    throw new Error('upstream auth misconfigured: bearer token is empty');
+  }
+  if (auth.kind === 'header' && blank(auth.header)) {
+    throw new Error('upstream auth misconfigured: header name is empty');
+  }
+  if (auth.kind === 'header' && blank(auth.value)) {
+    throw new Error('upstream auth misconfigured: header value is empty');
+  }
   return (req, res, next) => {
     if (auth.kind === 'none') {
       next();

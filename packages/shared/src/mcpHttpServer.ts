@@ -27,15 +27,21 @@ export interface RunningMcpHttpServer {
   close(): Promise<void>;
 }
 
-/** The SDK compares hostnames only, so strip any ":port" and drop empty entries. */
-function normalizeHosts(hosts: string[]): string[] {
+/**
+ * The SDK compares `new URL(...).hostname`, which is always lowercase and has no port: so lowercase,
+ * strip any ":port" and drop empty entries. Throws when nothing is left (fail fast at startup).
+ */
+export function normalizeHosts(hosts: string[]): string[] {
   const out: string[] = [];
   for (const raw of hosts) {
-    const h = raw.trim();
+    const h = raw.trim().toLowerCase();
     if (h.length === 0) continue;
     const bracket = /^(\[[^\]]+\])(?::\d+)?$/.exec(h);
     const name = bracket?.[1] ?? (h.split(':').length === 2 ? (h.split(':')[0] ?? h) : h);
     if (name.length > 0 && !out.includes(name)) out.push(name);
+  }
+  if (out.length === 0) {
+    throw new Error('allowedHosts is empty: list at least one host name for the /mcp Host check');
   }
   return out;
 }
@@ -43,6 +49,9 @@ function normalizeHosts(hosts: string[]): string[] {
 export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<RunningMcpHttpServer> {
   const { logger } = opts;
   const readiness = opts.readinessCheck ?? (async () => true);
+  // Validate configuration before building anything (both throw with value-free messages).
+  const allowedHosts = normalizeHosts(opts.allowedHosts);
+  const auth = upstreamAuthMiddleware(opts.auth);
 
   const mcpHandler = createMcpHandler(
     () => {
@@ -83,8 +92,8 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
 
   app.post(
     '/mcp',
-    hostHeaderValidation(normalizeHosts(opts.allowedHosts)),
-    upstreamAuthMiddleware(opts.auth),
+    hostHeaderValidation(allowedHosts),
+    auth,
     express.json({ limit: '1mb' }),
     (req, res) => {
       nodeHandler(req, res, req.body).catch((err: unknown) => {
