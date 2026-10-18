@@ -1,0 +1,80 @@
+{{/* Common labels. Args: dict root, name, component. */}}
+{{- define "urumi.labels" -}}
+helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version }}
+app.kubernetes.io/managed-by: {{ .root.Release.Service }}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
+app.kubernetes.io/part-of: urumi-platform
+app.kubernetes.io/name: {{ .name }}
+app.kubernetes.io/component: {{ .component }}
+{{- end }}
+
+{{/* Selector labels (immutable once deployed). Args: dict root, name. */}}
+{{- define "urumi.selectorLabels" -}}
+app.kubernetes.io/instance: {{ .root.Release.Name }}
+app.kubernetes.io/name: {{ .name }}
+{{- end }}
+
+{{/*
+Public URL for a host. Args: dict root, host.
+The port is appended only when it is not the default for the scheme.
+*/}}
+{{- define "urumi.publicUrl" -}}
+{{- $g := .root.Values.global -}}
+{{- $port := int $g.publicPort -}}
+{{- if or (and (eq $g.publicScheme "http") (eq $port 80)) (and (eq $g.publicScheme "https") (eq $port 443)) -}}
+{{- printf "%s://%s" $g.publicScheme .host -}}
+{{- else -}}
+{{- printf "%s://%s:%d" $g.publicScheme .host $port -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Stable generated secret value (plaintext; pipe to b64enc).
+Args: dict root, namespace (CANONICAL namespace for this secret), secret, key, length, prefix (optional).
+Resolution order:
+  1. memoised value from earlier in this render, so copies of one secret in several
+     namespaces get the SAME value (each copy passes the same canonical namespace);
+  2. the value already stored in the cluster (lookup), so upgrades never rotate credentials;
+  3. a new random value.
+Note: lookup returns nothing under `helm template` / `--dry-run`, so rendered output then
+shows fresh random values; real installs and upgrades reuse stored ones.
+*/}}
+{{- define "urumi.generatedValue" -}}
+{{- $root := .root -}}
+{{- if not (hasKey $root.Values "__generated") -}}
+{{- $_ := set $root.Values "__generated" (dict) -}}
+{{- end -}}
+{{- $memo := get $root.Values "__generated" -}}
+{{- $memoKey := printf "%s/%s/%s" .namespace .secret .key -}}
+{{- if hasKey $memo $memoKey -}}
+{{- get $memo $memoKey -}}
+{{- else -}}
+{{- $value := "" -}}
+{{- $existing := lookup "v1" "Secret" .namespace .secret -}}
+{{- if and $existing (hasKey $existing "data") (hasKey $existing.data .key) -}}
+{{- $value = index $existing.data .key | b64dec -}}
+{{- else -}}
+{{- $value = printf "%s%s" (default "" .prefix) (randAlphaNum (int .length)) -}}
+{{- end -}}
+{{- $_ := set $memo $memoKey $value -}}
+{{- $value -}}
+{{- end -}}
+{{- end }}
+
+{{/* Pod-level security context. Args: dict uid, gid. */}}
+{{- define "urumi.podSecurityContext" -}}
+runAsNonRoot: true
+runAsUser: {{ .uid }}
+runAsGroup: {{ .gid }}
+fsGroup: {{ .gid }}
+fsGroupChangePolicy: OnRootMismatch
+seccompProfile:
+  type: RuntimeDefault
+{{- end }}
+
+{{/* Container-level security context shared by every container. */}}
+{{- define "urumi.containerSecurityContext" -}}
+allowPrivilegeEscalation: false
+capabilities:
+  drop: ["ALL"]
+{{- end }}

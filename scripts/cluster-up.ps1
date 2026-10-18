@@ -9,6 +9,12 @@ function Stop-WithError([string]$Message) {
   exit 1
 }
 
+foreach ($tool in 'k3d', 'kubectl') {
+  if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+    Stop-WithError "'$tool' was not found on PATH. Install it (docs/learning/00-setup-log.md) or open a NEW terminal so PATH refreshes."
+  }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $listJson = k3d cluster list -o json
 if ($LASTEXITCODE -ne 0) { Stop-WithError 'k3d cluster list failed. Is Docker Desktop running?' }

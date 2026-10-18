@@ -2,7 +2,7 @@
 
 A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platform admins register MCP servers once; team members then use all of their tools through a single gateway endpoint and a dashboard chat agent. The whole platform is deployed with one Helm chart to a local k3d cluster or a single-node k3s VPS.
 
-> **Status: under construction.** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: under construction (the store runs on Kubernetes; the gateway is not built yet).** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 ## 1. Project Name and Overview
 
@@ -46,7 +46,26 @@ A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platf
 
 ## 11. Complete Local Installation and Setup
 
-*(written in Phase 6)*
+*(the complete guide, including the gateway and dashboard, is written in Phase 6)*
+
+### Quick start (local store)
+
+This works today and installs the WooCommerce store only (the gateway, dashboard and MCP servers come in later phases). You need Docker Desktop (running), `k3d`, `kubectl` and `helm`; see [docs/deployment.md](docs/deployment.md) for versions and every step explained. From the repository root, in PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1   # optional, once: hosts entries for Node tools (UAC prompt)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1            # start the cluster, install the store if needed, print the URLs
+```
+
+`up.ps1` typically takes about 2-3 minutes the first time (observed on the reference machine; it downloads images and WooCommerce) and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
+```
+
+Pause with `scripts\stop.ps1` (keeps your data). The complete beginner guide (daily use, customer accounts, viewing the database, resetting) is the [run guide](docs/run-guide.md).
+
+Something wrong? See [docs/troubleshooting.md](docs/troubleshooting.md). To start over completely: [docs/deployment.md](docs/deployment.md#step-9-uninstall-and-what-is-kept).
 
 ## 12. Environment-Variable Configuration
 

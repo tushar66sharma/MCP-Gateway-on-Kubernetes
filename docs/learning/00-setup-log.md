@@ -31,7 +31,7 @@ processors=8
 swap=4GB
 ```
 
-Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and rarely gives it back. The machine has 15 GB; Windows, the editor, and the browser need roughly 5-6 GB, so Docker/k3d is limited to 9 GB. The cluster (today Traefik, CoreDNS and the other k3s defaults; **(planned)** WordPress, MariaDB, Postgres, the gateway and the MCP servers) must fit in that, which is why every project container will have CPU/memory requests and limits **(planned)**. `swap=4GB` gives a safety valve against OOM kills at the cost of speed. Changes take effect after `wsl --shutdown` and a Docker Desktop restart. The `.wslconfig` file was written in Task 0.1; Docker Desktop's own settings were not changed.
+Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and rarely gives it back. The machine has 15 GB; Windows, the editor, and the browser need roughly 5-6 GB, so Docker/k3d is limited to 9 GB. The cluster (Traefik, CoreDNS and the other k3s defaults, plus since Phase 1 WordPress and MariaDB; **(planned)** Postgres, the gateway and the MCP servers) must fit in that, which is why every project container has CPU/memory requests and limits (the store's are in the chart; later containers will follow the same rule). `swap=4GB` gives a safety valve against OOM kills at the cost of speed. Changes take effect after `wsl --shutdown` and a Docker Desktop restart. The `.wslconfig` file was written in Task 0.1; Docker Desktop's own settings were not changed.
 
 ## Cluster definition
 
@@ -55,12 +55,13 @@ Why: browsers and `curl` resolve any `*.localhost` name to loopback by themselve
 
 | Goal | Command |
 |---|---|
+| One command: start everything and print the URLs (verified 2026-10-18) | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` (see the [run guide](../run-guide.md)) |
 | First time / start after reboot | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-up.ps1` (idempotent: creates the cluster if missing, otherwise starts it, then waits for the node and Traefik) |
-| Pause, keeping all data | `k3d cluster stop urumi` |
+| Pause (keeps data; verified 2026-10-18) | `k3d cluster stop urumi` (or `scripts\stop.ps1`) |
 | Resume | `scripts\cluster-up.ps1` again (or `k3d cluster start urumi`) |
 | Wipe everything and start over | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1`, then `cluster-up.ps1` |
 
-**`cluster-down.ps1` runs `k3d cluster delete urumi`, which deletes ALL cluster data**: databases, volumes, Secrets, everything deployed. Use `k3d cluster stop` when you only want to free RAM.
+**`cluster-down.ps1` runs `k3d cluster delete urumi`, which deletes ALL cluster data**: databases, volumes, Secrets, everything deployed. Use `k3d cluster stop` when you only want to free RAM (it keeps data: verified 2026-10-18, products and orders were still there after `stop.ps1` + `up.ps1`).
 
 Note on timing: k3s installs Traefik asynchronously by running a Helm Job, so right after the node is Ready the `traefik` Deployment may not exist yet. `cluster-up.ps1` polls (up to 300 s) until it appears, then waits for its rollout. Every `k3d`/`kubectl` step is followed by an exit-code check, so a failure (for example a busy port 80) stops the script immediately with an `ERROR:` message and exit code 1 instead of continuing.
 

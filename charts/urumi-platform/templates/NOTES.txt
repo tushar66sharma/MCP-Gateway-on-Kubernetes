@@ -1,0 +1,12 @@
+Release {{ .Release.Name }} (chart {{ .Chart.Name }}-{{ .Chart.Version }}) is deployed in namespace {{ .Release.Namespace }}.
+
+Namespaces: {{ .Values.namespaces.store }}, {{ .Values.namespaces.mcp }}, {{ .Values.namespaces.gateway }}
+
+Storefront:  {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}
+Store admin: {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}/wp-admin   (user: {{ (.Values.storeSetup | default dict).adminUser | default "admin" }})
+
+Admin password (copied to the clipboard, never printed; run from the repository root):
+  powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
+
+Store setup log:
+  kubectl -n {{ .Values.namespaces.store }} logs job/store-setup

@@ -34,7 +34,7 @@
 - **Tool names** exposed by the gateway match `^[a-zA-Z0-9_-]{1,64}$`. Slugs match `^[a-z][a-z0-9-]{1,15}$`. The separator is `__`.
 - **Timeouts:** upstream health check 5000 ms every 15000 ms; upstream tool call 20000 ms; WooCommerce HTTP 10000 ms; LLM request 30000 ms; chat turn 60000 ms; max 8 agent steps; tool result truncated to 6000 chars for the LLM.
 - **API keys:** `ugw_` + 32 random bytes base62; stored as SHA-256 hex; display prefix = first 12 chars.
-- **Every Kubernetes workload:** readiness + liveness probes, requests + limits, `runAsNonRoot` (except the documented WordPress/MariaDB exceptions), `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`.
+- **Every Kubernetes workload:** readiness + liveness probes, requests + limits, `runAsNonRoot: true` with explicit `runAsUser`/`runAsGroup`/`fsGroup` (**no exceptions**: MariaDB runs as uid/gid 999, WordPress and the setup Job as uid/gid 33 with sysctl `net.ipv4.ip_unprivileged_port_start=0`; see spec §8.5 and ADR-004), `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`, `automountServiceAccountToken: false`. `readOnlyRootFilesystem` is not required for MariaDB/WordPress/WP-CLI.
 - **Hosts:** `store.localhost`, `app.localhost` (local). Ingress class `traefik`.
 - **Docs:** every task that changes behavior updates the relevant `docs/` file in the same commit (CLAUDE.md §1). Docs never describe unimplemented behavior as done; planned items are marked **(planned)**.
 - **Done** means verified by running a command and seeing its output. Never claim success without evidence.
@@ -399,8 +399,8 @@ git commit -m "docs: record architecture decisions ADR-001 to ADR-014"
 - Create: `charts/urumi-platform/{Chart.yaml,values.yaml,values.schema.json,.helmignore}`, `templates/_helpers.tpl`, `templates/namespaces.yaml`, `templates/NOTES.txt`, `deploy/values-local.yaml`, `deploy/values-prod.yaml` (stub with comments), `scripts/deploy.ps1`
 
 **Interfaces (produces):**
-- Helpers: `urumi.labels`, `urumi.selectorLabels`, `urumi.image`, `urumi.podSecurityContext`, `urumi.containerSecurityContext`, `urumi.secretValue` (reuses existing Secret data via `lookup`, else `randAlphaNum`)
-- Values keys: `global.{storeHost,appHost,publicScheme,ingressClassName,storageClass,imageRegistry,imageTag,imagePullPolicy,tls}`, `namespaces.{store,mcp,gateway}`, plus one block per component.
+- Helpers: `urumi.labels`, `urumi.selectorLabels`, `urumi.image` (deferred to Task 2.5), `urumi.podSecurityContext`, `urumi.containerSecurityContext`, `urumi.generatedValue` (reuses existing Secret data via `lookup`, else `randAlphaNum`)
+- Values keys: `global.{storeHost,appHost,publicScheme,publicPort,ingressClassName,storageClass,imagePullPolicy,tls}` (`global.imageRegistry` and `global.imageTag` deferred to Task 2.5), `namespaces.{store,mcp,gateway}`, plus one block per component.
 - `scripts/deploy.ps1` runs `helm upgrade --install urumi charts/urumi-platform -n urumi-system --create-namespace -f deploy/values-local.yaml --wait --timeout 10m`
 
 **Verify:** `helm lint charts/urumi-platform -f deploy/values-local.yaml` → `0 chart(s) failed`; `helm template ... | Select-String "kind: Namespace"` shows 3.
@@ -426,7 +426,7 @@ git commit -m "docs: record architecture decisions ADR-001 to ADR-014"
 **Commit:** `feat(helm): add WordPress deployment, persistent storage and store ingress`
 
 ### Task 1.4: Store setup Job (WP-CLI, idempotent)
-**Files:** `templates/store/store-setup-configmap.yaml` (script `setup.sh`), `templates/store/store-setup-job.yaml` (hook `post-install,post-upgrade`, `hook-delete-policy: before-hook-creation`, `backoffLimit: 5`, `activeDeadlineSeconds: 900`)
+**Files:** `templates/store/store-setup-configmap.yaml` (script `setup.sh`), `templates/store/store-setup-job.yaml` (hook `post-install,post-upgrade`, `hook-delete-policy: before-hook-creation`, `backoffLimit: 3`, `activeDeadlineSeconds: 480`)
 
 `setup.sh` steps:
 1. Wait for the DB.
@@ -758,7 +758,7 @@ Every page has loading, empty and error states; member/admin gating is backed by
 
 ### Task 5.2: Pod hardening review
 - Audit every template for the securityContext constraints; add `automountServiceAccountToken: false` everywhere (no component uses the Kubernetes API).
-- Document the WordPress/MariaDB root exception.
+- ~~Document the WordPress/MariaDB root exception.~~ Superseded in Phase 1: the store runs non-root with no exception (spec §8.5, ADR-004); this task only re-audits that.
 - **Verify:** `kubectl get pods -A -o jsonpath` shows runAsNonRoot for our workloads.
 - **Commit:** `feat(helm): enforce non-root, read-only filesystems and no service account tokens`
 
@@ -809,14 +809,14 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 
 ### Phase 1
 
-- [ ] **Generated Secrets diverge across namespaces.** `randAlphaNum` runs per copy and `lookup` only sees its own namespace. Resolution: generate each value once per render (memoise in a dict in `_helpers.tpl`), always `lookup` one canonical namespace (e.g. `store` for `store-woo-api`, `mcp` for upstream tokens), and document that prod `existingSecret`s must exist in both namespaces.
-- [ ] **`resource-policy: keep` covers PVCs but not Secrets**, so DB logins and the encryption key break after uninstall and reinstall. Resolution: also annotate generated credential Secrets with `keep`. In ADR-003, note that PVCs from `volumeClaimTemplates` are not Helm-managed (they survive uninstall anyway), so `keep` matters only for the standalone WordPress PVC.
-- [ ] **Security contexts.** `capabilities.drop: [ALL]` breaks the root-running WordPress (needs NET_BIND_SERVICE, SETUID, SETGID, CHOWN, possibly DAC_OVERRIDE/FOWNER; verify). Resolution: run MariaDB non-root (`runAsUser: 999`, `fsGroup: 999`) and correct ADR-004 (cite spec §8.5); give Postgres an explicit `runAsUser: 999`; run the `wordpress:cli` Job (Alpine, www-data uid 82) as uid/gid 33 on the shared PVC, and make it wait for `wp-config.php` as well as the DB. Update the Global Constraints and spec §8.5 accordingly.
-- [ ] **`--wait` plus post-install hooks.** Resolution: verify the Helm 4.3.1 ordering empirically (install, upgrade, uninstall, reinstall), and keep the setup Job's `activeDeadlineSeconds` below the `--timeout 10m`.
-- [ ] **OAuth1 signing URL.** WooCommerce rebuilds the base URI from `get_home_url()` (`WP_HOME` host, scheme from the request, i.e. http in-cluster), not from the Host header. Resolution: the spike must first try signing with `http://store.localhost/wp-json/...` while sending to the in-cluster Service; then correct ADR-005 and spec §5.2/§13.
-- [ ] **8081 fallback has no values-interface support.** Resolution: add `global.publicPort` (or full public URLs) so `WP_HOME`, `PUBLIC_APP_URL` and the CSRF Origin check work on non-80 ports.
-- [ ] **Script ergonomics.** `setup-hosts.ps1`: add `-Wait` to the elevation and re-check afterwards. `cluster-up.ps1` and `deploy.ps1`: add a prerequisite check (`Get-Command k3d, kubectl, helm`) with a friendly message, including the PATH-refresh hint.
-- [ ] **Root `npm` workspace scripts exit 1 ("No workspaces found") until Phase 2.** Resolution: no Phase 1 verification may run `npm test` or `npm run build`.
+- [x] **Generated Secrets diverge across namespaces.** *(Resolved → Task 1.1 `urumi.generatedValue` memo + canonical-namespace `lookup`, used in Tasks 1.2-1.3; Phase 2 reuses it for the `mcp` copy.)* `randAlphaNum` runs per copy and `lookup` only sees its own namespace. Resolution: generate each value once per render (memoise in a dict in `_helpers.tpl`), always `lookup` one canonical namespace (e.g. `store` for `store-woo-api`, `mcp` for upstream tokens), and document that prod `existingSecret`s must exist in both namespaces.
+- [x] **`resource-policy: keep` covers PVCs but not Secrets** *(Resolved → Tasks 1.2/1.3 annotations; Task 1.5 uninstall/reinstall test; ADR-003)*, so DB logins and the encryption key break after uninstall and reinstall. Resolution: also annotate generated credential Secrets with `keep`. In ADR-003, note that PVCs from `volumeClaimTemplates` are not Helm-managed (they survive uninstall anyway), so `keep` matters only for the standalone WordPress PVC.
+- [x] **Security contexts.** *(Resolved → Task 1.2 MariaDB uid 999; Task 1.3 WordPress uid 33 + sysctl + `copy-wordpress` initContainer; Task 1.4 Job uid 33 waiting for `wp-config.php`; spec §8.5 and ADR-004 updated in Task 1.5. Postgres uid 999 remains for Phase 3.)* `capabilities.drop: [ALL]` breaks the root-running WordPress (needs NET_BIND_SERVICE, SETUID, SETGID, CHOWN, possibly DAC_OVERRIDE/FOWNER; verify). Resolution: run MariaDB non-root (`runAsUser: 999`, `fsGroup: 999`) and correct ADR-004 (cite spec §8.5); give Postgres an explicit `runAsUser: 999`; run the `wordpress:cli` Job (Alpine, www-data uid 82) as uid/gid 33 on the shared PVC, and make it wait for `wp-config.php` as well as the DB. Update the Global Constraints and spec §8.5 accordingly.
+- [x] **`--wait` plus post-install hooks.** *(Resolved → Task 1.4 Step 11 and Task 1.5: install, upgrade, uninstall, reinstall and fresh install were all run; the ordering "Job starts after WordPress is Ready" was observed on the fresh install (Ready 10:46:54Z, Job 10:46:55Z), the upgrade timestamps do not demonstrate it, and the reinstall was not timed; `activeDeadlineSeconds: 480` < 10m.)* Resolution: verify the Helm 4.3.1 ordering empirically (install, upgrade, uninstall, reinstall), and keep the setup Job's `activeDeadlineSeconds` below the `--timeout 10m`.
+- [x] **OAuth1 signing URL.** *(Resolved → Tasks 1.4 Steps 8-12: spike passed, ADR-005 accepted, spec §5.2/§13 corrected.)* WooCommerce rebuilds the base URI from `get_home_url()` (`WP_HOME` host, scheme from the request, i.e. http in-cluster), not from the Host header. Resolution: the spike must first try signing with `http://store.localhost/wp-json/...` while sending to the in-cluster Service; then correct ADR-005 and spec §5.2/§13.
+- [x] **8081 fallback has no values-interface support.** *(Resolved → Task 1.1 `global.publicPort` + `urumi.publicUrl`; the non-default-port path is rendered by the chart but has not been run end to end.)* Resolution: add `global.publicPort` (or full public URLs) so `WP_HOME`, `PUBLIC_APP_URL` and the CSRF Origin check work on non-80 ports.
+- [x] **Script ergonomics.** *(Resolved → Task 1.1 Steps 10-12.)* `setup-hosts.ps1`: add `-Wait` to the elevation and re-check afterwards. `cluster-up.ps1` and `deploy.ps1`: add a prerequisite check (`Get-Command k3d, kubectl, helm`) with a friendly message, including the PATH-refresh hint.
+- [x] **Root `npm` workspace scripts exit 1 ("No workspaces found") until Phase 2.** *(Resolved → Phase 1 Global Constraints: no root `npm` script was run; the OAuth tests run with `node --test "scripts/dev/*.test.mjs"`.)* Resolution: no Phase 1 verification may run `npm test` or `npm run build`.
 
 ### Phase 2
 
@@ -825,6 +825,23 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 - [ ] **MCP server `/readyz` must not depend on the setup Job's outputs** (it would deadlock `--wait` on a fresh install). Resolution: readiness checks only the process and its own config.
 - [ ] **No lint setup** (CLAUDE.md §7 requires linting). Resolution: add an ESLint flat config and a `lint` script per workspace, plus a per-workspace tsconfig with `outDir`/`rootDir`.
 - [ ] **Mutable image tags.** `:dev` with `IfNotPresent` leaves stale pods. Resolution: use a per-build tag (git short SHA) or `kubectl rollout restart` in `build-images.ps1`.
+- [ ] **Port the OAuth1 signer from Phase 1.** Port `buildOAuth1BaseString`/`signOAuth1Url` from `scripts/dev/woo-oauth-check.mjs` into the MCP server's `signOAuth1`, and reuse the PHP-derived known-answer vector from `scripts/dev/woo-oauth-check.test.mjs`.
+- [ ] **Signer limits.** Only unique scalar query keys are supported; lists are sent comma-separated (`include=1,2`).
+- [ ] **Signer params hygiene.** Use a `Map` or `Object.create(null)` for params (avoids `__proto__`), and reject caller-supplied `oauth_*` keys.
+- [ ] **`signingBaseUrl` derivation.** `signingBaseUrl` = the public store URL (`urumi.publicUrl`, i.e. `WP_HOME`) with its scheme replaced by `http`; the port stays only if it is present in `WP_HOME`, i.e. only when `publicPort` is not the default for `publicScheme` (local: `http://store.localhost`; local on 8081: `http://store.localhost:8081`; production https/443: `http://store.example.com`, no `:443`). In-cluster calls are never TLS, so WooCommerce signs with `get_home_url(null, $path, 'http')` and `set_url_scheme()` only swaps the scheme.
+- [ ] **Signing base chart helper.** Add helper `urumi.storeSigningBaseUrl` = `urumi.publicUrl` for `storeHost` with `^https?://` replaced by `http://`, and pass it to the MCP server Deployment as env `WOO_SIGNING_BASE_URL`. Derive `check-woo-api.ps1`'s `--sign-base` from the same rule (or from the deployment env) so a non-default `publicPort` works.
+- [ ] **Timestamp window and nonces.** Respect WooCommerce's ±15 min OAuth timestamp window and its per-key nonce store: always use a fresh nonce, and never retry a request with the same nonce.
+- [ ] **`store-woo-api` copy in `mcp`.** Render the `store-woo-api` copy in the `mcp` namespace with `urumi.generatedValue` using canonical namespace `store`, so both copies match (the `store` copy exists since Phase 1).
+- [ ] **Confirm Service-DNS access and POST/PUT signing.** ADR-005's spike used `kubectl port-forward` and only GET; verify `http://wordpress.store.svc.cluster.local` access and signed writes.
+- [ ] **Image helper.** Add `urumi.image` plus `global.imageRegistry`/`global.imageTag` (Task 2.5).
+- [ ] **The `mcp` copy of `store-woo-api`.** Render it only when `secrets.existing.storeWooApi` is empty, annotate it `keep`, and build both copies through ONE shared helper/definition so both call `urumi.generatedValue` with an identical length and prefix (otherwise the first call in a render wins).
+- [ ] **WooCommerce key owner.** Create a dedicated `urumi-mcp` user with the `shop_manager` role and make it the key owner instead of the WordPress administrator. This limits the blast radius of a leaked key to products and orders. Record it in ADR-005 and in the Phase 6 threat model.
+- [ ] **Atomic API-key upsert.** Use UPDATE-then-INSERT (keep key_id/nonces) instead of delete-then-insert.
+- [ ] **`urumi.podLabels` helper.** Selector labels + component + part-of, without `helm.sh/chart`, used for pod templates, so chart version bumps stop restarting MariaDB/WordPress. Migrate the existing pod templates in the same change.
+- [ ] **`_helpers.tpl` comment.** Never `toYaml .Values`, because `__generated` holds generated secrets during render.
+- [ ] **Deploy ordering note.** `deploy.ps1 --wait` gates the post-install hook on ALL release workloads being Ready, so `build-images.ps1`/image import must run before `deploy.ps1`, or the store setup is delayed until timeout.
+- [ ] **Pretty permalinks.** The signer assumes pretty permalinks (the setup Job enforces them). Note this in the MCP server docs.
+- [ ] **Check script port-forward fragility.** Supersede `check-woo-api.ps1`'s port-forward with an in-cluster check.
 
 ### Phase 3
 
@@ -851,7 +868,27 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 
 - [ ] **NetworkPolicy probe matrix** asserts "no HTTP response" (refused or timeout), not strictly "timeout". DNS egress allows UDP and TCP 53 to `k8s-app=kube-dns` in `kube-system` (labels verified on the cluster: Traefik `app.kubernetes.io/name=traefik`, CoreDNS `k8s-app=kube-dns`, namespaces `kubernetes.io/metadata.name`).
 - [ ] **Missing verification tooling.** Resolution: add `scripts/smoke-test.ps1` (spec §11) and an `npm audit` security check.
-- [ ] **Production TLS header handling.** WordPress behind TLS-terminating Traefik needs `X-Forwarded-Proto` handling in `WORDPRESS_CONFIG_EXTRA`.
+- [ ] **Production TLS header handling.** Verify whether the official image's `wp-config.php` already sets HTTPS from `X-Forwarded-Proto` (grep the pod's `wp-config.php`); add handling to `WORDPRESS_CONFIG_EXTRA` only if missing.
+- [ ] **HTTP to HTTPS redirect.** Traefik `web` entrypoint redirect or a Middleware.
+- [ ] **cert-manager HTTP-01 solver** uses `ingressClassName: traefik`.
+- [ ] **`MARIADB_ROOT_HOST=localhost`.** Applies only on first initialization of an empty data directory; document that.
+- [ ] **`DISALLOW_FILE_MODS`.** Add `define('DISALLOW_FILE_MODS', true)` in `WORDPRESS_CONFIG_EXTRA` (the Job doesn't get it, so WP-CLI is unaffected). In `setup.sh`, only upgrade WooCommerce (never downgrade), then run `wp wc update`. Document that the WordPress image tag pins only the first core copy.
+- [ ] **`setup.sh` hardening.** Fail on an empty `ADMIN_PASSWORD`; avoid putting the password in argv (stdin/`--prompt`); show the last DB error when the wait loop fails; reconcile `home`/`siteurl` with `$WP_URL`.
+- [ ] **Bash NOTES.txt password command** for the VPS.
+- [ ] **Schema.** `tls.enabled` implies `publicScheme: https`; add a hostname pattern for `storeHost`/`appHost` (they are inserted into PHP `eval`'d by `WORDPRESS_CONFIG_EXTRA`).
+- [ ] **`deploy.ps1` reverse context guard.** Refuse prod values on `k3d-urumi`.
+- [ ] **Pod Security Admission.** Add `pod-security.kubernetes.io/enforce: restricted` labels on the store namespace (verify the pods comply; the sysctl is on the PSS safe list).
+- [ ] **Pre-created Secret docs.** The "wrong keys" troubleshooting entry and the values-prod comments should mention the namespace ownership-metadata step. Quote placeholder passwords, or use `--from-file`/`Read-Host -AsSecureString` instead of `--from-literal`.
+- [ ] **Customer registration toggle (from the Phase 1b review).** Add a `storeSetup.customerRegistration` values toggle: off, or on with anti-spam (CAPTCHA, email verification), in `values-prod.yaml`. Open registration plus COD guest checkout lets bots create fake accounts and orders.
+- [ ] **Bind k3d ports to loopback.** Consider `127.0.0.1` for ports 80/443 in `deploy/k3d-config.yaml` so the local store is not reachable from the LAN. This requires recreating the cluster, which deletes data.
+- [ ] **Password helpers for production.** `scripts/get-admin-password.ps1` and `get-db-password.ps1` hard-code namespace `store` and the Secret names; make them honor `namespaces.store` and `secrets.existing.*`.
+- [ ] **Optional `tcpSocket` liveness probe for WordPress** (it doesn't depend on the DB).
+- [ ] **Document** Docker Hub anonymous pull limits and the dependency on downloads.wordpress.org on fresh installs.
+
+### Phase 6
+
+- [ ] **`security.md`: Helm release Secret exposure.** The Helm release Secret `sh.helm.release.v1.urumi.vN` in `urumi-system` contains the rendered Secret manifests (all generated passwords), so read access to Secrets in `urumi-system` equals read access to all credentials.
+- [ ] **Threat model: WooCommerce key owner.** Cover the `urumi-mcp` `shop_manager` key owner (see the Phase 2 item).
 
 ### Accepted as-is (no change)
 
@@ -859,6 +896,12 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 - Several primer concepts list 2-3 commands.
 - `hello.yaml` has no securityContext (it is a teaching example).
 - The built versions of the Task 0.2/0.3 files differ from the plan's code (`.superpowers/` in `.gitignore`, the hardened `cluster-up.ps1`); the built versions are better.
+- Relative `-ValuesFile` is resolved against the repo root (intended).
+- `helm status` exit code is unchecked (informational).
+- Passwords are passed via env, not `_FILE` (optional hardening).
+- The initContainer checks only `index.php`.
+- Seeding is all-or-nothing; `task_list_hidden_lists` is overwritten.
+- `check-woo-api.ps1` port-forward fragility (dev tool; superseded by an in-cluster check in Phase 2).
 
 ---
 

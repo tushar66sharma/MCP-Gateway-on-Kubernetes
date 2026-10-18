@@ -53,7 +53,7 @@ Small clarifications that do not change the decision (typos, a confirmed spike r
 | 002 | k3d locally / k3s in prod, Traefik ingress | Accepted | [ADR-002](ADR-002-k3d-k3s-traefik.md) |
 | 003 | One Helm chart owning three namespaces, `resource-policy: keep` | Accepted | [ADR-003](ADR-003-single-helm-chart-three-namespaces.md) |
 | 004 | Own MariaDB/Postgres templates instead of Bitnami charts | Accepted | [ADR-004](ADR-004-own-database-templates.md) |
-| 005 | WooCommerce MCP to store via REST v3 + OAuth1 | Proposed (Phase 1 auth spike) | [ADR-005](ADR-005-woocommerce-rest-oauth1.md) |
+| 005 | WooCommerce MCP to store via REST v3 + OAuth1 | Accepted (Phase 1 spike passed) | [ADR-005](ADR-005-woocommerce-rest-oauth1.md) |
 | 006 | Tool naming `<slug>__<tool>`, immutable slugs, 64-char rule | Accepted | [ADR-006](ADR-006-tool-naming-scheme.md) |
 | 007 | MCP SDK v2 stateless Streamable HTTP, v1 fallback | Proposed (Phase 2 compatibility gate) | [ADR-007](ADR-007-mcp-sdk-version.md) |
 | 008 | API keys: random + SHA-256, shown once | Accepted | [ADR-008](ADR-008-api-key-hashing.md) |
