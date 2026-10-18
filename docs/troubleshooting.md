@@ -53,6 +53,7 @@ helm status urumi -n urumi-system
 - [The port-forward port (13001) is already in use](#the-port-forward-port-13001-is-already-in-use)
 - [The store-setup Job fails with `missing urumi_managed_key_owner marker`](#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
 - [Inspector prints a libuv assertion at the end (Windows)](#inspector-prints-a-libuv-assertion-at-the-end-windows)
+- [Inspector says `Invalid header format: Bearer`](#inspector-says-invalid-header-format-bearer)
 - [`create_product` says `regular_price must be non-negative with at most 2 decimals`](#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
 - [The MCP check says `Dependencies not installed` or `Cannot find package '@modelcontextprotocol/client'`](#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
 - [PowerShell gotchas with kubectl](#powershell-gotchas-with-kubectl)
@@ -520,6 +521,21 @@ It should print `marker=1`. Then run `up.ps1 -Redeploy`. Check that you really o
 **Symptom.** After an `npx -y @modelcontextprotocol/inspector@2.11.0 --cli ...` command prints its JSON, Windows shows an `Assertion failed` message mentioning libuv (and sometimes a non-zero exit code).
 
 **Cause and fix.** A cosmetic teardown problem of Node on Windows inside the Inspector, **not** a server fault (**observed** in Task 2.4 after an `isError` call). The printed result is valid; ignore the message. Nothing to fix.
+
+## Inspector says `Invalid header format: Bearer`
+
+**Symptom.** An Inspector CLI command with `--header "Authorization: Bearer $env:MCP_TOKEN"` prints `{"error":{"code":"error","message":"Invalid header format: Bearer. Use \"HeaderName: Value\" format."}}` (**observed** 2026-10-19).
+
+**Cause.** `$env:MCP_TOKEN` does not hold the token. Most often it was set with `$env:MCP_TOKEN = Get-Clipboard` after `get-secret.ps1`, but copying that command (or the next one) from the guide replaced the token in the clipboard, so the variable holds command text with spaces and quotes, which splits the header apart.
+
+**Fix.** Load the token straight from the Secret and check it (prints `True, length 48`, never the token), then run the Inspector command again on one line:
+
+```powershell
+$env:MCP_TOKEN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n mcp get secret mcp-woocommerce-token -o 'jsonpath={.data.token}')))
+"token loaded: $([bool]$env:MCP_TOKEN), length $($env:MCP_TOKEN.Length)"
+```
+
+See [run-guide section 8, Step 3a](run-guide.md#explore-it-with-mcp-inspector).
 
 ## `create_product` says `regular_price must be non-negative with at most 2 decimals`
 

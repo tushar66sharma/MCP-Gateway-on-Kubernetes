@@ -425,18 +425,20 @@ kubectl -n mcp port-forward svc/mcp-woocommerce 13001:3001
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token
 ```
 
-**Step 3a. Command-line Inspector (verified from Git Bash; PowerShell form not run).** Needs Node (the first run downloads the Inspector through `npx`). This puts the token in an environment variable of this terminal only:
+**Step 3a. Command-line Inspector (verified in PowerShell 5.1 on 2026-10-19).** Needs Node (the first run downloads the Inspector through `npx`). The first line loads the token **straight from the Secret** into an environment variable of this terminal only (it is never printed); the second line checks it worked and must print `token loaded: True, length 48`:
 
 ```powershell
-$env:MCP_TOKEN = Get-Clipboard
+$env:MCP_TOKEN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n mcp get secret mcp-woocommerce-token -o 'jsonpath={.data.token}')))
+"token loaded: $([bool]$env:MCP_TOKEN), length $($env:MCP_TOKEN.Length)"
 npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://127.0.0.1:13001/mcp --transport http --header "Authorization: Bearer $env:MCP_TOKEN" --method tools/list
 npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://127.0.0.1:13001/mcp --transport http --header "Authorization: Bearer $env:MCP_TOKEN" --method tools/call --tool-name ping
 npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://127.0.0.1:13001/mcp --transport http --header "Authorization: Bearer $env:MCP_TOKEN" --method tools/call --tool-name list_orders --tool-arg period=today
 Remove-Item Env:MCP_TOKEN
 ```
 
-**The PowerShell form of these commands was not run**; the equivalent commands were verified 2026-10-19 against the pod in the cluster (from Git Bash): `tools/call ping` returned `{"ok": true, "server": "mcp-woocommerce", ...}` (run from Git Bash; the PowerShell form differs only in how the variable is written). `tools/list` returned the 6 tools in Task 2.4. Notes:
+Verified 2026-10-19 in Windows PowerShell 5.1 against the pod in the cluster: the token line printed `True, length 48`, `tools/call ping` returned `{"ok": true, "server": "mcp-woocommerce", ...}`, and `list_products` with `--tool-arg "search=Coffee Mug"` (an argument containing a space) found the Urumi Coffee Mug. `tools/list` returned the 6 tools in Task 2.4. Notes:
 
+- **Do not use `$env:MCP_TOKEN = Get-Clipboard` after copying the token with `get-secret.ps1`.** Copying the next command from this guide to paste it **replaces** the token in the clipboard, so the variable ends up holding command text with spaces and quotes. The Inspector then fails with `Invalid header format: Bearer. Use "HeaderName: Value" format.` (observed 2026-10-19). Load it from the Secret as shown above; if the check line does not print `length 48`, run the first line again.
 - **Numbers become numbers.** `--tool-arg regular_price=12.50` sends the JSON number 12.5. `create_product` accepts a number or a string and stores `"12.50"` either way, so no quoting is needed (verified 2026-10-19 from Git Bash: the call created draft product 28 with `regular_price` `"12.50"`). A price with more than 2 decimals, such as 12.555, is refused with an `isError` result rather than rounded.
 - **A libuv assertion at the end** (`Assertion failed: ... src\win\async.c`) can appear on Windows after a command finishes. It is cosmetic noise from the Inspector's shutdown, not from the server (observed in Task 2.4); the result printed above it is valid.
 - The token is on the command line of that process, visible to other programs on your PC while it runs. Acceptable on a single-user development machine; the UI route avoids it.
