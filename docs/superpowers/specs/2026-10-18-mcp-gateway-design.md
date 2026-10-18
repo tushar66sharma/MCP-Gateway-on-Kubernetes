@@ -120,8 +120,14 @@ The repo is an **npm workspaces monorepo**: one `package.json` at the root, one 
 ## 4. MCP SDK and protocol version
 
 - The TypeScript SDK has two lines: **v2** (`@modelcontextprotocol/server` and `@modelcontextprotocol/client`, 2.3.x, implementing the **2026-07-28** spec, where Streamable HTTP is stateless) and **v1** (`@modelcontextprotocol/sdk` 1.32.x, still maintained, stateful sessions optional).
-- **Default: v2.** The stateless transport fits a gateway well: no session affinity, and nothing to share between replicas.
-- **Compatibility gate (first hour of Phase 2):** confirm that MCP Inspector and Claude Code can list and call tools against a v2 server. If either fails, switch every component to **v1 in stateless mode** (`sessionIdGenerator: undefined`), which works with older clients. Record the outcome in ADR-007.
+- **Decided: v2, per [ADR-007](../../decisions/ADR-007-mcp-sdk-version.md)** (Phase 2 spike, 2026-10-18). The stateless transport fits a gateway well: no session affinity, and nothing to share between replicas.
+  - Servers use `createMcpHandler` (`@modelcontextprotocol/node`'s `toNodeHandler` on Express). Its default stateless legacy fallback serves 2026-07-28 and 2025-era clients on one endpoint.
+  - The gateway's client uses `versionNegotiation: { mode: 'auto' }`.
+  - Exact package versions and copyable snippets are in ADR-007.
+- **Compatibility gate result:** list + call passed with the v1 SDK client (1.32.1), the v2 client (legacy/auto/modern) and MCP Inspector 2.11.0 (legacy/auto/modern).
+  - Claude Code and Cursor are not yet tested; they are verified against the gateway in Phase 3.
+  - Clients that require a session id or the GET SSE stream are not covered.
+  - The v1 fallback (stateless `@modelcontextprotocol/sdk`) was not needed.
 - All servers expose **`POST /mcp`** for JSON-RPC, plus `GET /healthz` (liveness) and `GET /readyz` (readiness).
 
 ---

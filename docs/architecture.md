@@ -89,7 +89,7 @@ Hostnames shown are the local defaults; production uses real DNS names (see [ADR
 | Own MariaDB/Postgres templates (no Bitnami charts) | Fewer moving parts and full control of the manifests | [ADR-004](decisions/ADR-004-own-database-templates.md) |
 | WooCommerce REST v3 with OAuth1 | How `mcp-woocommerce` talks to the store (confirmed by the Phase 1 spike: sign the public store URL, not the URL requested) | [ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md) |
 | Tool naming `<slug>__<tool>` | Collision-free aggregated tool catalog within the 64-character limit | [ADR-006](decisions/ADR-006-tool-naming-scheme.md) |
-| MCP SDK v2, stateless Streamable HTTP via `createMcpHandler` | Simple horizontally scalable servers; one endpoint serves 2026-07-28 and 2025-era clients (verified in the Phase 2 spike) | [ADR-007](decisions/ADR-007-mcp-sdk-version.md) |
+| MCP SDK v2, stateless Streamable HTTP via `createMcpHandler` | Simple horizontally scalable servers; one endpoint serves 2026-07-28 and 2025-era clients (verified with the v1 SDK client, the v2 client (auto/legacy/modern) and MCP Inspector 2.11.0; Claude Code/Cursor not yet tested) | [ADR-007](decisions/ADR-007-mcp-sdk-version.md) |
 | API keys: random + SHA-256, shown once | High-entropy keys do not need a slow password hash | [ADR-008](decisions/ADR-008-api-key-hashing.md) |
 | Upstream credentials AES-256-GCM at rest | Credentials are recoverable for forwarding but not stored in plaintext | [ADR-009](decisions/ADR-009-upstream-credential-encryption.md) |
 | Chat agent loops back through the real `/mcp` | The chat exercises the same auth, audit and routing as external clients | [ADR-010](decisions/ADR-010-chat-agent-loopback.md) |
