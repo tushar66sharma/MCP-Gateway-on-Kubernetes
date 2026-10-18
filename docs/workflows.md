@@ -4,7 +4,7 @@
 
 How to read the failure sections: every workflow answers the same questions: what can fail, how it is detected, what is retried, what the timeouts are, how duplicates and half-finished work are handled, what the user sees, and where the logs are. Statements marked **(observed)** were seen during Phase 1; statements marked **(expected)** follow from the Kubernetes/Helm/WooCommerce documented behavior and the chart's settings but were not deliberately triggered.
 
-Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install)
+Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install) | [5. Customer account and order history](#5-customer-account-and-order-history)
 
 ---
 
@@ -274,3 +274,45 @@ flowchart TD
 | Namespace deletion is slow | Pods and volumes still terminating | `kubectl delete ns` waits | Use `--wait=true --timeout=300s` as in the test; it completed within that. |
 
 **Logs.** `helm history urumi -n urumi-system`, `kubectl get ns,pvc -A`, `kubectl get pv`.
+
+---
+
+## 5. Customer account and order history
+
+**What it does.** A shopper registers an account, places a Cash-on-delivery order while logged in, and then sees that order under My Account → Orders. **Verified by `scripts/dev/customer-order-smoke.ps1`** (run 2026-10-18: order 18 belongs to customer 2 and was listed on `/my-account/orders/`). The script registers through the real My Account form, places the order through the WooCommerce Store API (the API the block checkout uses), and then fetches the orders page as that customer.
+
+**Actors.** Shopper browser; WordPress and WooCommerce; MariaDB.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor S as Shopper
+    participant W as WordPress and WooCommerce
+    participant M as MariaDB
+
+    S->>W: open /my-account/ and submit the Register form (email, password)
+    W->>M: create user (role customer, username generated from the email)
+    W-->>S: logged in, My Account dashboard
+    S->>W: add a product to the cart, open /checkout/, choose Cash on delivery, place the order
+    W->>M: create the order with the customer's user id, update stock
+    W-->>S: Order received page
+    S->>W: open My Account, then Orders
+    W->>M: read orders for this user id
+    W-->>S: table with order number, date, status, total and a View button
+```
+
+**Reading the diagram.** Registration is configured by WooCommerce options set by the setup Job: `woocommerce_enable_myaccount_registration`, `woocommerce_enable_signup_and_login_from_checkout` and `woocommerce_enable_checkout_login_reminder` are `yes`. `woocommerce_registration_generate_username` is `yes`, so the username comes from the email. `woocommerce_registration_generate_password` is `no`: with generated passwords WooCommerce would e-mail the password, and there is no mail server, so customers choose their own. The block checkout also offers sign-up at checkout (its flag is `checkoutAllowsSignup`). The decisive step is 5: the order is stored with the **logged-in user's id** (`_customer_user` in `wp_postmeta`), and step 7 reads exactly the orders with that id.
+
+**Guest orders are not linked.** An order placed as a guest keeps customer id `0`. In WooCommerce 11.2.1, registering later with the same email does **not** attach it (**verified 2026-10-18** with `customer-order-smoke.ps1 -CheckGuestLinking`: guest order 19 stayed customer 0 and did not appear in My Orders). Guest orders are visible only to the admin, in WooCommerce → Orders. To have an order in My Account, log in (or register) before checking out.
+
+### Failure and recovery
+
+| What can fail | Detected by | What the shopper sees | Recovery |
+|---|---|---|---|
+| Registration is disabled (options not applied) | `customer-order-smoke.ps1` reports no `woocommerce-register-nonce` on My Account | No Register form on `/my-account/` | Run `scripts\up.ps1 -Redeploy` so the setup Job re-applies the options. |
+| Registering with an email that already has an account | WooCommerce form error | "An account is already registered with your email address" | Log in instead. |
+| Order placed as a guest | The order is absent from My Account → Orders | An orders list without that order | Expected, see above. The admin sees it in WooCommerce → Orders. |
+| Order e-mails are not delivered | There is no mail server in the cluster | No confirmation e-mail | Known limitation; the order itself is created and visible. |
+| Store restarting | Pods not ready | 503 or a database error for a short time | Wait until `kubectl -n store get pods` shows `Running`, then reload. |
+
+**Logs and checks.** `kubectl -n store logs deploy/wordpress -c wordpress`; re-run `scripts\dev\customer-order-smoke.ps1`. More: [troubleshooting](troubleshooting.md#i-cannot-see-my-guest-order-in-my-account).

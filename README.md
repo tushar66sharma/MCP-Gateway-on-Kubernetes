@@ -53,16 +53,17 @@ A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platf
 This works today and installs the WooCommerce store only (the gateway, dashboard and MCP servers come in later phases). You need Docker Desktop (running), `k3d`, `kubectl` and `helm`; see [docs/deployment.md](docs/deployment.md) for versions and every step explained. From the repository root, in PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-up.ps1    # create/start the local cluster
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1   # optional: hosts entries for Node tools (UAC prompt)
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy.ps1        # install the store (about a minute)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1   # optional, once: hosts entries for Node tools (UAC prompt)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1            # start the cluster, install the store if needed, print the URLs
 ```
 
-Then open <http://store.localhost>. The admin area is <http://store.localhost/wp-admin> (user `admin`); print the generated password with:
+`up.ps1` takes about 2-3 minutes the first time (it downloads images and WooCommerce) and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
 
 ```powershell
-[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n store get secret store-admin -o jsonpath='{.data.password}')))
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
 ```
+
+Pause with `scripts\stop.ps1` (keeps your data). The complete beginner guide (daily use, customer accounts, viewing the database, resetting) is the [run guide](docs/run-guide.md).
 
 Something wrong? See [docs/troubleshooting.md](docs/troubleshooting.md). To start over completely: [docs/deployment.md](docs/deployment.md#step-9-uninstall-and-what-is-kept).
 

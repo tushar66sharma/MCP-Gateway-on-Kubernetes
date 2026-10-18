@@ -16,6 +16,11 @@ helm status urumi -n urumi-system
 
 ## Contents
 
+- [`up.ps1` says Docker is not running](#upps1-says-docker-is-not-running)
+- [`up.ps1` warns that `store.localhost` is not in the hosts file](#upps1-warns-that-storelocalhost-is-not-in-the-hosts-file)
+- [Docker Desktop's Kubernetes tab shows no cluster](#docker-desktops-kubernetes-tab-shows-no-cluster)
+- [I cannot see my guest order in My Account](#i-cannot-see-my-guest-order-in-my-account)
+- [`customer-order-smoke.ps1` fails](#customer-order-smokeps1-fails)
 - [Port 80 is already in use](#port-80-is-already-in-use)
 - [`helm` or `k3d` not found](#helm-or-k3d-not-found)
 - [Refusing to deploy local values to context](#refusing-to-deploy-local-values-to-context)
@@ -39,6 +44,48 @@ helm status urumi -n urumi-system
 - [PowerShell gotchas with kubectl](#powershell-gotchas-with-kubectl)
 
 ---
+
+## `up.ps1` says Docker is not running
+
+**Symptom.** `ERROR: Docker is not running. Start Docker Desktop, wait for "Engine running", then run this again.`
+
+**Diagnosis.** `docker info` fails or hangs.
+
+**Fix.** Start Docker Desktop and wait until it shows "Engine running" (this can take a minute after a reboot), then run `scripts\up.ps1` again. The cluster lives in Docker containers, so nothing works without it. If Docker Desktop will not start, run `wsl --shutdown` and start it again **(expected)**.
+
+## `up.ps1` warns that `store.localhost` is not in the hosts file
+
+**Symptom.** `WARNING: store.localhost is not in the hosts file. Run: ... scripts\setup-hosts.ps1`. It is a warning, not an error; `up.ps1` continues.
+
+**Fix.** Browsers and `curl` resolve `*.localhost` by themselves, so you can ignore it if you only use a browser. Node-based MCP tools need the entry: run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1` and accept the UAC prompt (safe to repeat). Background: [deployment.md, step 2](deployment.md#step-2-make-localhost-names-resolve-for-every-tool).
+
+## Docker Desktop's Kubernetes tab shows no cluster
+
+**Symptom.** Docker Desktop's "Kubernetes" tab says there is no cluster, and only three containers (`k3d-urumi-*`) are listed, although the store works.
+
+**Explanation (verified 2026-10-18).** That tab manages only Docker Desktop's own built-in Kubernetes. This project uses k3d ([ADR-002](decisions/ADR-002-k3d-k3s-traefik.md)). The pods run inside the `k3d-urumi-server-0` container, so Docker Desktop does not list them. This is normal; do not enable Docker Desktop's Kubernetes. See the pods with `kubectl get pods -A` ([run guide, section 1](run-guide.md#1-what-runs-where)).
+
+## I cannot see my guest order in My Account
+
+**Symptom.** You placed an order without logging in, then registered with the same email; My Account → Orders does not list it.
+
+**Explanation (verified 2026-10-18).** WooCommerce 11.2.1 does not attach earlier guest orders to a later account with the same email (guest order 19 stayed customer id 0). The order exists: the admin sees it in WooCommerce → Orders.
+
+**Fix.** Nothing is lost. For future orders, log in (or register) before checkout. See [workflows.md](workflows.md#5-customer-account-and-order-history).
+
+## `customer-order-smoke.ps1` fails
+
+**Symptom.** `SMOKE FAILED: ...`. The message names the step:
+
+| Message | Likely cause | Fix |
+|---|---|---|
+| `no woocommerce-register-nonce ...` or `registration form has no password field` | Registration options not applied | `scripts\up.ps1 -Redeploy`, then retry. |
+| `registration did not log the customer in` | Registration was rejected, or the store is not ready | Try `/my-account/` in a browser; check `kubectl -n store get pods`. |
+| `Store API returned no products`, `cart/add-item failed` or `checkout failed` | No products, a product out of stock, or the store not ready | Check the shop page and stock in wp-admin; `kubectl -n store logs deploy/wordpress -c wordpress`. |
+| `order #N is not listed at .../my-account/orders/` | The order was not tied to the customer | Re-run once; if it persists, check the order's customer in WooCommerce → Orders. |
+| Connection errors | Cluster stopped or Docker not running | `scripts\up.ps1` |
+
+Pass `-BaseUrl` if your store URL differs (for example port 8081). Likely causes are **(expected)**; they were not each triggered.
 
 ## Port 80 is already in use
 

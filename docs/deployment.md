@@ -26,6 +26,8 @@ A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d
 
 How these were installed on the reference machine, including the WSL2 memory cap, is in [learning/00-setup-log.md](learning/00-setup-log.md). The store's memory limits add up to 1 GiB (MariaDB 512 Mi + WordPress 512 Mi, plus 768 Mi while the setup Job runs), on top of k3s itself, so the 9 GB WSL2 cap in the setup log is ample. Open a **new** terminal after installing a tool so that `PATH` is refreshed.
 
+> **Shortcut.** `scripts\up.ps1` does steps 1, 3 and 4 below in one go (cluster, install if missing, wait, print the URLs) and `scripts\stop.ps1` pauses the cluster while keeping the data (verified 2026-10-18). The steps below explain what happens underneath. See the [run guide](run-guide.md) for daily use.
+
 All commands below are run from the repository root. The path contains spaces on the reference machine, which is fine because the scripts quote their paths.
 
 ### Step 1. Create or start the cluster
@@ -115,6 +117,12 @@ node --test "scripts/dev/*.test.mjs"
 ### Step 5. Get the admin password
 
 ```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1          # copies to the clipboard; add -Show to print
+```
+
+The equivalent raw command, which prints the password:
+
+```powershell
 [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n store get secret store-admin -o jsonpath='{.data.password}')))
 ```
 
@@ -166,7 +174,7 @@ kubectl delete ns store mcp gateway --wait=true --timeout=300s
 kubectl get pv      # should print: No resources found
 ```
 
-> **This destroys all store data: products, orders, users, uploads, and the generated passwords.** The next `deploy.ps1` creates a brand-new store with new credentials. It is the right way to "start over" and was tested this way (a truly fresh install succeeded on the first setup-Job attempt). To remove the whole cluster instead, run `scripts\cluster-down.ps1` (also destroys everything); to pause, `k3d cluster stop urumi` is expected to keep the data (not exercised in Phase 1), and resume with `scripts\cluster-up.ps1`.
+> **This destroys all store data: products, orders, users, uploads, and the generated passwords.** The next `deploy.ps1` creates a brand-new store with new credentials. It is the right way to "start over" and was tested this way (a truly fresh install succeeded on the first setup-Job attempt). To remove the whole cluster instead, run `scripts\cluster-down.ps1` (also destroys everything); to pause, `scripts\stop.ps1` (`k3d cluster stop urumi`) keeps the data (verified 2026-10-18) and `scripts\up.ps1` resumes.
 
 ### Step 10. If host port 80 is taken: use 8081
 
@@ -214,7 +222,7 @@ kubectl -n store create secret generic store-admin --from-literal=password=<your
 ### Local limitations
 
 - Single node, single replica for every component; no backups and no high availability.
-- The `local-path` storage lives inside the k3d node container: it survives pod restarts and `helm uninstall` (both verified), and is expected to survive `k3d cluster stop` (not exercised in Phase 1), but not `cluster-down.ps1`.
+- The `local-path` storage lives inside the k3d node container: it survives pod restarts and `helm uninstall` (both verified), and survives `k3d cluster stop` (verified 2026-10-18), but not `cluster-down.ps1`.
 - No TLS locally (plain HTTP), and no mail server, so WooCommerce e-mails are not delivered.
 - The cluster needs internet access for image pulls and for downloading WooCommerce 11.2.1 during setup.
 

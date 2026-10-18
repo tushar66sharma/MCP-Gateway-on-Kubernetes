@@ -7,14 +7,16 @@ This is the index of all project documentation. Status is honest: **Available** 
 If you are new to the project, read in this order:
 
 1. **The design spec:** [superpowers/specs/2026-10-18-mcp-gateway-design.md](superpowers/specs/2026-10-18-mcp-gateway-design.md). The source of truth for what we are building and why.
-2. **The architecture overview:** [architecture.md](architecture.md). The components, how they connect, and which namespaces they live in (target architecture; the store is built, the gateway and MCP servers are still planned).
-3. **The Kubernetes primer:** [learning/01-kubernetes-primer.md](learning/01-kubernetes-primer.md). The Kubernetes concepts the project uses, each tied to a command you can run against the local cluster.
-4. **The decision records:** [decisions/README.md](decisions/README.md). One short ADR per significant choice, with alternatives and trade-offs.
+2. **To run the project:** [run-guide.md](run-guide.md). One command starts it; the guide explains every part.
+3. **The architecture overview:** [architecture.md](architecture.md). The components, how they connect, and which namespaces they live in (target architecture; the store is built, the gateway and MCP servers are still planned).
+4. **The Kubernetes primer:** [learning/01-kubernetes-primer.md](learning/01-kubernetes-primer.md). The Kubernetes concepts the project uses, each tied to a command you can run against the local cluster.
+5. **The decision records:** [decisions/README.md](decisions/README.md). One short ADR per significant choice, with alternatives and trade-offs.
 
 ## Document index
 
 | Document | Purpose | Status |
 |---|---|---|
+| [run-guide.md](run-guide.md) | **Start here to run things.** How to start, use, inspect and reset every part of the project, for Kubernetes beginners; grows each phase | Available (store from Phase 1; gateway, MCP server and dashboard sections are **(planned)**) |
 | [architecture.md](architecture.md) | High-level architecture, components, responsibilities, technology choices | Available (store built in Phase 1; other components are planned) |
 | system-design.md | Detailed design: component interactions, data flow, interfaces, trade-offs | (planned) — Phase 3 (partial), Phase 6 (complete) |
 | [workflows.md](workflows.md) | Step-by-step explanation of the major workflows | Available (store workflows from Phase 1; grows each phase, complete in Phase 6) |
