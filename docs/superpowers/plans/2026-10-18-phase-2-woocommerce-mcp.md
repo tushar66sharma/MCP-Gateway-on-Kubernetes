@@ -20,7 +20,7 @@
 **Tech Stack:**
 - Node 24, TypeScript 6.0.3, Express 5.3.0, zod 4.6.7, pino 10.4.0
 - Vitest 5.0.5, ESLint 10.13.0 + typescript-eslint 8.71.2
-- MCP TypeScript SDK v2 (`@modelcontextprotocol/server`/`client` 2.3.1, `@modelcontextprotocol/express` 2.0.2), with v1 `@modelcontextprotocol/sdk` 1.32.1 as the fallback, decided in Task 2.1
+- MCP TypeScript SDK v2 (`@modelcontextprotocol/server`/`client` 2.3.1, `@modelcontextprotocol/express` 2.0.2, `@modelcontextprotocol/node` 2.1.1), served via `createMcpHandler` + `toNodeHandler`; decided in Task 2.1 (ADR-007)
 - `node:24-alpine`, Helm 4.3.1, k3d
 
 **Master plan:** [`2026-10-18-mcp-gateway-implementation-plan.md`](2026-10-18-mcp-gateway-implementation-plan.md), Phase 2 plus "Carry-forward issues → Phase 2". The mapping table at the end shows where each carry-forward item is resolved.
