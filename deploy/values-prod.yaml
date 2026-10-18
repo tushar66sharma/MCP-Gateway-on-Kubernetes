@@ -1,5 +1,7 @@
 # Production-like k3s VPS environment — STUB, completed in Phase 5 (see docs/deployment.md).
 # Never put secrets in this file: create the Secrets named below with kubectl first.
+# The chart owns the namespaces, so create "store" (and "mcp") WITH Helm ownership labels/annotations
+# before creating the Secrets: see "Pre-created Secrets" in docs/deployment.md (expected; verified in Phase 5).
 global:
   storeHost: store.example.com
   appHost: app.example.com

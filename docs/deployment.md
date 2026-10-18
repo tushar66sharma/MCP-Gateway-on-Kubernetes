@@ -44,7 +44,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-up.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1
 ```
 
-**Why:** browsers and `curl` resolve `*.localhost` to your own machine automatically, but Node-based tools use the operating system resolver and need a line in the Windows hosts file. This script adds `127.0.0.1 store.localhost app.localhost hello.localhost` (once; it is safe to repeat). **Expected:** a UAC prompt (accept it), then `hosts entries present.` If you will only use a browser you can skip this step, but `scripts\check-woo-api.ps1` benefits from it.
+**Why:** browsers and `curl` resolve `*.localhost` to your own machine automatically, but Node-based tools use the operating system resolver and need a line in the Windows hosts file. This script adds `127.0.0.1 store.localhost app.localhost hello.localhost` (once; it is safe to repeat). **Expected:** a UAC prompt (accept it), then `hosts entries present.` If you will only use a browser (or the scripts in this repository, which do not need it: `scripts\check-woo-api.ps1` connects to 127.0.0.1 through a port-forward and uses `store.localhost` only as a string to sign) you can skip this step.
 
 ### Step 3. Install the store
 
@@ -156,7 +156,7 @@ helm uninstall urumi -n urumi-system
 
 **Kept on purpose** (so a mistaken uninstall cannot destroy the store): the namespaces `store`, `mcp`, `gateway`; the PVCs `wordpress-data` and `data-mariadb-0`; the Secrets `store-db`, `store-admin`, `store-woo-api`. **Removed:** the WordPress Deployment, MariaDB StatefulSet, Services, Ingress and ConfigMap. The finished `store-setup` Job and its Pod may remain; they are harmless and are replaced on the next deploy.
 
-**Reinstall:** run `scripts\deploy.ps1` again with the same release name and namespace. Helm adopts the kept objects and the store comes back with its data (verified in Task 1.5: the setup log said `WordPress already installed` and `products already present (3); not seeding`).
+**Reinstall:** run `scripts\deploy.ps1` again with the same release name and namespace. Helm adopts the kept objects and the store comes back with its data (verified on the reference machine, 2026-10-18: the setup log said `WordPress already installed` and `products already present (3); not seeding`).
 
 **Delete the data for real:**
 
@@ -179,7 +179,17 @@ kubectl get pv      # should print: No resources found
 
 ### Pre-created Secrets (advanced, mostly for production)
 
-By default the chart generates the Secrets. To supply your own, create them in namespace `store` first and name them in the values file under `secrets.existing`:
+By default the chart generates the Secrets. To supply your own, they must exist in namespace `store` before the install, but the chart also **owns** the namespace `store` (and `mcp`, `gateway`). A plain `kubectl create namespace store` would therefore make the first install fail with "exists and cannot be imported". Create the namespace **with Helm's ownership metadata** so that Helm adopts it **(expected; verified in Phase 5, not exercised yet)**:
+
+```powershell
+kubectl create namespace store
+kubectl label namespace store app.kubernetes.io/managed-by=Helm
+kubectl annotate namespace store meta.helm.sh/release-name=urumi meta.helm.sh/release-namespace=urumi-system
+# now create the Secrets in that namespace, e.g.:
+kubectl -n store create secret generic store-admin --from-literal=password=<your-password>
+```
+
+(Do the same for `mcp` once Phase 2 needs a Secret there.) Then name the Secrets in the values file under `secrets.existing`:
 
 | Values key | Secret keys required | Notes |
 |---|---|---|
@@ -187,7 +197,7 @@ By default the chart generates the Secrets. To supply your own, create them in n
 | `storeAdmin` | `password` | WordPress admin password. The key must be named exactly `password`. |
 | `storeWooApi` | `consumer-key`, `consumer-secret` | The consumer secret must be at most **43 characters** (WooCommerce stores it in a `char(43)` column). The chart's own generated secret is `cs_` plus 40 characters = 43. |
 
-`deploy/values-prod.yaml` already names these Secrets (and notes that `store-woo-api` must also exist in namespace `mcp` from Phase 2).
+`deploy/values-prod.yaml` already names these Secrets and points to this procedure (and notes that `store-woo-api` must also exist in namespace `mcp` from Phase 2).
 
 ### Rolling out, health checks and logs (quick reference)
 
@@ -204,7 +214,7 @@ By default the chart generates the Secrets. To supply your own, create them in n
 ### Local limitations
 
 - Single node, single replica for every component; no backups and no high availability.
-- The `local-path` storage lives inside the k3d node container: it survives pod restarts, `helm uninstall` and `k3d cluster stop`, but not `cluster-down.ps1`.
+- The `local-path` storage lives inside the k3d node container: it survives pod restarts and `helm uninstall` (both verified), and is expected to survive `k3d cluster stop` (not exercised in Phase 1), but not `cluster-down.ps1`.
 - No TLS locally (plain HTTP), and no mail server, so WooCommerce e-mails are not delivered.
 - The cluster needs internet access for image pulls and for downloading WooCommerce 11.2.1 during setup.
 

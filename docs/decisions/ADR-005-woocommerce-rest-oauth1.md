@@ -14,7 +14,7 @@ Accepted (2026-10-18, Phase 1 spike). The spike passed, so the application-passw
 
 ## Decision
 
-We call the **WooCommerce REST API v3** with the store's consumer key/secret, signed with **OAuth 1.0a (one-legged)**. WooCommerce documents OAuth1 as the method for plain-HTTP connections. The key is created by the idempotent `store-setup` Job (read/write, hashed with `wc_api_hash` through `wp eval`) and delivered via Secret `store-woo-api`.
+We call the **WooCommerce REST API v3** with the store's consumer key/secret, signed with **OAuth 1.0a (one-legged)**. WooCommerce documents OAuth1 as the method for plain-HTTP connections. The key is created by the idempotent `store-setup` Job (read/write, hashed with `wc_api_hash` through `wp eval-file`) and delivered via Secret `store-woo-api`.
 
 **Spike result (verified 2026-10-18 on WooCommerce 11.2.1):** `scripts/check-woo-api.ps1` port-forwards the in-cluster Service `wordpress` and sends an OAuth1 HMAC-SHA256 request from outside the WordPress pod to `http://127.0.0.1:<port>/wp-json/wc/v3/products`. The results:
 

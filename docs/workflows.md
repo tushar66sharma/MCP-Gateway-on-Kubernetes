@@ -1,6 +1,6 @@
 # Workflows
 
-> **Status (end of Phase 1).** Only the **store** workflows exist today: installing the store, a shopper checking out, and signed REST access to WooCommerce. The gateway, MCP-server and dashboard workflows are **(planned)** for Phases 2-5 and are added here as they are built. Everything below was run against the real local cluster unless it is explicitly marked *expected* (derived from the configuration, not forced to happen).
+> **Status (end of Phase 1).** Only the **store** workflows exist today: installing the store, a shopper checking out, and signed REST access to WooCommerce. The gateway, MCP-server and dashboard workflows are **(planned)** for Phases 2-5 and are added here as they are built. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
 
 How to read the failure sections: every workflow answers the same questions: what can fail, how it is detected, what is retried, what the timeouts are, how duplicates and half-finished work are handled, what the user sees, and where the logs are. Statements marked **(observed)** were seen during Phase 1; statements marked **(expected)** follow from the Kubernetes/Helm/WooCommerce documented behavior and the chart's settings but were not deliberately triggered.
 
@@ -54,9 +54,9 @@ sequenceDiagram
     D-->>U: URLs and the admin password command
 ```
 
-**Reading the diagram.** Steps 1-3 are local checks and the single Helm call. Steps 4-5 are Helm preparing: it reads previous Secrets so passwords never change on upgrade, then submits all ordinary resources at once. Steps 6-9 happen in parallel inside the cluster: MariaDB initialises, WordPress's initContainer copies the application files onto the (empty) volume and the main container starts; both report ready through probes. Step 10 is the `--wait` barrier: Helm does not start the post-install hook until the workloads are Ready. Steps 11-14 are the hook Job; Helm waits for the Job as well, so the command only finishes when the store is fully configured. The Job tolerates being started early because it waits for `wp-config.php` and the database by itself.
+**Reading the diagram.** The step numbers are the diagram's own (`autonumber` also counts messages a participant sends to itself, such as the checks in step 2). Steps 1-3 are the user action, the local checks and the single Helm call. Steps 4-5 are Helm preparing: it reads previous Secrets so passwords never change on upgrade, then submits all ordinary resources at once. Steps 6-10 happen in parallel inside the cluster: MariaDB initialises, WordPress's initContainer copies the application files onto the (empty) volume, the main container starts and writes `wp-config.php`, and both report ready through probes. Step 11 is the `--wait` barrier: Helm does not start the post-install hook until the workloads are Ready. Steps 12-17 are the hook Job: create it, start its Pod, wait for `wp-config.php` and the database, run the setup, finish, and Helm waits for the Job as well, so the command only finishes when the store is fully configured. Steps 18-19 report the result. The Job tolerates being started early because it waits for `wp-config.php` and the database by itself.
 
-**Observed timings (fresh install, Task 1.5).** Release created 16:16:28 IST, finished about 16:17:35 IST (about 67 s with images already cached). WordPress Ready at 10:46:54Z, Job `startTime` 10:46:55Z, so **the Job started after WordPress was Ready**; the Job ran 39 s (10:46:55Z to 10:47:34Z), of which the WooCommerce 11.2.1 download and install took about 19 s. On an earlier upgrade (Task 1.4) WordPress was Ready at 10:23:45Z and the Job started at 10:28:34Z, also after Ready.
+**Observed timings (fresh install, reference machine, 2026-10-18).** Release created 16:16:28 IST, finished about 16:17:35 IST (about 67 s with images already cached). WordPress Ready at 10:46:54Z, Job `startTime` 10:46:55Z, so **on the fresh install the Job started after WordPress was Ready**; the Job ran 39 s (10:46:55Z to 10:47:34Z). In the setup log the WooCommerce step runs from `installing WooCommerce 11.2.1` at 10:46:57 to `configuring store options` at 10:47:16, about 19 s. This fresh install is the only run that demonstrates the ordering. An earlier upgrade showed WordPress Ready at 10:23:45Z and the Job starting at 10:28:34Z, but that proves nothing about ordering: WordPress had already been Ready before that upgrade started. No timestamps were recorded for the reinstall.
 
 ### Decision points inside the Job
 
@@ -115,7 +115,7 @@ flowchart TD
 
 **Timeouts.** `helm --wait --timeout 10m` bounds the whole command; the Job's `activeDeadlineSeconds: 480` is deliberately shorter, so a stuck Job fails with a precise reason instead of being cut off by the Helm timeout; the two waits inside the Job are 300 s each; probes: see above.
 
-**Retries.** Kubelet restarts containers that fail probes. The Job is retried by Kubernetes with `restartPolicy: Never` and `backoffLimit: 3`: each retry is a **new Pod** (so failed attempts leave `Error` Pods whose logs you can read). A successful fresh install shows exactly one Pod (verified in Task 1.5).
+**Retries.** Kubelet restarts containers that fail probes. The Job is retried by Kubernetes with `restartPolicy: Never` and `backoffLimit: 3`: each retry is a **new Pod** (so failed attempts leave `Error` Pods whose logs you can read). A successful fresh install shows exactly one Pod (verified on the reference machine, 2026-10-18).
 
 **Duplicates, partial work, inconsistent state.**
 
@@ -130,7 +130,7 @@ flowchart TD
 
 ## 2. Shopper checkout (Cash on delivery)
 
-**What it does.** A shopper visits the storefront, adds a product to the cart and checks out as a guest paying with Cash on delivery; the order then appears in WooCommerce → Orders in wp-admin. This is the Phase 1 exit check (steps 2-4), which you run by hand; the automated checks in Phase 1 verify the pages and the REST API, not a full order.
+**What it does.** A shopper visits the storefront, adds a product to the cart and checks out as a guest paying with Cash on delivery; the order then appears in WooCommerce → Orders in wp-admin. This is the Phase 1 exit check (steps 2-4), which you run by hand; the automated checks in Phase 1 verify the pages and the REST API, not a full order. **The cart-to-order sequence below is therefore (expected — verified by the manual exit check): we did not place an order ourselves.** The page-level steps (shop, cart, empty-cart redirect) were run.
 
 **Actors.** Browser; Traefik (k3s ingress controller in `kube-system`); the `wordpress` Pod (Apache + PHP + WooCommerce); MariaDB; the shop admin (browser, wp-admin).
 
@@ -143,6 +143,7 @@ sequenceDiagram
     participant M as MariaDB
     actor A as Shop admin
 
+    Note over S,A: Expected flow, verified by the manual exit check. Only the page requests were run by us.
     S->>T: GET http://store.localhost/shop/
     T->>W: forward (Host store.localhost, to the Pod IP from the Service endpoints)
     W->>M: read products
@@ -161,7 +162,7 @@ sequenceDiagram
     W-->>A: the order is listed
 ```
 
-**Reading the diagram.** Everything the shopper does is plain HTTP through Traefik to one WordPress Pod; every state (products, cart session, orders, stock) lives in MariaDB, nothing important lives in the web Pod. The decision point is the empty cart: `/checkout/` with nothing in the cart answers **HTTP 302 to `/cart/`**. That is correct WooCommerce behavior (verified: `curl -s -o NUL -w "%{http_code} -> %{redirect_url}" http://store.localhost/checkout/` printed `302 -> http://store.localhost/cart/`), not an error. Cash on delivery needs no external service, and shipping is disabled, so checkout asks only for billing details. WooCommerce 11.2.1 exposes its Store API at `/wp-json/wc/store/v1/` (HTTP 200 on `/wp-json/wc/store/v1/cart`), which the block-based cart and checkout use. Order status for Cash on delivery is WooCommerce's default (`processing` for physical products); the order placement itself is the manual exit check and was not scripted.
+**Reading the diagram.** Everything the shopper does is plain HTTP through Traefik to one WordPress Pod; every state (products, cart session, orders, stock) lives in MariaDB, nothing important lives in the web Pod. The decision point is the empty cart: `/checkout/` with nothing in the cart answers **HTTP 302 to `/cart/`**. That is correct WooCommerce behavior (verified: `curl -s -o NUL -w "%{http_code} -> %{redirect_url}" http://store.localhost/checkout/` printed `302 -> http://store.localhost/cart/`), not an error. Cash on delivery needs no external service, and shipping is disabled, so checkout asks only for billing details. WooCommerce 11.2.1 exposes its Store API at `/wp-json/wc/store/v1/` (HTTP 200 on `/wp-json/wc/store/v1/cart`), which the block-based cart and checkout use. Order status for Cash on delivery is WooCommerce's default (`processing` for physical products); the order placement itself (expected — verified by the manual exit check) was not scripted and not run by us.
 
 **What was verified automatically in Phase 1** (fresh install): `/shop/` contains `Urumi Coffee Mug`; `/cart/` returns 200; `/checkout/` with an empty cart returns 302 to `/cart/`; `/`, `/my-account/` and `/wp-login.php` return 200. After `kubectl -n store delete pod -l app.kubernetes.io/name=wordpress` and `kubectl -n store delete pod mariadb-0`, both Pods came back Ready (MariaDB first, then WordPress; the `copy-wordpress` initContainer logged `WordPress files present`), `/shop/` still listed the products and `check-woo-api.ps1` still passed, showing that state lives on the volumes. The same persistence for a real order is step 4 of the manual exit check.
 
@@ -169,12 +170,12 @@ sequenceDiagram
 
 | What can fail | Detected by | Retried? | What the shopper sees | Recovery |
 |---|---|---|---|---|
-| WordPress Pod restarting (deploy, crash, `kubectl delete pod`) | Readiness probe fails, Pod leaves the Service endpoints | The shopper's browser retry | A short "no available server"/503 from Traefik while no Pod is Ready **(expected)**; the `Recreate` strategy means a brief gap during upgrades | Self-heals when the new Pod is Ready. Orders are in MariaDB and survive. |
+| WordPress Pod restarting (deploy, crash, `kubectl delete pod`) | Readiness probe fails, Pod leaves the Service endpoints | The shopper's browser retry | A short "no available server"/503 from Traefik while no Pod is Ready **(expected)**; the `Recreate` strategy means a brief gap during upgrades | Self-heals when the new Pod is Ready. Orders are in MariaDB and are expected to survive (expected — verified by the manual exit check, step 4; the products surviving a Pod deletion was run). |
 | MariaDB down | WordPress shows the database error; its probes fail | Probes retry every 10-20 s | "Error establishing a database connection" **(expected)**. After about 2 minutes of failed liveness probes (6 x 20 s) WordPress is restarted too. This is a known trade-off: the liveness probe uses `/wp-login.php`, which needs the database | When MariaDB is back, WordPress recovers by itself. |
 | Order e-mail cannot be sent | PHP `sendmail` finds no mail server | no | **Not blocking.** There is no mail server in the cluster; the setup log shows `sendmail: can't connect to remote host (127.0.0.1): Connection refused` **(observed in the Job)**. Customer and admin e-mails are not delivered. | Known limitation; a mail relay is out of scope. |
 | Checkout says there is no payment or shipping method | Visible at checkout | no | WooCommerce message about no available methods | Means the setup Job's options were not applied; see [troubleshooting](troubleshooting.md#checkout-says-no-payment-or-shipping-methods-are-available). |
 | Storefront shows "coming soon" | Visible on `/` | no | A "coming soon" page instead of the shop | `woocommerce_coming_soon` is not `no`; re-run `deploy.ps1`. |
-| Duplicate submissions | WooCommerce's own checkout handling | n/a | One order per completed checkout | Not specific to this project. |
+| Duplicate submissions | WooCommerce's own checkout handling | n/a | One order per completed checkout (expected — verified by the manual exit check) | Not specific to this project. |
 
 **Logs.** `kubectl -n store logs deploy/wordpress -c wordpress` (Apache access log lines and PHP errors); `kubectl -n store logs mariadb-0`; WooCommerce's own status log under WooCommerce → Status → Logs in wp-admin.
 
@@ -243,7 +244,7 @@ sequenceDiagram
 
 ## 4. Data lifecycle: upgrade, uninstall, reinstall, fresh install
 
-**What it does.** Defines what survives each operation, because the store is the only stateful part so far. Verified in Task 1.5.
+**What it does.** Defines what survives each operation, because the store is the only stateful part so far. Verified on the reference machine (2026-10-18).
 
 ```mermaid
 flowchart TD
@@ -258,7 +259,7 @@ flowchart TD
 
 **Reading the diagram.** The two entry points on the left are the commands you type. `helm uninstall` removes only the workloads and routing; it deliberately keeps the namespaces, the three Secrets and both PVCs, so data and the matching passwords survive (the MariaDB data directory was initialised with the password in `store-db`, so a regenerated password would lock WordPress out). Only an explicit `kubectl delete ns` destroys data.
 
-**Verified results (Task 1.5, namespace `store`).**
+**Verified results (reference machine, 2026-10-18, namespace `store`).**
 
 1. *Uninstall:* Helm printed that it kept `[PersistentVolumeClaim] wordpress-data`, `[Secret] store-db`, `[Secret] store-admin`, `[Secret] store-woo-api` and the three Namespaces. `data-mariadb-0` also stayed (a `volumeClaimTemplates` PVC is not Helm-managed). Both PVCs stayed `Bound`; the Deployment and StatefulSet were gone. The finished `store-setup` Job and Pod were still present: hook resources are not removed by uninstall, and the next hook run deletes them first (`before-hook-creation`). Harmless.
 2. *Reinstall:* `deploy.ps1` reported `STATUS: deployed` (revision 1 of the new release) with no adoption error. The setup log said `WordPress already installed` and `products already present (3); not seeding`, and `check-woo-api.ps1` returned 200 / 200 / 401. Reinstall works only with the same release name and namespace (`urumi` / `urumi-system`), because the kept objects carry `meta.helm.sh/release-name` and `release-namespace` annotations.

@@ -83,9 +83,9 @@ If it is still missing, install it (see [learning/00-setup-log.md](learning/00-s
 
 **Diagnosis.** `kubectl get ns store -o yaml` (look at `metadata.annotations` and `labels`).
 
-**Fix.** If the namespace is empty and you created it yourself: `kubectl delete ns store` (destroys anything in it) and run `deploy.ps1` again. Do not create the three namespaces by hand.
+**Fix.** If the namespace is empty and you created it yourself: `kubectl delete ns store` (destroys anything in it) and run `deploy.ps1` again. Never create the three namespaces by hand **without the Helm ownership metadata**. When you really need the namespace before the install (to pre-create Secrets for production), add the label `app.kubernetes.io/managed-by=Helm` and the annotations `meta.helm.sh/release-name=urumi` and `meta.helm.sh/release-namespace=urumi-system`, as shown in [deployment.md](deployment.md#pre-created-secrets-advanced-mostly-for-production) (expected to be adopted; verified in Phase 5).
 
-**Reinstall after uninstall works, with a condition.** After `helm uninstall urumi -n urumi-system`, the kept namespaces, PVCs and Secrets still carry the annotations `meta.helm.sh/release-name: urumi` and `release-namespace: urumi-system`. A reinstall is therefore adopted cleanly (verified in Task 1.5) **only with the same release name and namespace** (`urumi` / `urumi-system`). Installing under a different name or namespace hits the ownership error above. To start over under another name, delete the kept objects first (`kubectl delete ns store mcp gateway`, **destroys data**).
+**Reinstall after uninstall works, with a condition.** After `helm uninstall urumi -n urumi-system`, the kept namespaces, PVCs and Secrets still carry the annotations `meta.helm.sh/release-name: urumi` and `release-namespace: urumi-system`. A reinstall is therefore adopted cleanly (verified on the reference machine, 2026-10-18) **only with the same release name and namespace** (`urumi` / `urumi-system`). Installing under a different name or namespace hits the ownership error above. To start over under another name, delete the kept objects first (`kubectl delete ns store mcp gateway`, **destroys data**).
 
 ## PVC stays Pending
 
@@ -278,4 +278,4 @@ Expected: `tests 5`, `pass 5`, `fail 0`. They compare the OAuth1 signer with val
 - **Comma-separated names:** `kubectl -n store get secret store-db,store-admin,store-woo-api` fails in PowerShell with `secrets "store-db,store-admin,store-woo-api" not found` **(observed)**, because the argument is passed as one string. Use spaces: `kubectl -n store get secret store-db store-admin store-woo-api`.
 - **Quotes inside `sh -c '...'`:** Windows PowerShell 5.1 strips inner double quotes from native-command arguments; escape them as `\"` (as in the MariaDB check above).
 - **`>` redirection** writes UTF-16 in PowerShell 5.1; use `cmd /c "... > file"` for text dumps.
-- **`\n` in `-o jsonpath` templates** is not understood when passed through PowerShell; convert with `-o json | ConvertFrom-Json` instead (**observed**).
+- **`-o jsonpath` templates containing quotes** (such as `{"\n"}` for a newline) break in Windows PowerShell 5.1 because the inner double quotes are stripped when the argument is passed to `kubectl`, which then reports `unrecognized character in action` (**observed**); convert with `-o json | ConvertFrom-Json` instead.
