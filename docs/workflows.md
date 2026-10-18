@@ -354,7 +354,7 @@ sequenceDiagram
     alt arguments invalid
         M-->>C: result with isError true and the validation message
     end
-    M->>M: resolve period to UTC bounds in the store time zone
+    M->>M: resolve period to UTC bounds in the store time zone, send them without Z, dates_are_gmt true
     M->>M: sign the request, signing URL is the PUBLIC store URL, fresh nonce and timestamp
     M->>W: GET or POST or PUT on the Service DNS name, redirects not followed, timeout WOO_TIMEOUT_MS
     W->>W: rebuild the signature base from WP_HOME and compare
@@ -366,6 +366,8 @@ sequenceDiagram
 ```
 
 **Reading the diagram.** The two checks right after the request happen before any MCP code runs: a wrong `Host` gets 403 and a missing or wrong token gets 401, both as JSON-RPC errors with `id: null` (captured, see the protocol notes). Next, the SDK checks the arguments against the same zod schema that produced the tool's JSON Schema; a bad value never reaches WooCommerce and comes back as an `isError` result the model can read and fix. The signing step is the subtle one ([ADR-005](decisions/ADR-005-woocommerce-rest-oauth1.md)): the request goes to the in-cluster Service, but the OAuth1 signature is computed over the public store URL with scheme `http` (`WOO_SIGNING_BASE_URL`), because WooCommerce rebuilds the signature base from its own `WP_HOME`. Signing the URL actually requested would give 401. The answer is trimmed (a product becomes id, name, status, prices, stock, permalink) so the model sees little text and no credentials can leak into it.
+
+**Order dates are sent without a time zone, on purpose.** `list_orders` turns `period=today` (or the caller's `after`/`before`, which must carry `Z` or an offset) into a UTC window, for example `2026-10-18T18:30:00.000Z` to `2026-10-19T18:30:00.000Z` for "today" in Asia/Kolkata. It sends WooCommerce `after=2026-10-18T18:30:00&before=2026-10-19T18:30:00&dates_are_gmt=true`: the same instants, but with no `Z`. With `dates_are_gmt=true` WooCommerce compares against the GMT date column, while WordPress's date query converts any bound that names a zone into the **site's local time** first; a `Z` bound would therefore be shifted by the store's offset (+5:30), and orders placed between local midnight and 05:30 would be counted on the wrong day. A bound with no zone is used as written. The `range` field in the result keeps the honest `Z` form. **Verified live** on 2026-10-19 (the store keeps orders as posts, HPOS off): order 27, placed at 00:41 IST, was listed under `yesterday` before this fix and under `today` after it, and a two-minute `after`/`before` window around an order's `date_created_gmt` now contains that order.
 
 **No retries, on purpose.** The server never retries a WooCommerce request. WooCommerce stores every OAuth nonce it has seen, so replaying the same request is rejected. A fresh signature would be accepted, but `create_product` is **not idempotent**: after a timeout the first request may still have succeeded, and a blind retry could create a duplicate product. The failure is returned to the caller (the model or the user) with a clear message, and the caller decides.
 

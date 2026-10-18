@@ -859,6 +859,11 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 - [ ] **Missing LLM keys must not crash the pod.** Resolution: the gateway Deployment's `llm-api-keys` `secretKeyRef` is `optional: true` (missing gives `LLM_NOT_CONFIGURED`, not CreateContainerConfigError). Add a task creating `scripts/create-secrets.ps1`, decide a single owner for `gateway-bootstrap` (Helm), and map the LLM_* non-secrets (LLM_PROVIDER, LLM_MODEL, LLM_FALLBACK_PROVIDER) and BOOTSTRAP_ADMIN_* to Helm values (see the header of `.env.example`).
 - [ ] **HTTP edge cases.** Resolution: `GET /mcp` returns 405 JSON (not Express HTML 404); if the SDK's DNS-rebinding protection is on, `allowedHosts` includes the loopback; redact `/api/invites/:token` paths in logs (ADR-013 leakage vectors).
 - [ ] **Verify text and counts.** Disabled/dead upstream tools disappear within about 20 s (15 s interval + 5 s timeout), not "within 15 s" (fix the plan's verify text). The tool count is 15 (6 + 5 + 4), not 16.
+- [ ] **Extend `startMcpHttpServer`, do not fork it** (Phase 2 final review). The gateway needs its own auth (user API keys) and extra routes. Add an auth hook (`auth: UpstreamAuth | RequestHandler`) and `extraRoutes?(app)` to `packages/shared/src/mcpHttpServer.ts`, keeping the Host check before auth and auth before body parsing.
+- [ ] **Gateway upstream timeout above `WOO_TIMEOUT_MS`.** The gateway's per-call timeout to an upstream must be greater than the WooCommerce server's own `WOO_TIMEOUT_MS` (10 s by default), so a slow store comes back as the woo server's clean `isError` result rather than a gateway abort.
+- [ ] **Gateway copy of `mcp-woocommerce-token`.** Render it in namespace `gateway` through `urumi.generatedValue` with canonical namespace `mcp` (the token's canonical home), so both copies hold the same value.
+- [ ] **Tests for malformed JSON and the 413 body limit** on the shared server (the gateway relies on the same error handler).
+- [ ] **Consider logging aborted requests** for the audit log (the request log is written on `finish` only today, so a client that disconnects early leaves no line).
 
 ### Phase 4
 

@@ -21,7 +21,7 @@ A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d
 | k3d | v5.9.0 | Creates the cluster | `k3d version` |
 | kubectl | v1.36.1 | Talks to the cluster | `kubectl version --client` |
 | Helm | v4.3.1 | Installs the chart | `helm version` |
-| Node.js | 24 (used: 24.0.1) | Only for the optional REST API check and its tests | `node --version` |
+| Node.js, then `npm ci` once from the repository root | 24 (used: 24.0.1) | Not needed to run the store or the MCP server (their images build inside Docker). Needed for the host-side checks (`check-mcp-woocommerce.ps1` imports the MCP SDK from the repository's `node_modules`, the optional REST API check) and for `npm test` | `node --version` |
 | Free host port 80 (and 443) | - | The cluster publishes them | see [troubleshooting](troubleshooting.md#port-80-is-already-in-use) |
 
 How these were installed on the reference machine, including the WSL2 memory cap, is in [learning/00-setup-log.md](learning/00-setup-log.md). The store's memory limits add up to 1 GiB (MariaDB 512 Mi + WordPress 512 Mi, plus 768 Mi while the setup Job runs), on top of k3s itself, so the 9 GB WSL2 cap in the setup log is ample. Open a **new** terminal after installing a tool so that `PATH` is refreshed.
@@ -217,7 +217,7 @@ kubectl annotate namespace store meta.helm.sh/release-name=urumi meta.helm.sh/re
 kubectl -n store create secret generic store-admin --from-literal=password=<your-password>
 ```
 
-(Do the same for `mcp`: the `storeWooApi` and `mcpWoocommerceToken` Secrets also live there, see the `mcp` rows in the table below.) Then name the Secrets in the values file under `secrets.existing`:
+(Do the same for `mcp`: the `storeWooApi` and `mcpWoocommerceToken` Secrets also live there, see the `storeWooApi` and `mcpWoocommerceToken` rows in the table below.) Then name the Secrets in the values file under `secrets.existing`:
 
 | Values key | Secret keys required | Notes |
 |---|---|---|
@@ -228,11 +228,11 @@ kubectl -n store create secret generic store-admin --from-literal=password=<your
 
 `deploy/values-prod.yaml` already names these Secrets and points to this procedure. It also has two placeholders for our own images, `global.imageRegistry` and `global.imageTag` (both `CHANGE-ME`): production pulls `<registry>/urumi/mcp-woocommerce:<tag>` from a real registry instead of importing it. Pushing images to a registry is **(planned, Phase 5)**; the local import workflow is the only one exercised.
 
-The WooCommerce key owner is the `urumi-mcp` shop manager that the setup Job creates; see [run guide, section 8](run-guide.md#who-owns-the-woocommerce-api-key-security-note). **Upgrade note:** a store installed before Phase 2's key-owner fix has an unmarked `urumi-mcp` user, and the setup Job refuses to reuse it until you add the marker ([troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)).
+The WooCommerce key owner is the `urumi-mcp` shop manager that the setup Job creates; see [run guide, section 8](run-guide.md#who-owns-the-woocommerce-api-key-security-note). **Upgrade note:** a store upgraded from Phase 1 (`main`) never had a `urumi-mcp` user (the key was owned by `admin` then), so the Job creates and marks the user and the upgrade needs nothing from you. Only a store installed from the intermediate Phase 2 commit that predates the key-owner fix has an unmarked `urumi-mcp` user, and there the setup Job refuses to reuse it until you add the marker ([troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)).
 
 ### Known limitation: rotating a pre-created WooCommerce key Secret
 
-The MCP server pod carries a `checksum/secrets` annotation: a hash of the key values **as the chart generates them**. Kubernetes only reads a Secret into a container's environment when the container starts, so a changed key needs a pod restart, and the annotation is what normally triggers one on the next deploy. When you use your own Secret (`secrets.existing.storeWooApi`, as in production), the annotation is not a hash of that Secret, so **rotating it does not restart the pod automatically**: the pod keeps running with the old key (WooCommerce then answers 401 until restart). After rotating, restart it yourself:
+The MCP server pod carries a `checksum/secrets` annotation: a hash of the key values **as the chart generates them**. Kubernetes only reads a Secret into a container's environment when the container starts, so a changed key needs a pod restart, and the annotation is what normally triggers one on the next deploy. When you use your own Secret (`secrets.existing.storeWooApi`, as in production), the chart cannot see its values, so the annotation is a hash of the Secret's **name** only. That keeps it stable, so upgrades do not restart the pod for nothing (two `helm template` runs with `--set secrets.existing.storeWooApi=foo` gave the same annotation; verified 2026-10-19), but it also means **rotating the Secret does not restart the pod automatically**: the pod keeps running with the old key (WooCommerce then answers 401 until restart). After rotating, restart it yourself:
 
 ```powershell
 kubectl -n mcp rollout restart deploy/mcp-woocommerce

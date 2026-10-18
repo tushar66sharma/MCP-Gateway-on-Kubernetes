@@ -167,9 +167,9 @@ The WordPress admin password comes from Secret `store-admin`. Helm generates it 
 
 | Tool | Input | Notes |
 |---|---|---|
-| `list_products` | `search?`, `status?`, `page?`, `per_page?` (≤ 50) | id, name, price, status, stock, permalink |
-| `create_product` | `name`, `regular_price` (string, decimal), `description?`, `status?` (default `publish`) | Returns the created product with its storefront permalink |
-| `list_orders` | `period?` (`today` \| `yesterday` \| `last_7_days`), `after?`, `before?` (ISO), `status?`, `page?`, `per_page?` | `period` is computed in the store timezone (`STORE_TIMEZONE`), which makes "what orders came in today" reliable even with weak models |
+| `list_products` | `search?`, `status?`, `page?`, `per_page?` (≤ 50, default 10) | id, name, price, status, stock, permalink |
+| `create_product` | `name`, `regular_price` (decimal string, or a JSON number normalised to a 2-decimal string), `description?`, `status?` (default `publish`) | Returns the created product with its storefront permalink |
+| `list_orders` | `period?` (`today` \| `yesterday` \| `last_7_days`), `after?`, `before?` (ISO 8601 date-time with offset), `status?`, `page?`, `per_page?` (≤ 50, default 10) | `period` is computed in the store timezone (`STORE_TIMEZONE`), which makes "what orders came in today" reliable even with weak models. Bounds are sent to WooCommerce as naive UTC with `dates_are_gmt=true` (a `Z` bound would be shifted into site-local time by WordPress) |
 | `get_order` | `order_id` | Line items, totals, billing name, status, dates |
 | `update_order_status` | `order_id`, `status` (enum of WooCommerce statuses) | |
 | `ping` | — | Liveness tool; intentionally shares its name with the other upstreams to demonstrate collision handling. Does not call WooCommerce |

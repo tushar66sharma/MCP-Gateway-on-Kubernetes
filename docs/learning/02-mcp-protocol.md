@@ -130,7 +130,7 @@ Response (`200`, trimmed):
    "inputSchema":{"type":"object","$schema":"https://json-schema.org/draft/2020-12/schema",
      "properties":{
        "name":{"type":"string","minLength":1,"maxLength":200},
-       "regular_price":{"type":"string","pattern":"^\\d+(\\.\\d{1,2})?$"},
+       "regular_price":{"type":["string","number"]},
        "description":{"type":"string","maxLength":2000},
        "status":{"default":"publish","type":"string","enum":["publish","draft"]}},
      "required":["name","regular_price"]}},
@@ -143,6 +143,8 @@ Response (`200`, trimmed):
 ```
 
 The real response lists all six tools: `list_products`, `create_product`, `list_orders`, `get_order`, `update_order_status`, `ping`. The `inputSchema` is plain JSON Schema, produced from the zod schema, so the same definition both validates input and tells the model what to send.
+
+Every character of this list is sent to the model on every turn, so the schemas are kept small: checks that would emit a long regular expression (the price format, the `after`/`before` date-time format) run as zod `refine` steps, which do not appear in the JSON Schema; the server still enforces them. `regular_price` accepts a string or a JSON number, because models and the Inspector often send `12.5` as a number. (The `regular_price` line and the result texts in 5.3 and 5.4 were **re-captured** on 2026-10-19 after the final-review fixes; the rest of the capture is from 2026-10-18 and unchanged.)
 
 ### 5.3 `tools/call`, success
 
@@ -160,7 +162,7 @@ Response (`200`, reformatted for reading; the `text` field is one JSON string in
 
 ```json
 {"result":{
-  "content":[{"type":"text","text":"Found 1 product(s) on page 1.\n{ \"products\": [ { \"id\": 26, ... } ], \"page\": 1, \"per_page\": 1 }"}],
+  "content":[{"type":"text","text":"Found 1 product(s) on page 1.\n{\"products\":[{\"id\":26, ... }],\"page\":1,\"per_page\":1}"}],
   "structuredContent":{"products":[{"id":26,"name":"MCP smoke 2026-10-18T18:27:22.451Z","status":"draft",
       "price":"1.00","regular_price":"1.00","stock_status":"instock",
       "permalink":"http://store.localhost/?post_type=product&p=26"}],
@@ -179,12 +181,14 @@ A second success, `list_orders` with `{"period":"today","per_page":1}`, returned
   "before":"2026-10-19T18:30:00.000Z","timeZone":"Asia/Kolkata"},"page":1,"per_page":1}
 ```
 
+`range` is the real UTC window ("today" in Asia/Kolkata starts at 18:30 UTC the day before). The request the server then sends to WooCommerce carries the same instants **without** the `Z`: `after=2026-10-18T18:30:00&before=2026-10-19T18:30:00&dates_are_gmt=true`. That is deliberate. With `dates_are_gmt=true` WooCommerce compares against the GMT column, but WordPress's date query first converts any string that has a zone (`Z` or `+05:30`) into the **site's local time**, so a `Z` bound would be shifted by +5:30 and orders placed between local midnight and 05:30 would land in the wrong day. A string with no zone is used as written. This was **verified live** on 2026-10-19: order 27, placed at 00:41 IST (19:11 UTC on the 18th), was listed under `yesterday` before the fix and under `today` after it.
+
 ### 5.4 `tools/call`, tool-level error (`isError: true`)
 
 `create_product` with `{"name":"x","regular_price":"abc"}` fails our zod validation. HTTP status is still `200` and the JSON-RPC message is still a `result`:
 
 ```json
-{"result":{"content":[{"type":"text","text":"Input validation error: Invalid arguments for tool create_product: regular_price: regular_price must look like \"12\" or \"12.50\""}],
+{"result":{"content":[{"type":"text","text":"Input validation error: Invalid arguments for tool create_product: regular_price: regular_price must be non-negative with at most 2 decimals, like \"12\", \"12.50\" or 12.5"}],
   "isError":true,"resultType":"complete",
   "_meta":{"io.modelcontextprotocol/serverInfo":{"name":"mcp-woocommerce","version":"0.1.0"}}},
  "jsonrpc":"2.0","id":2}
@@ -214,7 +218,7 @@ A tool result can carry both:
 
 | Field | Audience | Our use |
 |---|---|---|
-| `content` | The **model** (and older clients). A list of blocks; ours is one `text` block: a one-line summary, then the data as pretty-printed JSON. | Always present, so even a client that ignores structured data gets everything. |
+| `content` | The **model** (and older clients). A list of blocks; ours is one `text` block: a one-line summary, then the data as compact JSON (no indentation, to save model tokens). | Always present, so even a client that ignores structured data gets everything. |
 | `structuredContent` | **Programs**. A JSON object the client can use without parsing text. | Same data as the JSON in `content`. Our smoke script and tests read this. |
 
 We return both from every success (`ok()` in `src/tools/format.ts`). Failures return only `content` plus `isError: true`.

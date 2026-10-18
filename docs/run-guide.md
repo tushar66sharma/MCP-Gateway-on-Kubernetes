@@ -93,8 +93,10 @@ Optional graphical tools (not required; **not tested on the reference machine**)
 | 2 | **Docker Desktop** (WSL2 backend) | Must be **running** whenever you use the project. |
 | 3 | Memory cap in `C:\Users\<you>\.wslconfig` | On the reference machine (15 GB RAM) the file sets `memory=9GB`, `processors=8`, `swap=4GB`. Without a cap WSL2 may take half the RAM. After editing run `wsl --shutdown` and restart Docker Desktop. |
 | 4 | `winget install --id Helm.Helm -e` and `winget install --id k3d.k3d -e` | Then open a **new** terminal so PATH refreshes. `kubectl` ships with Docker Desktop. |
-| 5 | Hosts entries (optional) | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1` (UAC prompt, safe to repeat). Browsers do not need it; Node-based MCP tools do. |
-| 6 | The first `up.ps1` | Creates the cluster, downloads images and WooCommerce, installs the store. **Typically about 2–3 minutes** the first time (observed on the reference machine). |
+| 5 | **Node.js 24** | `winget install --id OpenJS.NodeJS.LTS -e` (on 2026-10-19 winget lists 24.20.0 as the LTS; that command was not run here, the reference machine has Node 24.0.1), or the Node 24 Windows installer from nodejs.org. Open a **new** terminal, then check: `node -v` prints `v24.` something. Not needed for the store itself; needed for the MCP check, MCP Inspector and the tests. |
+| 6 | `npm ci`, once, from the repository root | Installs the project's Node packages into `node_modules`. `scripts\check-mcp-woocommerce.ps1` runs a small MCP client (`scripts/dev/mcp-smoke.mjs`) that imports the MCP SDK from there; without it the check stops with `Dependencies not installed: run npm ci ...`. The Docker images install their own packages, so `up.ps1` works without this step. Run it again after pulling changes to `package-lock.json`. |
+| 7 | Hosts entries (optional) | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1` (UAC prompt, safe to repeat). Browsers do not need it; Node-based MCP tools do. |
+| 8 | The first `up.ps1` | Creates the cluster, downloads images and WooCommerce, installs the store. **Typically about 2–3 minutes** the first time (observed on the reference machine). |
 
 Versions used, and how each tool was installed, are in [learning/00-setup-log.md](learning/00-setup-log.md). The long-form deployment steps are in [deployment.md](deployment.md).
 
@@ -108,7 +110,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1
 
 `up.ps1` checks that `docker`, `k3d`, `kubectl` and `helm` exist and that Docker is running, starts (or creates) the cluster, warns if the hosts entry is missing, installs the store **only if it is not installed yet**, waits until the store is ready, and prints a URL block. It never prints passwords. Whenever it deploys (first install, repair, or `-Redeploy`) it first runs `build-images.ps1` (below), because our own program images, such as the MCP server, must exist inside the cluster before Helm starts them.
 
-It also reads the Helm release state, because `helm status` succeeds even for a broken release. Release `deployed` and namespace `store` present: it just waits for the pods (fast path). Release `failed`, or the `store` namespace missing: it prints a yellow "previous install did not complete" notice and runs the deploy to repair it. Release `pending-install`, `pending-upgrade` or `pending-rollback` (an interrupted Helm operation): it stops and prints the command to recover; see [troubleshooting](troubleshooting.md#another-operation-is-in-progress-pending-install). The decision function was tested in isolation; the real failed and pending paths were not triggered on the live release. The ending looks like this:
+It also reads the Helm release state, because `helm status` succeeds even for a broken release. Release `deployed` and namespace `store` present: it just waits for the pods (fast path): MariaDB and WordPress, then the MCP server if it is installed (if the MCP server is not ready within 2 minutes it prints a yellow warning and carries on, because the store works without it). Release `failed`, or the `store` namespace missing: it prints a yellow "previous install did not complete" notice and runs the deploy to repair it. Release `pending-install`, `pending-upgrade` or `pending-rollback` (an interrupted Helm operation): it stops and prints the command to recover; see [troubleshooting](troubleshooting.md#another-operation-is-in-progress-pending-install). The decision function was tested in isolation; the real failed and pending paths were not triggered on the live release. The ending looks like this:
 
 ```text
 ================ Urumi platform is running ================
@@ -151,6 +153,8 @@ It builds `urumi/mcp-woocommerce:<tag>` with Docker, copies it into the k3d clus
 |---|---|---|
 | Clean (everything committed) | `05ca559` | Same tag as last time, so the pod is **not** restarted (verified 2026-10-18: same pod through a redeploy). |
 | Any change, even one untracked file | `05ca559-dirty-20261018235805` | A new tag every build, so the pod is replaced on every redeploy. Harmless, just slower. |
+
+The tag is written **in quotes** (`imageTag: "c7914c9"`). About one commit in 27 has a short id made only of digits, such as `1234567`, and unquoted YAML would read that as a number. The chart also turns such a number back into its digits, so a hand-written `imageTag: 1234567` still renders as `urumi/mcp-woocommerce:1234567` (verified with `helm template`). A tag with a leading zero cannot be repaired that way, because YAML reads `0123456` as an octal number, so always quote tags you write by hand.
 
 If you deploy without `deploy/.images.local.yaml` (for example you ran `deploy.ps1` by hand on a fresh clone), the chart falls back to tag `dev`, which does not exist in the cluster, so the pod cannot start. With the chart's default pull policy `IfNotPresent` it shows `ErrImagePull` and then `ImagePullBackOff` (**expected**; not observed on the reference machine, because `up.ps1` always builds first; `ErrImageNeverPull` appears only if the pull policy is `Never`). `deploy.ps1` prints a yellow warning (`no local image tag; run scripts\build-images.ps1`). Fix: [troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff).
 
@@ -398,10 +402,12 @@ The script reads the bearer token from the Secret (it never prints it), opens a 
 
 `-Write` additionally:
 
-1. **Creates one product** named `MCP smoke <timestamp>` with price 1.00 and status **draft** (so it is not visible on the storefront; find it in wp-admin under Products, Drafts). Each run creates another one; delete them in wp-admin when you like.
+1. **Creates one product** named `MCP smoke <timestamp>` with price 1.00 (sent as the JSON number `1`, which the server stores as `"1.00"`) and status **draft** (so it is not visible on the storefront; find it in wp-admin under Products, Drafts). Each run creates another one; delete them in wp-admin when you like.
 2. Calls `update_order_status` on the newest order with the status it **already has**, which proves a signed PUT works without changing anything visible (expected; the run recorded `order 25 kept as processing`).
 
-Verified 2026-10-18 (Task 2.6): read-only run found 6 tools, ping ok, 3 products, 9 orders today; `-Write` run created draft product 26 and kept order 25 as `processing`.
+Verified 2026-10-18 (Task 2.6): read-only run found 6 tools, ping ok, 3 products, 9 orders today; `-Write` run created draft product 26 and kept order 25 as `processing`. Verified again 2026-10-19 after the final-review fixes, when the script also **asserts** the answers (ping returns `ok: true`, the product and order lists are arrays, the new product has a numeric id; any mismatch fails the check): both modes passed, and `-Write` created draft product 29 with `regular_price` `1.00` and kept order 27 as `processing`.
+
+The script stops at once with `Dependencies not installed: run npm ci ...` if the repository's `node_modules` is missing (see section 2). It puts the token into the environment only after the port-forward has started, so the `kubectl` process never holds it.
 
 ### Explore it with MCP Inspector
 
@@ -419,7 +425,7 @@ kubectl -n mcp port-forward svc/mcp-woocommerce 13001:3001
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token
 ```
 
-**Step 3a. Command-line Inspector (verified).** Needs Node (the first run downloads the Inspector through `npx`). This puts the token in an environment variable of this terminal only:
+**Step 3a. Command-line Inspector (verified from Git Bash; PowerShell form not run).** Needs Node (the first run downloads the Inspector through `npx`). This puts the token in an environment variable of this terminal only:
 
 ```powershell
 $env:MCP_TOKEN = Get-Clipboard
@@ -431,7 +437,7 @@ Remove-Item Env:MCP_TOKEN
 
 **The PowerShell form of these commands was not run**; the equivalent commands were verified 2026-10-19 against the pod in the cluster (from Git Bash): `tools/call ping` returned `{"ok": true, "server": "mcp-woocommerce", ...}` (run from Git Bash; the PowerShell form differs only in how the variable is written). `tools/list` returned the 6 tools in Task 2.4. Notes:
 
-- **Numbers become numbers.** `--tool-arg regular_price=12.50` sends the number 12.5, but `create_product` wants a **string**, so the server answers with an `isError` result (`expected string, received number`; verified). To send a string from Git Bash, quote it as JSON: `'regular_price="12.50"'`. The PowerShell 5.1 spelling of that quote is `'regular_price=\"12.50\"'` (expected; not tested). The Inspector UI (below) avoids this problem, because you type the value into a text field.
+- **Numbers become numbers.** `--tool-arg regular_price=12.50` sends the JSON number 12.5. `create_product` accepts a number or a string and stores `"12.50"` either way, so no quoting is needed (verified 2026-10-19 from Git Bash: the call created draft product 28 with `regular_price` `"12.50"`). A price with more than 2 decimals, such as 12.555, is refused with an `isError` result rather than rounded.
 - **A libuv assertion at the end** (`Assertion failed: ... src\win\async.c`) can appear on Windows after a command finishes. It is cosmetic noise from the Inspector's shutdown, not from the server (observed in Task 2.4); the result printed above it is valid.
 - The token is on the command line of that process, visible to other programs on your PC while it runs. Acceptable on a single-user development machine; the UI route avoids it.
 - The Inspector's default mode talks the 2025 protocol; add `--protocol-era auto` to use the 2026-07-28 one. Both work ([ADR-007](decisions/ADR-007-mcp-sdk-version.md)).
@@ -442,9 +448,9 @@ Remove-Item Env:MCP_TOKEN
 
 | Tool | Does | Changes data? |
 |---|---|---|
-| `list_products` | Lists products (search, status, paging). | No |
-| `create_product` | Creates a simple product (`name`, `regular_price` as a string such as `"12.50"`, optional `description`, `status` `publish` or `draft`). | **Yes**, and calling twice creates two products |
-| `list_orders` | Lists orders, newest first. `period` = `today`, `yesterday` or `last_7_days` in the store time zone (`Asia/Kolkata` locally), or `after`/`before` ISO times. | No |
+| `list_products` | Lists products (search, status, paging; 10 per page unless `per_page` says otherwise, at most 50). | No |
+| `create_product` | Creates a simple product (`name`, `regular_price` such as `"12.50"` or `12.5`, optional `description`, `status` `publish` or `draft`). | **Yes**, and calling twice creates two products |
+| `list_orders` | Lists orders, newest first, 10 per page by default. `period` = `today`, `yesterday` or `last_7_days` in the store time zone (`Asia/Kolkata` locally), or `after`/`before` as ISO 8601 date-times with a zone, such as `2026-10-18T00:00:00+05:30`. | No |
 | `get_order` | One order with items, totals, customer and payment method. | No |
 | `update_order_status` | Changes an order's status (`processing`, `completed`, `cancelled` ...). | **Yes** |
 | `ping` | Returns `ok` and the server time. Does not touch WooCommerce. | No |
@@ -520,6 +526,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 - `up.ps1` says "previous install did not complete", or stops with a pending Helm operation: [troubleshooting](troubleshooting.md#upps1-says-previous-install-did-not-complete)
 - `mcp-woocommerce` pod in `ErrImageNeverPull` / `ImagePullBackOff`: [troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)
 - `mcp-woocommerce` pod in `CrashLoopBackOff` with an environment message: [troubleshooting](troubleshooting.md#mcp-woocommerce-crashloopbackoff-with-an-environment-variable-message)
-- The MCP server answers 401: [troubleshooting](troubleshooting.md#the-mcp-server-answers-401-unauthorized); 403 Invalid Host: [troubleshooting](troubleshooting.md#the-mcp-server-answers-403-invalid-host); a tool says WooCommerce 401 Invalid signature: [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature); a tool times out: [troubleshooting](troubleshooting.md#an-mcp-tool-times-out); port 13001 busy: [troubleshooting](troubleshooting.md#the-port-forward-port-13001-is-already-in-use); Inspector oddities: [libuv assertion](troubleshooting.md#inspector-prints-a-libuv-assertion-at-the-end-windows), [string vs number](troubleshooting.md#inspector-cli-says-expected-string-received-number)
+- The MCP server answers 401: [troubleshooting](troubleshooting.md#the-mcp-server-answers-401-unauthorized); 403 Invalid Host: [troubleshooting](troubleshooting.md#the-mcp-server-answers-403-invalid-host); a tool says WooCommerce 401 Invalid signature: [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature); a tool times out: [troubleshooting](troubleshooting.md#an-mcp-tool-times-out); port 13001 busy: [troubleshooting](troubleshooting.md#the-port-forward-port-13001-is-already-in-use); Inspector oddities: [libuv assertion](troubleshooting.md#inspector-prints-a-libuv-assertion-at-the-end-windows); a price is refused: [troubleshooting](troubleshooting.md#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
+- `check-mcp-woocommerce.ps1` says `Dependencies not installed`, or Node says `Cannot find package '@modelcontextprotocol/client'`: [troubleshooting](troubleshooting.md#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
 - The store-setup Job fails with `missing urumi_managed_key_owner marker`: [troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
 - Port 80 in use, pods not ready, setup Job failed and the rest: the full list at the top of [troubleshooting.md](troubleshooting.md).

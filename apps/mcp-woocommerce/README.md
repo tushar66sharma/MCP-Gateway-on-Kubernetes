@@ -10,14 +10,27 @@ All inputs are validated with zod before the handler runs. Results carry both `c
 
 | Tool | Input | Notes |
 |---|---|---|
-| `list_products` | `search?` (max 100 chars), `status?` (`publish`, `draft`, `pending`, `private`, `any`; default `any`), `page?` (default 1), `per_page?` (1-50, default 20) | Returns id, name, status, price, regular_price, stock_status, permalink. |
-| `create_product` | `name` (1-200 chars), `regular_price` (string like `"12"` or `"12.50"`), `description?`, `status?` (`publish` or `draft`, default `publish`) | Creates a simple product. **Not idempotent**: calling twice creates two products. |
-| `list_orders` | `period?` (`today`, `yesterday`, `last_7_days`) **or** `after?`/`before?` (ISO 8601 with offset), `status?`, `page?`, `per_page?` (1-50) | Newest first. `period` is computed in `STORE_TIMEZONE`, and the result echoes the UTC range used. Giving both `period` and `after`/`before` is rejected. |
-| `get_order` | `order_id` | Line items, totals, billing name and email, payment method, dates. |
-| `update_order_status` | `order_id`, `status` (`pending`, `processing`, `on-hold`, `completed`, `cancelled`, `refunded`, `failed`) | A write. |
+| `list_products` | `search?` (max 100 chars), `status?` (`publish`, `draft`, `pending`, `private`, `any`; default `any`), `page?` (1-1000, default 1), `per_page?` (1-50, default 10) | Returns id, name, status, price, regular_price, stock_status, permalink. |
+| `create_product` | `name` (1-200 chars), `regular_price` (a string like `"12"` or `"12.50"`, or a JSON number like `12.5`; non-negative, at most 2 decimals), `description?`, `status?` (`publish` or `draft`, default `publish`) | Creates a simple product. Numbers are sent to WooCommerce as 2-decimal strings (`12.5` becomes `"12.50"`); a value such as `12.555` is refused, not rounded. **Not idempotent**: calling twice creates two products. |
+| `list_orders` | `period?` (`today`, `yesterday`, `last_7_days`) **or** `after?`/`before?` (ISO 8601 date-time with `Z` or an offset, e.g. `2026-10-18T00:00:00+05:30`; a bare date is refused), `status?`, `page?` (1-1000), `per_page?` (1-50, default 10) | Newest first. `period` is computed in `STORE_TIMEZONE`, and the result echoes the UTC `range` used. Giving both `period` and `after`/`before` is rejected. The bounds go to WooCommerce as UTC **without** a zone suffix plus `dates_are_gmt=true`, because WordPress would otherwise shift a `Z` bound into site-local time ([workflows, section 6](../../docs/workflows.md#6-mcp-tool-call-to-the-store)). |
+| `get_order` | `order_id` (1-2147483647) | Line items, totals, billing name and email, payment method, dates. |
+| `update_order_status` | `order_id` (1-2147483647), `status` (`pending`, `processing`, `on-hold`, `completed`, `cancelled`, `refunded`, `failed`) | A write. |
 | `ping` | none | Returns `ok` and the server time. Does not call WooCommerce. |
 
 Tool names match `^[a-z_]{1,40}$` because the gateway will later prefix them with `woo__`. Descriptions are kept short on purpose; every description is sent to the LLM.
+
+### Token budget (Phase 4)
+
+The Phase 4 agent runs on Groq's free tier (8K tokens per minute), and the whole tool list is sent with every model call. So the schemas avoid long regular expressions (format checks run as zod `refine` steps, which the server enforces but the JSON Schema does not carry), every integer has an explicit bound (otherwise zod emits `maximum: 9007199254740991`), the text result is compact JSON, and lists default to 10 items.
+
+Measured on the real `tools/list` response of the deployed server through the SDK client, 2026-10-19 (tokens estimated as characters / 3.5):
+
+| | `tools/list` result | Largest tool (`list_orders`) |
+|---|---|---|
+| Before the final-review fixes | 3,569 characters, about 1,020 tokens | 1,356 characters |
+| **Now: the WooCommerce share of the Phase 4 budget** | **3,004 characters, about 860 tokens** | 837 characters |
+
+A default `list_orders` result (10 orders) is now about 1,670 characters of text, about 480 tokens. If the gateway forwards both `content` and `structuredContent` to the model, results count twice. Each tool schema still carries the SDK's `"$schema"` URL (about 50 characters); the gateway could drop it when it builds its catalogue (not done here).
 
 ## Configuration (environment variables)
 
@@ -34,7 +47,7 @@ Read by `src/config.ts`. A missing or invalid variable stops the process at star
 | `STORE_TIMEZONE` | no | `UTC` | IANA time zone used to compute `today`, `yesterday` and `last_7_days`. The chart passes `storeSetup.timezone` (`Asia/Kolkata` locally). An invalid zone is rejected at start. |
 | `WOO_TIMEOUT_MS` | no | `10000` | Per-request timeout for WooCommerce calls (1000-60000). |
 | `LOG_LEVEL` | no | `info` | pino log level. |
-| `MCP_ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | Comma-separated **hostnames, without ports**, accepted in the `Host` header of `/mcp` requests (DNS-rebinding defence in depth). The SDK compares hostnames only, so a port in an entry is stripped. The chart sets the Service names (`mcp-woocommerce`, `mcp-woocommerce.mcp`, `.mcp.svc`, `.mcp.svc.cluster.local`) plus `localhost` and `127.0.0.1`. Anything else gets `403`. `/healthz` and `/readyz` are never host-checked. |
+| `MCP_ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | Comma-separated **hostnames, without ports**, accepted in the `Host` header of `/mcp` requests (DNS-rebinding defence in depth). The SDK compares hostnames only, so a port in an entry is stripped, and entries are lowercased (the SDK compares the lowercase hostname). A list with no usable entry stops the server at start. The chart sets the Service names (`mcp-woocommerce`, `mcp-woocommerce.mcp`, `.mcp.svc`, `.mcp.svc.cluster.local`) plus `localhost` and `127.0.0.1`. Anything else gets `403`. `/healthz` and `/readyz` are never host-checked. |
 
 The server never calls WooCommerce at startup or in `/readyz`, so a fresh install does not deadlock while the store is still being set up.
 
@@ -79,12 +92,12 @@ npm start -w @urumi/mcp-woocommerce          # listens on http://127.0.0.1:3001/
 From the repository root:
 
 ```powershell
-npm test               # all workspaces (57 tests when last run, Task 2.6)
+npm test               # all workspaces (2026-10-19: 33 shared + 77 mcp-woocommerce tests)
 npm run typecheck
 npm run lint
 ```
 
-What the tests cover: the OAuth1 signer against a known-answer vector produced by an independent PHP implementation, the WooCommerce client (error mapping, timeouts, redirects, credential redaction), `resolvePeriod` (including the `Asia/Kolkata` boundaries), every tool with a fake `WooApi`, config validation, and the whole server over HTTP with the real SDK client (bearer auth, Host check, probes).
+What the tests cover: the OAuth1 signer against a known-answer vector produced by an independent PHP implementation, the WooCommerce client (error mapping, timeouts, redirects, credential redaction, error-code sanitising), `resolvePeriod` (including the `Asia/Kolkata` boundaries), every tool with a fake `WooApi` (including date bounds sent without `Z` or an offset, and string or number prices), config validation, and the whole server over HTTP with the real SDK client (bearer auth, Host check, probes, schema size: no `pattern`, no 2^53-1 bounds).
 
 End-to-end check against the running cluster (real WooCommerce): `scripts\check-mcp-woocommerce.ps1` (read-only) or with `-Write` (creates a **draft** product and re-saves an order's status). See the run guide.
 
@@ -99,7 +112,7 @@ Decision record: [ADR-005](../../docs/decisions/ADR-005-woocommerce-rest-oauth1.
 - **The timestamp window is plus or minus 15 minutes.** If the clock of the machine running Docker drifts (typical after the laptop sleeps), WooCommerce answers `401`, which looks like a signature problem. Fix: restart Docker Desktop or run `wsl --shutdown`.
 - **A fresh nonce for every request, and no retries.** WooCommerce stores used nonces, so replaying a request fails. `create_product` is also not idempotent, so a retry could create a duplicate. The server therefore never retries; one timeout (`WOO_TIMEOUT_MS`) applies per request, and the model or user decides whether to try again.
 - **Redirects are not followed.** A `3xx` (for example a wrong URL scheme being redirected) becomes a clear tool error instead of a silent re-request with a stale signature.
-- **Errors never contain credentials.** WooCommerce error text is scrubbed of `oauth_*` parameters and of the configured key and secret before it reaches a tool result or a log line.
+- **Errors never contain credentials.** WooCommerce error text is scrubbed of `oauth_*` parameters and of the configured key and secret before it reaches a tool result or a log line. The error `code` from WooCommerce's JSON is scrubbed the same way, then limited to `[a-z0-9_]` and 64 characters.
 
 ## Layout
 

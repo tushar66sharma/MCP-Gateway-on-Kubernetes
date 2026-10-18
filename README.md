@@ -66,7 +66,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1            # 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
 ```
 
-Check the MCP server end to end with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1` (read-only; it lists the 6 tools and calls a few). It is internal-only, so there is no URL; see the [run guide](docs/run-guide.md#8-woocommerce-mcp-server-phase-2) for exploring it with MCP Inspector.
+Check the MCP server end to end with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1` (read-only; it lists the 6 tools and calls a few). The check runs a small Node client on your PC, so it needs Node 24 and, once, `npm ci` from the repository root ([run guide, section 2](docs/run-guide.md#2-prerequisites-and-one-time-setup)). It is internal-only, so there is no URL; see the [run guide](docs/run-guide.md#8-woocommerce-mcp-server-phase-2) for exploring it with MCP Inspector.
 
 Pause with `scripts\stop.ps1` (keeps your data). The complete beginner guide (daily use, customer accounts, viewing the database, resetting) is the [run guide](docs/run-guide.md).
 

@@ -150,6 +150,8 @@ Other verified behaviour:
 
 **How each one was proven:** it was copied out of this ADR by a script into `adr/snippet-N.ts` in the scratch spike, typechecked, run, and probed. The typecheck was `tsc` 6.0.3 with `strict`, `noUncheckedIndexedAccess`, `NodeNext`, `types: ["node"]`, `verbatimModuleSyntax` and `erasableSyntaxOnly`. Each one ran on Node 24.0.1 with `node --no-warnings adr/snippet-N.ts`, against the packages in the table above. The "Proof" line under each snippet names the command and the observed output.
 
+**Change after the spike (Phase 2 final review, 2026-10-19).** The `MCP_ALLOWED_HOSTS` line of snippets 4 and 4b now drops empty entries, lowercases them and throws on an empty list, like `apps/mcp-woocommerce/src/config.ts` and `normalizeHosts` in `packages/shared`. All five snippets were re-extracted with the same script and typechecked again. Snippet 4b was re-run: with `MCP_ALLOWED_HOSTS="LocalHost,,127.0.0.1,"` an `initialize` to `localhost` got 200 and `Host: evil.example` got 403; with `" , ,"` it stopped with `MCP_ALLOWED_HOSTS lists no host`. Snippet 4 was typechecked but not re-run (it needs an upstream server).
+
 ### 1. Imports
 
 ```ts
@@ -290,7 +292,10 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 
 const PREFIX = 'woo__';
 const UPSTREAM_URL = process.env.UPSTREAM_URL ?? 'http://localhost:3001/mcp';
-const allowedHosts = (process.env.MCP_ALLOWED_HOSTS ?? 'localhost,127.0.0.1').split(',').map((h) => h.trim());
+// Drop empty entries ("a,,b" or a trailing comma) and lowercase: the SDK compares the lowercase hostname.
+const allowedHosts = (process.env.MCP_ALLOWED_HOSTS ?? 'localhost,127.0.0.1')
+  .split(',').map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
+if (allowedHosts.length === 0) throw new Error('MCP_ALLOWED_HOSTS lists no host');
 
 // Long-lived upstream client; concurrent callTool calls are multiplexed on it.
 const upstream = new Client({ name: 'mcp-gateway', version: '0.1.0' }, { versionNegotiation: { mode: 'auto' } });
@@ -392,7 +397,10 @@ function buildServer(): McpServer {
   return server;
 }
 
-const allowedHosts = (process.env.MCP_ALLOWED_HOSTS ?? 'localhost,127.0.0.1').split(',').map((h) => h.trim());
+// Drop empty entries ("a,,b" or a trailing comma) and lowercase: the SDK compares the lowercase hostname.
+const allowedHosts = (process.env.MCP_ALLOWED_HOSTS ?? 'localhost,127.0.0.1')
+  .split(',').map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0);
+if (allowedHosts.length === 0) throw new Error('MCP_ALLOWED_HOSTS lists no host');
 const handler = toNodeHandler(createMcpHandler(buildServer));
 const app = express();
 app.all('/mcp', hostHeaderValidation(allowedHosts), express.json({ limit: '1mb' }), (req, res) => {

@@ -53,7 +53,8 @@ helm status urumi -n urumi-system
 - [The port-forward port (13001) is already in use](#the-port-forward-port-13001-is-already-in-use)
 - [The store-setup Job fails with `missing urumi_managed_key_owner marker`](#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
 - [Inspector prints a libuv assertion at the end (Windows)](#inspector-prints-a-libuv-assertion-at-the-end-windows)
-- [Inspector CLI says `expected string, received number`](#inspector-cli-says-expected-string-received-number)
+- [`create_product` says `regular_price must be non-negative with at most 2 decimals`](#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
+- [The MCP check says `Dependencies not installed` or `Cannot find package '@modelcontextprotocol/client'`](#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
 - [PowerShell gotchas with kubectl](#powershell-gotchas-with-kubectl)
 
 ---
@@ -497,7 +498,7 @@ kubectl -n mcp port-forward svc/mcp-woocommerce 23001:3001      # or pick anothe
 
 Delete it in wp-admin (it is the safest way, because WordPress cleans up its other tables), then run `up.ps1 -Redeploy`; the Job creates a fresh, marked `urumi-mcp`.
 
-**Fix, case 2: the account is legitimately yours** (for example you created `urumi-mcp` by hand, or the store was installed **before this marker existed**; see the upgrade note below). Add the marker. The `wordpress` image has no WP-CLI, so use a small PHP script through `kubectl exec` (this is the method used in Task 2.5; the snippet below is adapted from it and was **not re-run exactly as written**):
+**Fix, case 2: the account is legitimately yours** (for example you created `urumi-mcp` by hand, or the store was installed from the intermediate Phase 2 commit **before this marker existed**; see the upgrade note below). Add the marker. The `wordpress` image has no WP-CLI, so use a small PHP script through `kubectl exec` (this is the method used in Task 2.5; the snippet below is adapted from it and was **not re-run exactly as written**):
 
 ```powershell
 @'
@@ -512,7 +513,7 @@ echo 'marker=' . get_user_meta($u->ID, 'urumi_managed_key_owner', true) . "\n";
 
 It should print `marker=1`. Then run `up.ps1 -Redeploy`. Check that you really own the account first (role, e-mail) before adding the marker; the marker is what tells setup to trust it.
 
-**Upgrade note: stores installed before the marker existed.** Before the Phase 2 key-owner fix (Task 2.5), setup created `urumi-mcp` without a marker. If you installed the store earlier and upgrade, the Job will refuse until you add the marker with the case 2 script. A fresh install and any store first set up after the fix need nothing. The reference cluster was migrated this way during Task 2.5 (`marker=1`, then a clean redeploy).
+**Upgrade note: who needs the marker.** A store upgraded from **Phase 1** (`main`) never had a `urumi-mcp` user: its API key was owned by `admin`. On upgrade the Job creates and marks `urumi-mcp` and moves the key to it, so there is nothing to do (from reading the Job's code; the reviewer confirmed this path). A fresh install needs nothing either. Only a store installed from the **intermediate Phase 2 commit** that created `urumi-mcp` before the marker existed (Task 2.5, before its security fix) has an unmarked user; there the Job refuses until you add the marker with the case 2 script. In practice that was only the reference cluster, which was migrated this way during Task 2.5 (`marker=1`, then a clean redeploy).
 
 ## Inspector prints a libuv assertion at the end (Windows)
 
@@ -520,13 +521,27 @@ It should print `marker=1`. Then run `up.ps1 -Redeploy`. Check that you really o
 
 **Cause and fix.** A cosmetic teardown problem of Node on Windows inside the Inspector, **not** a server fault (**observed** in Task 2.4 after an `isError` call). The printed result is valid; ignore the message. Nothing to fix.
 
-## Inspector CLI says `expected string, received number`
+## `create_product` says `regular_price must be non-negative with at most 2 decimals`
 
-**Symptom.** `--tool-arg regular_price=12.50` returns an `isError` result: `Input validation error ... regular_price: Invalid input: expected string, received number` (**observed** 2026-10-19).
+**Symptom.** `create_product` returns an `isError` result: `Input validation error ... regular_price: regular_price must be non-negative with at most 2 decimals, like "12", "12.50" or 12.5`.
 
-**Cause.** The Inspector CLI converts numeric-looking values to numbers, but `create_product` requires the price as a **string** (to avoid floating-point rounding).
+**Cause.** The price had more than 2 decimals (`12.555`), was negative, or was not a number at all (`"abc"`). The server refuses such values instead of rounding them, so a price is never silently changed. A JSON number is fine: the Inspector CLI turns `--tool-arg regular_price=12.50` into the number 12.5, and the server stores it as `"12.50"` (**verified** 2026-10-19 from Git Bash; until the Phase 2 final fixes, numbers were refused with `expected string, received number`, and quoting the value was needed).
 
-**Fix.** Quote the value as JSON so it stays a string. From Git Bash: `--tool-arg 'regular_price="12.50"'` (**verified**). In Windows PowerShell 5.1 the inner quotes need escaping, `'regular_price=\"12.50\"'` (**expected; not tested**). Or use the Inspector web UI and type the JSON `{"name":"Demo Mug","regular_price":"12.50"}`.
+**Fix.** Send a price such as `12`, `12.5`, `"12.50"` or `12.50`.
+
+## The MCP check says `Dependencies not installed` or `Cannot find package '@modelcontextprotocol/client'`
+
+**Symptom.** `scripts\check-mcp-woocommerce.ps1` stops at once with `ERROR: Dependencies not installed: run npm ci from the repository root (needs Node 24), then run this again.` (**verified** 2026-10-19 by hiding the package). Running `node scripts/dev/mcp-smoke.mjs` by hand on a fresh clone instead fails with `ERR_MODULE_NOT_FOUND` / `Cannot find package '@modelcontextprotocol/client'` (**expected**; this is Node's standard message for a missing package).
+
+**Cause.** The check runs a small MCP client on your PC, and it imports the MCP SDK from the repository's `node_modules` folder. `up.ps1` installs packages only inside the Docker image build, never on your PC, so a fresh clone has no `node_modules`.
+
+**Fix.** Install Node 24 if `node -v` does not print `v24.` something ([run guide, section 2](run-guide.md#2-prerequisites-and-one-time-setup)), then once, from the repository root:
+
+```powershell
+npm ci
+```
+
+Run the check again.
 
 ## PowerShell gotchas with kubectl
 
