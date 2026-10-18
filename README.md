@@ -2,7 +2,7 @@
 
 A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platform admins register MCP servers once; team members then use all of their tools through a single gateway endpoint and a dashboard chat agent. The whole platform is deployed with one Helm chart to a local k3d cluster or a single-node k3s VPS.
 
-> **Status: under construction.** Phase 0 scaffolding is in progress. See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: under construction.** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 ## 1. Project Name and Overview
 

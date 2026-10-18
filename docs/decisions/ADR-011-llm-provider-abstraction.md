@@ -29,7 +29,8 @@ Such limits can change; they must be re-checked before relying on them.
 - **Provider-specific SDKs.** Rejected: they tie business logic to one vendor and break the "switch by configuration" rule.
 - **Gemini.** Excluded by project rule.
 - **A single provider with no fallback.** Rejected: free-tier rate limits make a 429 during a demo likely enough to want a second route.
-- **A paid or self-hosted model.** Rejected: the project must not depend on paid services.
+- **A paid model.** Rejected: CLAUDE.md requires free-tier API providers, so the project must not depend on paid services.
+- **A self-hosted model.** Rejected: a model large enough to call tools reliably needs far more RAM than the roughly 9 GB budget the whole cluster shares (see the [setup log](../learning/00-setup-log.md)), and CLAUDE.md asks for free-tier API providers rather than self-hosted inference.
 - **Generic LLM-gateway libraries.** Not chosen: a ~one-file adapter is all two OpenAI-compatible providers need.
 
 ## Consequences/trade-offs

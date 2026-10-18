@@ -10,7 +10,7 @@ Accepted
 
 ## Context
 
-CLAUDE.md section 6 asks us to design for free-tier hosting such as Vercel or Render. The assignment, however, requires that everything runs in Kubernetes and is deployable to a k3s VPS with the same Helm chart. Vercel and Render cannot host that: neither gives us a Kubernetes cluster, and the store needs stateful MariaDB and WordPress with persistent volumes, plus NetworkPolicies and a Helm release. The assignment requirement is the binding one, so the CLAUDE.md suggestion conflicts and is not followed.
+CLAUDE.md section 6 asks us to design for free-tier hosting such as Vercel or Render. The assignment, however, requires that everything runs in Kubernetes and is deployable to a k3s VPS with the same Helm chart. Vercel and Render cannot host that: neither offers Kubernetes, and their free tiers have no persistent disks (Render's persistent disks are paid-only), while the store needs stateful MariaDB and WordPress with persistent volumes, plus NetworkPolicies and a Helm release. The assignment requirement is the binding one, so the CLAUDE.md suggestion conflicts and is not followed.
 
 The project owner currently has no VPS, so an actual production deployment is not possible.
 
@@ -22,7 +22,7 @@ The project owner currently has no VPS, so an actual production deployment is no
 
 ## Alternatives considered
 
-- **Vercel or Render for the whole stack.** Rejected: no Kubernetes, no suitable stateful workloads with volumes, and not what the assignment asks for.
+- **Vercel or Render for the whole stack.** Rejected: no Kubernetes, no persistent disks on the free tiers (Render's persistent disks are paid-only), and not what the assignment asks for. The decisive reason is the assignment's Kubernetes/Helm requirement.
 - **Vercel/Render for the dashboard only, cluster for the rest.** Rejected: it would split the deployment, break "one Helm chart", and add CORS and cross-origin cookie complexity (the dashboard talks to `/api` on the same origin).
 - **A managed Kubernetes service.** Rejected as the default: not free in general, and k3s on a VPS matches the local k3d setup (ADR-002).
 - **Pretending validation equals deployment.** Rejected: the documentation must state exactly what was verified.

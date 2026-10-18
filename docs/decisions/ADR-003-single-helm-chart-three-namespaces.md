@@ -23,7 +23,7 @@ The platform has three trust zones: `store` (WordPress, MariaDB, setup Job), `mc
 ## Alternatives considered
 
 - **Several charts or an umbrella chart with subcharts.** Rejected: the pieces share Secrets across namespaces (for example the WooCommerce API key is rendered into both `store` and `mcp`) and NetworkPolicies reference each other, so splitting forces version coordination and value duplication without any benefit at this size.
-- **Creating namespaces with `--create-namespace` or by hand.** Rejected: the namespaces would not be part of the release, so the chart could not guarantee the labels and policies it needs.
+- **Creating the `store`, `mcp` and `gateway` namespaces with `--create-namespace` or by hand.** Rejected: those namespaces would not be part of the release, so the chart could not guarantee the labels and policies it needs. Note that the Decision's own command still uses `--create-namespace`, but only for the *release* namespace `urumi-system` (where Helm stores the release record); the three workload namespaces are chart-owned `Namespace` objects in `templates/namespaces.yaml`.
 - **Plain manifests or Kustomize overlays.** Rejected: the assignment explicitly asks for Helm, and we need templating for generated secrets and per-environment values.
 
 ## Consequences/trade-offs
