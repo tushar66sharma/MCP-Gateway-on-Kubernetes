@@ -26,7 +26,10 @@ function localCalendarDate(instant: number, timeZone: string): { y: number; m: n
   return { y: get('year'), m: get('month'), d: get('day') };
 }
 
-/** [after, before) bounds of a period in the store's time zone, as UTC ISO strings. */
+/**
+ * [after, before) bounds of a period in the store's time zone, as UTC ISO strings with Z.
+ * Not sent to WooCommerce as-is: list_orders converts them to naive UTC (toWooGmt) for dates_are_gmt.
+ */
 export function resolvePeriod(period: Period, timeZone: string, now: Date = new Date()): { after: string; before: string } {
   const { y, m, d } = localCalendarDate(now.getTime(), timeZone);
   const dayStart = (offsetDays: number): number => {

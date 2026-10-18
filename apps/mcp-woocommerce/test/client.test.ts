@@ -116,6 +116,21 @@ describe('WooClient', () => {
     expectNoSecrets(e);
   });
 
+  it('constrains the server error code to [a-z0-9_], caps it at 64 chars and redacts credentials', async () => {
+    const code = `Bad Code <script>${consumerSecret}/${consumerKey}${'x'.repeat(200)}`;
+    const { client } = make(() => json(JSON.stringify({ code, message: 'nope' }), 400));
+    const e = await failure(client.get('/products'));
+    expect(e.code).toMatch(/^[a-z0-9_]{1,64}$/);
+    expect(e.code.startsWith('bad_code__script__redacted___redacted_')).toBe(true);
+    expect(e.code).not.toContain(consumerSecret.toLowerCase());
+    expect(e.code).not.toContain(consumerKey.toLowerCase());
+  });
+
+  it('falls back to unknown_error when the server code is empty', async () => {
+    const { client } = make(() => json(JSON.stringify({ code: '', message: 'nope' }), 400));
+    expect((await failure(client.get('/products'))).code).toBe('unknown_error');
+  });
+
   it('maps an HTML 500 to http_500 with a bounded message', async () => {
     const { client } = make(() => Promise.resolve(new Response(`<html>${'x'.repeat(5000)}</html>`, { status: 500 })));
     const e = await failure(client.get('/products'));

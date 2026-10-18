@@ -9,8 +9,8 @@ export const listProducts = defineTool({
   inputSchema: z.object({
     search: z.string().max(100).optional(),
     status: z.enum(['publish', 'draft', 'pending', 'private', 'any']).default('any'),
-    page: z.number().int().min(1).default(1),
-    per_page: z.number().int().min(1).max(50).default(20),
+    page: z.number().int().min(1).max(1000).default(1),
+    per_page: z.number().int().min(1).max(50).default(10),
   }),
   handler: async ({ search, status, page, per_page }, { woo }) => {
     try {

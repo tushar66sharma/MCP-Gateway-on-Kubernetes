@@ -68,14 +68,23 @@ describe('list_products', () => {
     expect(woo.calls).toHaveLength(1);
     expect(woo.calls[0]?.method).toBe('GET');
     expect(woo.calls[0]?.path).toBe('/products');
-    expect(woo.calls[0]?.query).toMatchObject({ per_page: 20, page: 1 });
+    expect(woo.calls[0]?.query).toMatchObject({ per_page: 10, page: 1 });
     expect(woo.calls[0]?.query).not.toHaveProperty('status');
     const products = res.structuredContent?.products as Record<string, unknown>[];
     expect(Object.keys(products[0] ?? {}).sort()).toEqual(
       ['id', 'name', 'permalink', 'price', 'regular_price', 'status', 'stock_status'],
     );
-    expect(res.structuredContent).toMatchObject({ page: 1, per_page: 20 });
+    expect(res.structuredContent).toMatchObject({ page: 1, per_page: 10 });
     expect(res.isError).toBeUndefined();
+  });
+
+  it('returns compact JSON text (no indentation) to save model tokens', async () => {
+    const { deps } = setup(() => [rawProduct]);
+    const res = await run('list_products', {}, deps);
+    const [summary, json, ...rest] = (res.content[0]?.text ?? '').split('\n');
+    expect(summary).toBe('Found 1 product(s) on page 1.');
+    expect(rest).toEqual([]);
+    expect(json).toBe(JSON.stringify(res.structuredContent));
   });
 
   it('passes search and a concrete status through', async () => {
@@ -101,9 +110,24 @@ describe('create_product', () => {
     expect((res.structuredContent?.product as Record<string, unknown>).id).toBe(7);
   });
 
-  it.each(['-1', '12.505', 'abc'])('rejects regular_price %s', (price) => {
-    expect(tool('create_product').inputSchema.safeParse({ name: 'x', regular_price: price }).success).toBe(false);
+  it.each([
+    [12.5, '12.50'],
+    ['12.50', '12.50'],
+    ['12', '12'],
+    [7, '7.00'],
+    [0, '0.00'],
+  ])('accepts regular_price %j and sends %j', async (price, sent) => {
+    const { woo, deps } = setup(() => rawProduct);
+    await run('create_product', { name: 'Mug', regular_price: price }, deps);
+    expect((woo.calls[0]?.body as { regular_price: unknown }).regular_price).toBe(sent);
   });
+
+  it.each([12.555, -1, '-1', '12.505', 'abc', 0.1 + 0.2, Number.NaN, Number.POSITIVE_INFINITY, 1e21])(
+    'rejects regular_price %j',
+    (price) => {
+      expect(tool('create_product').inputSchema.safeParse({ name: 'x', regular_price: price }).success).toBe(false);
+    },
+  );
 });
 
 describe('list_orders', () => {
@@ -111,9 +135,10 @@ describe('list_orders', () => {
     const { woo, deps } = setup(() => [rawOrder], 'Asia/Kolkata');
     const res = await run('list_orders', { period: 'today' }, deps);
     expect(woo.calls[0]?.path).toBe('/orders');
+    // Naive UTC strings: WP_Date_Query would shift a Z/offset string into site-local time.
     expect(woo.calls[0]?.query).toMatchObject({
-      after: '2026-10-18T18:30:00.000Z', before: '2026-10-19T18:30:00.000Z',
-      dates_are_gmt: true, per_page: 20, page: 1, orderby: 'date', order: 'desc',
+      after: '2026-10-18T18:30:00', before: '2026-10-19T18:30:00',
+      dates_are_gmt: true, per_page: 10, page: 1, orderby: 'date', order: 'desc',
     });
     expect(woo.calls[0]?.query).not.toHaveProperty('status');
     expect(res.structuredContent?.range).toEqual({
@@ -126,10 +151,34 @@ describe('list_orders', () => {
     });
   });
 
-  it('passes explicit after/before and status', async () => {
+  it('sends no Z and no +hh:mm offset in the WooCommerce date bounds', async () => {
+    const cases: Record<string, string>[] = [
+      { period: 'today' }, { period: 'yesterday' }, { period: 'last_7_days' },
+      { after: '2026-10-01T00:00:00+05:30', before: '2026-10-02T00:00:00Z' },
+    ];
+    for (const args of cases) {
+      const { woo, deps } = setup(() => [], 'Asia/Kolkata');
+      await run('list_orders', args, deps);
+      for (const key of ['after', 'before'] as const) {
+        const v = String(woo.calls[0]?.query?.[key]);
+        expect(v).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
+        expect(v).not.toMatch(/[zZ]|[+-]\d\d:\d\d$/);
+      }
+    }
+  });
+
+  it('normalises explicit after/before to UTC and reports the UTC window', async () => {
     const { woo, deps } = setup(() => []);
-    await run('list_orders', { after: '2026-10-01T00:00:00Z', status: 'completed' }, deps);
-    expect(woo.calls[0]?.query).toMatchObject({ after: '2026-10-01T00:00:00Z', status: 'completed', dates_are_gmt: true });
+    const res = await run('list_orders', { after: '2026-10-01T00:00:00+05:30', status: 'completed' }, deps);
+    expect(woo.calls[0]?.query).toMatchObject({ after: '2026-09-30T18:30:00', status: 'completed', dates_are_gmt: true });
+    expect(woo.calls[0]?.query).not.toHaveProperty('before');
+    expect(res.structuredContent?.range).toEqual({ after: '2026-09-30T18:30:00.000Z' });
+  });
+
+  it('drops milliseconds from explicit bounds', async () => {
+    const { woo, deps } = setup(() => []);
+    await run('list_orders', { before: '2026-10-01T10:20:30.999Z' }, deps);
+    expect(woo.calls[0]?.query).toMatchObject({ before: '2026-10-01T10:20:30' });
   });
 
   it('rejects period together with after', () => {
@@ -139,7 +188,20 @@ describe('list_orders', () => {
 
   it('rejects an unknown status and bad datetimes', () => {
     expect(tool('list_orders').inputSchema.safeParse({ status: 'shipped' }).success).toBe(false);
-    expect(tool('list_orders').inputSchema.safeParse({ after: 'yesterday-ish' }).success).toBe(false);
+    for (const after of ['yesterday-ish', '2026-10-18', '2026-10-18T00:00:00', '2026-13-01T00:00:00Z', '2026-10-18T00:00:00+0530']) {
+      expect(tool('list_orders').inputSchema.safeParse({ after }).success, after).toBe(false);
+    }
+  });
+
+  it('accepts date-times with Z, lowercase z, an offset, and without seconds', () => {
+    for (const after of ['2026-10-18T00:00:00Z', '2026-10-18T00:00:00z', '2026-10-18T00:00:00+05:30', '2026-10-18T00:00-04:00', '2026-10-18T00:00:00.123Z']) {
+      expect(tool('list_orders').inputSchema.safeParse({ after }).success, after).toBe(true);
+    }
+  });
+
+  it('bounds page at 1000', () => {
+    expect(tool('list_orders').inputSchema.safeParse({ page: 1001 }).success).toBe(false);
+    expect(tool('list_products').inputSchema.safeParse({ page: 1001 }).success).toBe(false);
   });
 });
 

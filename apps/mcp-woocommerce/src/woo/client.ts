@@ -80,7 +80,7 @@ export class WooClient implements WooApi {
     }
     if (!res.ok) {
       const obj = (data ?? {}) as { code?: unknown; message?: unknown };
-      const code = typeof obj.code === 'string' ? obj.code : `http_${res.status}`;
+      const code = typeof obj.code === 'string' ? this.safeCode(obj.code) : `http_${res.status}`;
       const message = typeof obj.message === 'string'
         ? this.redact(obj.message)
         : `HTTP ${res.status}: ${this.redact(text).slice(0, 120)}`;
@@ -88,6 +88,12 @@ export class WooClient implements WooApi {
     }
     if (data === undefined) throw new WooApiError('WooCommerce returned a non-JSON response', res.status, 'bad_response');
     return data as T;
+  }
+
+  /** The server's error code may reach the model or logs: redact, keep only [a-z0-9_], cap at 64 chars. */
+  private safeCode(code: string): string {
+    const out = this.redact(code).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 64);
+    return out.length > 0 ? out : 'unknown_error';
   }
 
   /** Strips OAuth params and the configured credentials from text that may echo the signed URL. */

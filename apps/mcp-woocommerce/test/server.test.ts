@@ -59,6 +59,28 @@ describe('mcp-woocommerce over HTTP', () => {
     );
   });
 
+  it('keeps the tool schemas small: no regex pattern, no 2^53-1 bounds, price as string or number', async () => {
+    const c = await connect();
+    const { tools } = await c.listTools();
+    const json = JSON.stringify(tools);
+    expect(json).not.toContain('"pattern"');
+    expect(json).not.toContain('9007199254740991');
+    const props = (name: string): Record<string, Record<string, unknown>> =>
+      (tools.find((t) => t.name === name)?.inputSchema.properties ?? {}) as Record<string, Record<string, unknown>>;
+    expect(props('list_orders').after).toMatchObject({ type: 'string' });
+    expect(String(props('list_orders').after?.description)).toContain('offset');
+    expect(props('list_orders').per_page).toMatchObject({ default: 10, maximum: 50 });
+    expect(props('list_products').per_page).toMatchObject({ default: 10, maximum: 50 });
+    expect(props('create_product').regular_price).toEqual({ type: ['string', 'number'] });
+  });
+
+  it('accepts a numeric regular_price over the wire and sends a 2-decimal string', async () => {
+    const c = await connect();
+    const res = await c.callTool({ name: 'create_product', arguments: { name: 'Mug', regular_price: 12.5 } });
+    expect(res.isError).toBeFalsy();
+    expect(calls[0]).toMatchObject({ method: 'POST', path: '/products', body: { regular_price: '12.50' } });
+  });
+
   it('calls list_orders with period=today and returns structured orders', async () => {
     const c = await connect();
     const res = await c.callTool({ name: 'list_orders', arguments: { period: 'today' } });
@@ -66,7 +88,7 @@ describe('mcp-woocommerce over HTTP', () => {
     const sc = res.structuredContent as { orders: { id: number }[]; range: { timeZone: string } };
     expect(sc.orders[0]?.id).toBe(15);
     expect(sc.range.timeZone).toBe('Asia/Kolkata');
-    expect(calls[0]?.query).toMatchObject({ after: '2026-10-18T18:30:00.000Z' });
+    expect(calls[0]?.query).toMatchObject({ after: '2026-10-18T18:30:00', before: '2026-10-19T18:30:00' });
   });
 
   it('returns a tool-level isError result (ADR-007) for invalid arguments and stays up', async () => {
