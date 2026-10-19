@@ -114,7 +114,7 @@ const seedServers = z
     return parsed.data satisfies SeedServer[];
   });
 
-const appSchema = z.object({
+const appFields = z.object({
   PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   LOG_LEVEL: z.string().default('info'),
   PUBLIC_APP_URL: z.url(),
@@ -129,9 +129,20 @@ const appSchema = z.object({
   SSRF_ALLOW_LOOPBACK: bool,
   UPSTREAM_HEALTH_INTERVAL_MS: intRange(15000, 1000, 300000),
   UPSTREAM_HEALTH_TIMEOUT_MS: intRange(5000, 500, 60000),
-  UPSTREAM_CALL_TIMEOUT_MS: intRange(20000, 1000, 120000),
+  // Above mcp-woocommerce's own WOO_TIMEOUT_MS (10000), so a slow store comes back as that server's
+  // clean isError instead of a gateway timeout. Enforced here too, not only by the chart schema.
+  UPSTREAM_CALL_TIMEOUT_MS: intRange(20000, 11000, 120000),
   TRUST_PROXY: intRange(0, 0, 5),
 });
+
+/** A health check must finish before the next one is due. */
+function healthTimeoutBelowInterval(v: { UPSTREAM_HEALTH_TIMEOUT_MS: number; UPSTREAM_HEALTH_INTERVAL_MS: number }, ctx: z.RefinementCtx): void {
+  if (v.UPSTREAM_HEALTH_TIMEOUT_MS >= v.UPSTREAM_HEALTH_INTERVAL_MS) {
+    ctx.addIssue({ code: 'custom', path: ['UPSTREAM_HEALTH_TIMEOUT_MS'], message: 'must be less than UPSTREAM_HEALTH_INTERVAL_MS' });
+  }
+}
+
+const appSchema = appFields.superRefine(healthTimeoutBelowInterval);
 
 // Read by `pg` itself; required here so a misconfigured pod fails at startup with the variable named.
 const pgSchema = z.object({
@@ -142,7 +153,7 @@ const pgSchema = z.object({
   PGPASSWORD: z.string().min(1),
 });
 
-const envSchema = appSchema.extend(pgSchema.shape);
+const envSchema = appFields.extend(pgSchema.shape).superRefine(healthTimeoutBelowInterval);
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // Parse once so every problem is reported together, then return only the app settings.

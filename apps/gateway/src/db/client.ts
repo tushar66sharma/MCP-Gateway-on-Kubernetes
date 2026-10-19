@@ -16,9 +16,16 @@ export interface DbHandle {
   close(): Promise<void>;
 }
 
+/**
+ * Bounds for a hung Postgres (e.g. a SYN black-hole): a connect attempt fails after 5 s instead of
+ * waiting forever (the 30 x 2 s startup retry assumes attempts fail fast, and /readyz must answer),
+ * a statement is cancelled server-side after 10 s, and idle clients are closed after 30 s.
+ */
+export const PG_POOL_OPTIONS = { max: 10, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30_000, statement_timeout: 10_000 } as const satisfies pg.PoolConfig;
+
 /** Pool configured by pg from PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD. */
 export function createPostgresHandle(logger?: Logger): DbHandle {
-  const pool = new pg.Pool({ max: 10 });
+  const pool = new pg.Pool({ ...PG_POOL_OPTIONS });
   // An idle client erroring (e.g. Postgres restarting) must not crash the process.
   // Only a code or class name is logged: the message can embed connection details.
   pool.on('error', (err) => logger?.warn({ reason: safeReason(err) }, 'postgres pool error'));

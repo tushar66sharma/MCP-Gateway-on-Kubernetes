@@ -190,6 +190,61 @@ describe('servers api', () => {
     expect((await get('/api/servers/00000000-0000-4000-8000-000000000000')).status).toBe(404);
   });
 
+  it('requires the credential again (or clearCredential) when a PATCH changes the URL origin', async () => {
+    const other = await startFakeUpstream({ name: 'other', tools: ['ping'], auth: { kind: 'bearer', token: CRED } });
+    try {
+      const { id } = (await post(valid())).body as ServerView;
+      const moved = await patch(id, { url: other.url });
+      expect(moved.status).toBe(400);
+      expect(moved.body).toMatchObject({
+        error: { code: 'VALIDATION_FAILED', message: 'changing the server URL origin requires re-entering the credential (or clearCredential: true)' },
+      });
+      const [unchanged] = await h.deps.db.db.select().from(upstreamServers).where(eq(upstreamServers.id, id));
+      expect(unchanged?.url).toBe(fake.url);
+      // Same request with the credential re-entered: accepted, and the new origin gets it.
+      const withCred = await patch(id, { url: other.url, credential: CRED });
+      expect(withCred.status).toBe(200);
+      expect(withCred.body).toMatchObject({ url: other.url, hasCredential: true, status: 'connected' });
+      // Back to the first origin, clearing the credential instead.
+      const cleared = await patch(id, { url: fake.url, credential: '', clearCredential: true });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body).toMatchObject({ url: fake.url, hasCredential: false });
+      for (const body of seen) expect(body).not.toContain(CRED);
+    } finally {
+      await other.stop();
+    }
+  });
+
+  it('keeps the credential on a path-only URL change', async () => {
+    const { id } = (await post(valid())).body as ServerView;
+    // Same scheme, host and port; '/mcp/' still reaches the fake's /mcp route.
+    const res = await patch(id, { url: `${fake.url}/` });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ url: `${fake.url}/`, hasCredential: true, status: 'connected' });
+  });
+
+  it('answers 404 and stops serving the server when a DELETE lands during a PATCH', async () => {
+    const { id } = (await post(valid())).body as ServerView;
+    const upstreams = h.deps.upstreams;
+    const realUpsert = upstreams.upsert.bind(upstreams);
+    // A DELETE handled between this PATCH's row update and its manager upsert (test-only interleaving).
+    upstreams.upsert = async (row) => {
+      await upstreams.remove(row.id);
+      await h.deps.repo.delete(row.id);
+      await realUpsert(row);
+    };
+    try {
+      const res = await patch(id, { name: 'Renamed' });
+      expect(res.status).toBe(404);
+      expect((res.body as ErrorBody).error.code).toBe('NOT_FOUND');
+    } finally {
+      upstreams.upsert = realUpsert;
+    }
+    expect(upstreams.getState(id).status).toBe('unknown');
+    expect(upstreams.listTools()).toEqual([]);
+    expect(upstreams.findTool('fake__ping')).toBeUndefined();
+  });
+
   it('drops the credential when switching to authType none', async () => {
     const { id } = (await post(valid())).body as ServerView;
     const res = await patch(id, { authType: 'none' });

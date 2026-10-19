@@ -71,6 +71,18 @@ function invalid(path: string, message: string): ApiError {
 
 const notFound = () => new ApiError(404, 'NOT_FOUND', 'Server not found');
 
+const ORIGIN_CHANGE_MESSAGE = 'changing the server URL origin requires re-entering the credential (or clearCredential: true)';
+const originChangeNeedsCredential = () => new ApiError(400, 'VALIDATION_FAILED', ORIGIN_CHANGE_MESSAGE, { issues: [{ path: 'credential', message: ORIGIN_CHANGE_MESSAGE }] });
+
+/** The stored URL's origin; null for a URL that no longer parses (then any new URL counts as a change). */
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The auth fields after a create or patch, checked as a whole: header auth needs a header name, a
  * header name only goes with header auth, and `none` carries no credential.
@@ -175,7 +187,14 @@ export function createServersRouter(deps: GatewayDeps): express.Router {
     // Switching away from header auth drops the stored header name; a header name sent with it is an error.
     const nextHeaderName = nextAuthType === 'header' ? (body.authHeaderName ?? row.authHeaderName) : null;
     checkAuth({ authType: nextAuthType, authHeaderName: body.authHeaderName ?? nextHeaderName, credentialGiven: newCredential !== undefined });
-    if (body.url !== undefined && body.url !== row.url) await assertSafeUrl(body.url);
+    if (body.url !== undefined && body.url !== row.url) {
+      await assertSafeUrl(body.url);
+      // A stored credential is never sent to a new origin (scheme, host or port) it was not entered
+      // for: re-enter it, or clear it, in the same request. A path-only change keeps it. Nothing to
+      // protect when no credential is stored or the server switches to authType 'none'.
+      const keepsStored = row.credentialEnc !== null && nextAuthType !== 'none' && newCredential === undefined && body.clearCredential !== true;
+      if (keepsStored && new URL(body.url).origin !== originOf(row.url)) throw originChangeNeedsCredential();
+    }
 
     const patch: UpstreamPatch = {};
     if (body.name !== undefined) patch.name = body.name;
@@ -190,7 +209,14 @@ export function createServersRouter(deps: GatewayDeps): express.Router {
     const updated = await deps.repo.update(row.id, patch);
     if (!updated) throw notFound();
     await deps.upstreams.upsert(updated);
-    res.json(view(updated));
+    // A DELETE that ran between the update and the upsert removed the row, and the upsert just put
+    // the server back into the manager: take it out again so a deleted server is never served.
+    const current = await deps.repo.get(row.id);
+    if (!current) {
+      await deps.upstreams.remove(row.id);
+      throw notFound();
+    }
+    res.json(view(current));
   });
 
   router.delete('/servers/:id', session, adminOnly, async (req, res) => {

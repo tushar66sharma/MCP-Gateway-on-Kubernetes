@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EnvValidationError } from '@urumi/shared';
 import { loadConfig } from '../src/config.js';
+import { PG_POOL_OPTIONS } from '../src/db/client.js';
 
 const KEY = Buffer.alloc(32, 7).toString('base64');
 
@@ -77,8 +78,26 @@ describe('loadConfig', () => {
     expect(loadConfig(validEnv({ SEED_SERVERS: JSON.stringify(seed) })).SEED_SERVERS).toEqual(seed);
   });
 
-  it('rejects UPSTREAM_CALL_TIMEOUT_MS below 1000', () => {
-    expect(errorOf(validEnv({ UPSTREAM_CALL_TIMEOUT_MS: '500' })).message).toContain('UPSTREAM_CALL_TIMEOUT_MS');
+  it('rejects UPSTREAM_CALL_TIMEOUT_MS below 11000 (above the WooCommerce server timeout)', () => {
+    for (const v of ['500', '10000', '10999']) expect(errorOf(validEnv({ UPSTREAM_CALL_TIMEOUT_MS: v })).message).toContain('UPSTREAM_CALL_TIMEOUT_MS');
+    expect(loadConfig(validEnv({ UPSTREAM_CALL_TIMEOUT_MS: '11000' })).UPSTREAM_CALL_TIMEOUT_MS).toBe(11000);
+  });
+
+  it('requires UPSTREAM_HEALTH_TIMEOUT_MS below UPSTREAM_HEALTH_INTERVAL_MS', () => {
+    for (const [timeout, interval] of [
+      ['5000', '5000'],
+      ['6000', '5000'],
+      ['20000', '15000'],
+    ]) {
+      const msg = errorOf(validEnv({ UPSTREAM_HEALTH_TIMEOUT_MS: timeout!, UPSTREAM_HEALTH_INTERVAL_MS: interval! })).message;
+      expect(msg).toContain('UPSTREAM_HEALTH_TIMEOUT_MS');
+    }
+    const ok = loadConfig(validEnv({ UPSTREAM_HEALTH_TIMEOUT_MS: '4999', UPSTREAM_HEALTH_INTERVAL_MS: '5000' }));
+    expect([ok.UPSTREAM_HEALTH_TIMEOUT_MS, ok.UPSTREAM_HEALTH_INTERVAL_MS]).toEqual([4999, 5000]);
+  });
+
+  it('bounds the Postgres pool: connect 5 s, statement 10 s, idle 30 s', () => {
+    expect(PG_POOL_OPTIONS).toEqual({ max: 10, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30_000, statement_timeout: 10_000 });
   });
 
   it('requires the Postgres variables, naming them only', () => {
