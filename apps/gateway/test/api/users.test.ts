@@ -55,15 +55,21 @@ describe('users api', () => {
     expect(await h.deps.db.db.select().from(sessions).where(eq(sessions.userId, member.id))).toHaveLength(0);
     const [key] = await h.deps.db.db.select().from(apiKeys).where(eq(apiKeys.userId, member.id));
     expect(key?.revokedAt).toBeInstanceOf(Date);
+    // The user is checked before the key, so the audit reason is 'user disabled' while disabled ...
     expect(await authenticateBearer(h.deps.db.db, `Bearer ${plaintext}`, h.deps.config.GATEWAY_INTERNAL_TOKEN_SECRET, h.deps.clock())).toMatchObject({
       ok: false,
-      reason: 'revoked',
+      reason: 'disabled',
       userId: member.id,
     });
 
     const enabled = await patch(member.id, { disabled: false });
     expect((enabled.body as { user: UserView }).user.disabled).toBe(false);
-    expect((await authenticateBearer(h.deps.db.db, `Bearer ${plaintext}`, h.deps.config.GATEWAY_INTERNAL_TOKEN_SECRET, h.deps.clock())).ok).toBe(false);
+    // ... and 'revoked' after re-enabling: the key stays dead.
+    expect(await authenticateBearer(h.deps.db.db, `Bearer ${plaintext}`, h.deps.config.GATEWAY_INTERNAL_TOKEN_SECRET, h.deps.clock())).toMatchObject({
+      ok: false,
+      reason: 'revoked',
+      userId: member.id,
+    });
     expect(await h.loginAs('member@example.com', 'member-password-1')).toMatch(/^ugw_session=/);
   });
 

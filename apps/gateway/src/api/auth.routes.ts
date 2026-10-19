@@ -38,7 +38,9 @@ export function createAuthRouter(deps: GatewayDeps): express.Router {
     const passwordOk = await verifyPassword(user?.passwordHash ?? (await timingDummy()), body.password);
     // One answer for unknown email, wrong password and disabled user.
     if (!user || !passwordOk || user.disabledAt !== null) throw invalidCredentials();
+    // Null when the user was disabled between the check above and the insert (re-checked under lock).
     const token = await createSession(deps.db.db, user.id, deps.clock());
+    if (token === null) throw invalidCredentials();
     res.append('Set-Cookie', sessionCookie(token, deps.config.COOKIE_SECURE));
     res.json({ user: toAuthUser(user) });
   });

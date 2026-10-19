@@ -18,11 +18,13 @@ export function createKeysRouter(deps: GatewayDeps): express.Router {
   const adminOnly = requireRole('admin');
 
   /** The path user for the admin routes; 404 when there is no such user. */
-  const targetUser = async (raw: unknown): Promise<string> => {
+  const targetUserRow = async (raw: unknown) => {
     const user = await getUser(deps.db.db, uuidParam(raw));
     if (!user) throw new ApiError(404, 'NOT_FOUND', 'User not found');
-    return user.id;
+    return user;
   };
+  const targetUser = async (raw: unknown): Promise<string> => (await targetUserRow(raw)).id;
+  const disabledConflict = () => new ApiError(409, 'CONFLICT', 'User is disabled');
 
   router.get('/keys', session, async (_req, res) => {
     res.json(await listApiKeys(deps.db.db, currentUser(res).id));
@@ -32,7 +34,10 @@ export function createKeysRouter(deps: GatewayDeps): express.Router {
     const { name } = parseBody(createBody, req.body);
     const me = currentUser(res).id;
     // The plaintext is in this response only; it is never stored or logged.
-    res.status(201).json(await createApiKey(deps.db.db, { userId: me, createdBy: me, name }, deps.clock()));
+    const created = await createApiKey(deps.db.db, { userId: me, createdBy: me, name }, deps.clock());
+    // Disabled after requireSession passed: the session is gone too.
+    if (!created) throw new ApiError(401, 'UNAUTHENTICATED', 'Authentication required');
+    res.status(201).json(created);
   });
 
   router.delete('/keys/:id', session, async (req, res) => {
@@ -45,10 +50,18 @@ export function createKeysRouter(deps: GatewayDeps): express.Router {
     res.json(await listApiKeys(deps.db.db, await targetUser(req.params.id)));
   });
 
+  // Spec §6.2: an admin issues keys for a *member*. Another admin's key would let one admin act as
+  // another in the audit trail (403); a disabled user cannot get a key (409). Own keys: POST /keys.
   router.post('/users/:id/keys', session, adminOnly, async (req, res) => {
-    const userId = await targetUser(req.params.id);
+    const target = await targetUserRow(req.params.id);
+    const me = currentUser(res).id;
+    if (target.role === 'admin' && target.id !== me) throw new ApiError(403, 'FORBIDDEN', 'Admins create their own keys');
+    if (target.disabledAt !== null) throw disabledConflict();
     const { name } = parseBody(createBody, req.body);
-    res.status(201).json(await createApiKey(deps.db.db, { userId, createdBy: currentUser(res).id, name }, deps.clock()));
+    const created = await createApiKey(deps.db.db, { userId: target.id, createdBy: me, name }, deps.clock());
+    // Disabled after the check above (re-checked under lock in the insert's transaction).
+    if (!created) throw disabledConflict();
+    res.status(201).json(created);
   });
 
   router.delete('/users/:id/keys/:keyId', session, adminOnly, async (req, res) => {

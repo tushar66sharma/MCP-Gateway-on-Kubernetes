@@ -18,7 +18,13 @@ describe('internal token', () => {
     const token = await mintInternalToken(USER, SECRET);
     expect(await verifyInternalToken(token, SECRET, new Date())).toEqual({ userId: USER });
     expect(await verifyInternalToken(`${token.slice(0, -2)}AA`, SECRET, new Date())).toEqual({ error: 'invalid' });
-    expect(await verifyInternalToken(token, SECRET, new Date(Date.now() + 310_000))).toEqual({ error: 'expired' });
+    // Expired but validly signed: the user id is kept for the audit row.
+    expect(await verifyInternalToken(token, SECRET, new Date(Date.now() + 310_000))).toEqual({ error: 'expired', userId: USER });
+  });
+
+  it('never reports expired, or a user id, for an expired token with a bad signature', async () => {
+    const token = await mintInternalToken(USER, 'o'.repeat(32));
+    expect(await verifyInternalToken(token, SECRET, new Date(Date.now() + 310_000))).toEqual({ error: 'invalid' });
   });
 
   it('rejects a token whose sub is not a user id', async () => {

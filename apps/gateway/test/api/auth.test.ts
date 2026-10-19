@@ -2,6 +2,8 @@ import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ensureBootstrapAdmin } from '../../src/auth/bootstrap.js';
+import { createSession } from '../../src/auth/sessions.js';
+import { findUserByEmail, updateUser } from '../../src/auth/users.js';
 import { sessions, users } from '../../src/db/schema.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, csrf, sessionCookieOf, startHarness, type Harness } from '../helpers/harness.js';
 
@@ -106,6 +108,34 @@ describe('auth api', () => {
     h.advanceTime(12 * 3600 * 1000 + 1000);
     expect((await request(h.baseUrl).get('/api/auth/me').set('Cookie', cookie)).status).toBe(401);
     expect(await h.deps.db.db.select().from(sessions)).toHaveLength(0);
+  });
+
+  it('deletes expired sessions on each successful login', async () => {
+    await h.loginAs(ADMIN_EMAIL, ADMIN_PASSWORD);
+    const member = await h.createUser({ email: 'sweep@example.com', role: 'member', password: 'member-password-7' });
+    await h.loginAs('sweep@example.com', 'member-password-7');
+    expect(await h.deps.db.db.select().from(sessions)).toHaveLength(2);
+    h.advanceTime(12 * 3600 * 1000 + 1000);
+    await h.loginAs(ADMIN_EMAIL, ADMIN_PASSWORD);
+    // Both expired rows are gone (the member's too, though never presented again); only the new one remains.
+    const rows = await h.deps.db.db.select().from(sessions);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.userId).not.toBe(member.id);
+  });
+
+  it('never inserts a session for a user disabled after the password check (disable races the login)', async () => {
+    const member = await h.createUser({ email: 'race@example.com', role: 'member', password: 'member-password-8' });
+    const db = h.deps.db.db;
+    // Direct call ordering: the route found the user enabled and verified the password ...
+    expect((await findUserByEmail(db, 'race@example.com'))?.disabledAt).toBeNull();
+    // ... then an admin's disable commits, then the session insert runs: refused (the route answers 401).
+    await updateUser(db, member.id, { disabled: true }, h.deps.clock());
+    expect(await createSession(db, member.id, h.deps.clock())).toBeNull();
+    expect(await db.select().from(sessions).where(eq(sessions.userId, member.id))).toEqual([]);
+    // Truly concurrent: whichever commits first, no session survives for the disabled user.
+    const other = await h.createUser({ email: 'race2@example.com', role: 'member', password: 'member-password-9' });
+    await Promise.all([createSession(db, other.id, h.deps.clock()), updateUser(db, other.id, { disabled: true }, h.deps.clock())]);
+    expect(await db.select().from(sessions).where(eq(sessions.userId, other.id))).toEqual([]);
   });
 
   it('answers 401 without a cookie or with an unknown one', async () => {

@@ -40,9 +40,15 @@ export function createUpstreamServices(config: Config, logger: Logger, db: DbHan
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Invite tokens travel in the URL path; never write them to the request log. */
+/**
+ * Invite tokens travel in the URL path; never write them to the request log. Case-insensitive, because
+ * Express routing is (/API/Invites/<token> reaches the same route). `/api/invites/<uuid>` is an invite
+ * id (admin DELETE) and is kept. `/invite/<token>` is the Phase 4 dashboard's invite page.
+ */
 export function sanitizeLogPath(path: string): string {
-  return path.replace(/(\/api\/invites\/)([^/]+)/, (_m, prefix: string, seg: string) => (UUID.test(seg) ? `${prefix}${seg}` : `${prefix}:token`));
+  return path
+    .replace(/(\/api\/invites\/)([^/]+)/i, (_m, prefix: string, seg: string) => (UUID.test(seg) ? `${prefix}${seg}` : `${prefix}:token`))
+    .replace(/^(\/invite\/)([^/]+)/i, (_m, prefix: string) => `${prefix}:token`);
 }
 
 export function startGateway(deps: GatewayDeps, listen: { port: number; host?: string }): Promise<RunningMcpHttpServer> {

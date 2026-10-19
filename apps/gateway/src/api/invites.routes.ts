@@ -57,6 +57,8 @@ export function createInvitesRouter(deps: GatewayDeps): express.Router {
       throw inviteInvalid();
     }
     const token = await createSession(deps.db.db, result.user.id, now);
+    // Only if an admin disabled the brand-new user within this request; the account itself exists.
+    if (token === null) throw new ApiError(401, 'UNAUTHENTICATED', 'Authentication required');
     res.append('Set-Cookie', sessionCookie(token, deps.config.COOKIE_SECURE));
     res.status(201).json({ user: result.user });
   });

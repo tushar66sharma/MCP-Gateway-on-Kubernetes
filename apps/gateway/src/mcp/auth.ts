@@ -15,7 +15,7 @@ type Rejection = Extract<BearerAuthResult, { ok: false }>;
 /** Stored in audit_logs.error_message: the reason only, never the presented credential. */
 const REASON_TEXT: Record<Rejection['reason'], string> = {
   missing: 'missing credential',
-  unknown: 'unknown or malformed credential',
+  unknown: 'unknown credential',
   revoked: 'API key revoked',
   disabled: 'user disabled',
   expired: 'internal token expired',
@@ -26,8 +26,11 @@ const UNAUTHORIZED = { jsonrpc: '2.0', error: { code: -32001, message: 'Unauthor
 /**
  * Per-request /mcp authentication (spec §6.5, §6.8): an API key or the internal chat token, checked
  * against the database every time (no cache, so a revoked key fails on its very next request).
- * Every rejection except a missing header is audited as auth_rejected: a revoked key or a disabled
- * user is attributed to its owner, an unknown or malformed credential has a null user.
+ * A rejection is audited as auth_rejected only when the credential is recognisable (final-review
+ * ruling M2): a well-formed `ugw_` key (unknown → null user; revoked or disabled → its owner) or an
+ * internal token whose signature verified (expired → its user, source 'chat'). A missing header,
+ * another scheme or a malformed value writes no row, only a debug log line, so anonymous garbage
+ * cannot grow the audit table.
  * It answers 401 itself (never next(err)), so the JSON-RPC body and WWW-Authenticate are exact.
  */
 export function createMcpAuth(deps: GatewayDeps): RequestHandler {
@@ -40,10 +43,10 @@ export function createMcpAuth(deps: GatewayDeps): RequestHandler {
       next();
       return;
     }
-    if (result.reason !== 'missing') {
+    if (result.recognised) {
       await deps.audit.record({
         event: 'auth_rejected',
-        source: 'mcp',
+        source: result.source,
         userId: result.userId,
         apiKeyId: result.apiKeyId,
         serverId: null,
@@ -54,8 +57,10 @@ export function createMcpAuth(deps: GatewayDeps): RequestHandler {
         outcome: 'unauthorized',
         errorMessage: REASON_TEXT[result.reason],
       });
+      deps.logger.info({ reason: result.reason, userId: result.userId, source: result.source }, 'mcp auth rejected');
+    } else {
+      deps.logger.debug({ reason: result.reason }, 'mcp auth rejected (unrecognised credential, not audited)');
     }
-    deps.logger.info({ reason: result.reason, userId: result.userId }, 'mcp auth rejected');
     res.setHeader('WWW-Authenticate', 'Bearer');
     res.status(401).json(UNAUTHORIZED);
   };

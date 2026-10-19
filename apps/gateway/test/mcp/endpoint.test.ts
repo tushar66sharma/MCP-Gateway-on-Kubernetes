@@ -154,16 +154,25 @@ describe('aggregated /mcp endpoint', () => {
     expect(rows[0]).toMatchObject({ event: 'auth_rejected', outcome: 'unauthorized', source: 'mcp', userId: null, apiKeyId: null, toolName: null, serverId: null, serverSlug: null, durationMs: 0 });
   });
 
-  it('rejects a malformed or non-ugw_ Authorization header with 401 and audits it', async () => {
-    for (const value of ['Basic dXNlcjpwYXNz', 'Bearer', 'Bearer not-a-gateway-token']) {
+  it('rejects an unrecognisable credential with 401 and writes no audit row', async () => {
+    const otherSecret = await mintInternalToken(member.id, 'o'.repeat(32));
+    for (const value of ['Basic dXNlcjpwYXNz', 'Bearer', 'Bearer x', 'Bearer not-a-gateway-token', 'Bearer ugw_short', `Bearer ugw_${'A'.repeat(44)}`, `Bearer ${otherSecret}`]) {
       const before = (await auditRows()).length;
       const res = await rawMcp({ Authorization: value });
-      expect(res.status).toBe(401);
+      expect(res.status, value.slice(0, 20)).toBe(401);
       expect((res.body as { error: { code: number } }).error.code).toBe(-32001);
-      const rows = await auditRows();
-      expect(rows.length).toBe(before + 1);
-      expect(rows[0]).toMatchObject({ event: 'auth_rejected', outcome: 'unauthorized', userId: null });
+      expect((await auditRows()).length, value.slice(0, 20)).toBe(before);
     }
+  });
+
+  it('audits an expired but validly signed internal token to its user with source chat', async () => {
+    const expired = await mintInternalToken(member.id, INTERNAL_SECRET, 300, new Date(Date.now() - 400_000));
+    const before = (await auditRows()).length;
+    const res = await rawMcp({ Authorization: `Bearer ${expired}` });
+    expect(res.status).toBe(401);
+    const rows = await auditRows();
+    expect(rows.length).toBe(before + 1);
+    expect(rows[0]).toMatchObject({ event: 'auth_rejected', outcome: 'unauthorized', source: 'chat', userId: member.id, apiKeyId: null, errorMessage: 'internal token expired' });
   });
 
   it('rejects a missing Authorization header with 401 and writes no audit row', async () => {

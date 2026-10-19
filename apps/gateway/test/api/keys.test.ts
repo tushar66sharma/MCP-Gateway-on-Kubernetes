@@ -1,8 +1,9 @@
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createApiKey } from '../../src/auth/apiKeys.js';
 import { authenticateBearer } from '../../src/auth/bearer.js';
-import type { AuthUser } from '../../src/auth/users.js';
+import { updateUser, type AuthUser } from '../../src/auth/users.js';
 import { apiKeys } from '../../src/db/schema.js';
 import { sha256Hex } from '../../src/security/crypto.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, csrf, startHarness, type Harness } from '../helpers/harness.js';
@@ -64,7 +65,7 @@ describe('keys api', () => {
     expect((await bearer(plaintext)).ok).toBe(true);
     const res = await csrf(request(h.baseUrl).delete(`/api/keys/${key.id}`), memberCookie);
     expect(res.status).toBe(204);
-    expect(await bearer(plaintext)).toEqual({ ok: false, reason: 'revoked', userId: member.id, apiKeyId: key.id });
+    expect(await bearer(plaintext)).toEqual({ ok: false, reason: 'revoked', userId: member.id, apiKeyId: key.id, recognised: true, source: 'mcp' });
     const list = (await request(h.baseUrl).get('/api/keys').set('Cookie', memberCookie)).body as KeyView[];
     expect(list[0]?.revokedAt).toEqual(expect.any(String));
     expect(list[0]?.lastUsedAt).toEqual(expect.any(String));
@@ -102,6 +103,39 @@ describe('keys api', () => {
     expect((await csrf(request(h.baseUrl).post('/api/users/00000000-0000-4000-8000-000000000000/keys'), admin).send({ name: 'x' })).status).toBe(404);
     expect((await request(h.baseUrl).get(`/api/users/${member.id}/keys`).set('Cookie', memberCookie)).status).toBe(403);
     expect((await csrf(request(h.baseUrl).post(`/api/users/${adminUser.id}/keys`), memberCookie).send({ name: 'x' })).status).toBe(403);
+  });
+
+  it('refuses to issue a key for a disabled user (409) or for another admin (403); an admin may for self', async () => {
+    const issue = (userId: string) => csrf(request(h.baseUrl).post(`/api/users/${userId}/keys`), admin).send({ name: 'issued' });
+    await updateUser(h.deps.db.db, member.id, { disabled: true }, h.deps.clock());
+    const disabled = await issue(member.id);
+    expect(disabled.status).toBe(409);
+    expect((disabled.body as ErrorBody).error.code).toBe('CONFLICT');
+
+    const other = await h.createUser({ email: 'admin2@example.com', role: 'admin' });
+    const forbidden = await issue(other.id);
+    expect(forbidden.status).toBe(403);
+    expect((forbidden.body as ErrorBody).error.code).toBe('FORBIDDEN');
+    expect(await h.deps.db.db.select().from(apiKeys)).toEqual([]);
+
+    const own = await issue(adminUser.id);
+    expect(own.status).toBe(201);
+    expect(await bearer((own.body as Created).plaintext)).toMatchObject({ ok: true, user: { id: adminUser.id } });
+  });
+
+  it('never inserts a key for a user disabled after the route checked it (disable races the insert)', async () => {
+    // Direct call ordering: the route's checks passed, then the disable commits, then the insert runs.
+    await updateUser(h.deps.db.db, member.id, { disabled: true }, h.deps.clock());
+    expect(await createApiKey(h.deps.db.db, { userId: member.id, createdBy: adminUser.id, name: 'late' }, h.deps.clock())).toBeNull();
+    // Truly concurrent: whichever commits first, no live key is left for the disabled user.
+    const carol = await h.createUser({ email: 'carol@example.com', role: 'member' });
+    await Promise.all([
+      createApiKey(h.deps.db.db, { userId: carol.id, createdBy: adminUser.id, name: 'racing' }, h.deps.clock()),
+      updateUser(h.deps.db.db, carol.id, { disabled: true }, h.deps.clock()),
+    ]);
+    const live = (await h.deps.db.db.select().from(apiKeys).where(eq(apiKeys.userId, carol.id))).filter((k) => k.revokedAt === null);
+    expect(live).toEqual([]);
+    expect((await h.deps.db.db.select().from(apiKeys).where(eq(apiKeys.userId, member.id))).length).toBe(0);
   });
 
   it('validates the key name', async () => {

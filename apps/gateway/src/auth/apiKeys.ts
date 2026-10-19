@@ -2,6 +2,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { apiKeys } from '../db/schema.js';
 import { generateApiKey } from '../security/crypto.js';
+import { lockActiveUser } from './users.js';
 
 export interface KeyView {
   id: string;
@@ -25,12 +26,20 @@ export function toKeyView(k: KeyRow): KeyView {
   };
 }
 
-/** Stores only SHA-256(plaintext) and the display prefix (ADR-008); the plaintext is returned once. */
-export async function createApiKey(db: Db, o: { userId: string; createdBy: string; name: string }, now: Date): Promise<{ key: KeyView; plaintext: string }> {
-  const { plaintext, prefix, hash } = generateApiKey();
-  const [row] = await db.insert(apiKeys).values({ userId: o.userId, createdBy: o.createdBy, name: o.name, prefix, keyHash: hash, createdAt: now }).returning();
-  if (!row) throw new Error('api key insert returned no row');
-  return { key: toKeyView(row), plaintext };
+/**
+ * Stores only SHA-256(plaintext) and the display prefix (ADR-008); the plaintext is returned once.
+ * Null when the key's user is disabled (or gone) at insert time: the user row is re-read under
+ * FOR UPDATE in the same transaction, so a racing disable cannot leave a live key behind that would
+ * revive on re-enable.
+ */
+export async function createApiKey(db: Db, o: { userId: string; createdBy: string; name: string }, now: Date): Promise<{ key: KeyView; plaintext: string } | null> {
+  return db.transaction(async (tx) => {
+    if (!(await lockActiveUser(tx, o.userId))) return null;
+    const { plaintext, prefix, hash } = generateApiKey();
+    const [row] = await tx.insert(apiKeys).values({ userId: o.userId, createdBy: o.createdBy, name: o.name, prefix, keyHash: hash, createdAt: now }).returning();
+    if (!row) throw new Error('api key insert returned no row');
+    return { key: toKeyView(row), plaintext };
+  });
 }
 
 /** All keys of a user, revoked ones included, newest first. */

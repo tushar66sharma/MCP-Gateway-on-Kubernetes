@@ -9,7 +9,7 @@ import { apiErrorHandler } from '../src/api/errors.js';
 import { parseBody } from '../src/api/validate.js';
 import { LoginRateLimiter } from '../src/auth/rateLimit.js';
 import { loadConfig } from '../src/config.js';
-import { createUpstreamServices, startGateway } from '../src/server.js';
+import { createUpstreamServices, sanitizeLogPath, startGateway } from '../src/server.js';
 import { createTestDb } from './helpers/testDb.js';
 
 function capture() {
@@ -79,13 +79,30 @@ describe('request log path redaction', () => {
     const id = randomUUID();
     await request(base).get('/api/invites/SECRETTOKEN123?x=1');
     await request(base).get(`/api/invites/${id}`);
+    // Express routes case-insensitively, so this reaches the invite route too.
+    await request(base).get('/API/Invites/SECRETTOKEN456');
     await new Promise((r) => setTimeout(r, 50));
     await db.close();
 
     const all = lines.join('');
     expect(all).not.toContain('SECRETTOKEN123');
+    expect(all).not.toContain('SECRETTOKEN456');
     const paths = lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((o) => o.msg === 'request').map((o) => o.path);
     expect(paths).toContain('/api/invites/:token');
     expect(paths).toContain(`/api/invites/${id}`);
+    expect(paths).toContain('/API/Invites/:token');
+  });
+});
+
+describe('sanitizeLogPath', () => {
+  it('redacts invite tokens in any case, and the /invite/<token> page path', () => {
+    const id = randomUUID();
+    expect(sanitizeLogPath('/api/invites/abc123/accept')).toBe('/api/invites/:token/accept');
+    expect(sanitizeLogPath('/API/Invites/abc123')).toBe('/API/Invites/:token');
+    expect(sanitizeLogPath(`/api/invites/${id}`)).toBe(`/api/invites/${id}`);
+    expect(sanitizeLogPath('/invite/abc123')).toBe('/invite/:token');
+    expect(sanitizeLogPath('/INVITE/abc123/x')).toBe('/INVITE/:token/x');
+    expect(sanitizeLogPath('/api/servers/abc')).toBe('/api/servers/abc');
+    expect(sanitizeLogPath('/invites')).toBe('/invites');
   });
 });

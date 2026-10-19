@@ -1,17 +1,26 @@
-import { eq } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { sessions, users } from '../db/schema.js';
 import { randomToken, sha256Hex } from '../security/crypto.js';
-import { toAuthUser, type AuthUser } from './users.js';
+import { lockActiveUser, toAuthUser, type AuthUser } from './users.js';
 
 export const SESSION_COOKIE = 'ugw_session';
 export const SESSION_TTL_SEC = 12 * 3600;
 
-/** A fresh 32-byte base64url token; only its SHA-256 is stored. */
-export async function createSession(db: Db, userId: string, now: Date): Promise<string> {
-  const token = randomToken(32);
-  await db.insert(sessions).values({ tokenHash: sha256Hex(token), userId, expiresAt: new Date(now.getTime() + SESSION_TTL_SEC * 1000) });
-  return token;
+/**
+ * A fresh 32-byte base64url token; only its SHA-256 is stored. Null when the user is disabled (or gone)
+ * at insert time: the user row is re-read under FOR UPDATE in the same transaction, so a disable that
+ * races the login either commits first (seen here) or waits and then deletes this session.
+ * Also sweeps every expired session, so rows of clients that never log out do not pile up.
+ */
+export async function createSession(db: Db, userId: string, now: Date): Promise<string | null> {
+  return db.transaction(async (tx) => {
+    if (!(await lockActiveUser(tx, userId))) return null;
+    await tx.delete(sessions).where(lt(sessions.expiresAt, now));
+    const token = randomToken(32);
+    await tx.insert(sessions).values({ tokenHash: sha256Hex(token), userId, expiresAt: new Date(now.getTime() + SESSION_TTL_SEC * 1000) });
+    return token;
+  });
 }
 
 /** The session's user, or null. An expired session is deleted when seen; a disabled user has no session. */
