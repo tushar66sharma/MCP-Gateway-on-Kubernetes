@@ -17,7 +17,7 @@ import { z } from 'zod';
 export interface FakeUpstream {
   url: string;
   port: number;
-  /** One entry per tools/call that passed auth. */
+  /** One entry per tools/call that passed auth; `headers` holds every request header (lowercase names). */
   calls: { tool: string; headers: Record<string, string | undefined> }[];
   /** Every HTTP request that reached /mcp, before auth (so a blocked connect shows 0). */
   requests: number;
@@ -42,14 +42,13 @@ export async function startFakeUpstream(o: {
   const checkAuth = upstreamAuthMiddleware(o.auth);
   const fake: FakeUpstream = { url: '', port: 0, calls: [], requests: 0, stop: async () => {} };
 
-  // Runs in front of the real auth middleware: counts the request and keeps the two credential headers
-  // in res.locals, which tool handlers read back through mcpRequestLocals.
+  // Runs in front of the real auth middleware: counts the request and keeps every request header in
+  // res.locals, which tool handlers read back through mcpRequestLocals.
   const auth: RequestHandler = (req, res, next) => {
     fake.requests += 1;
-    res.locals.fakeHeaders = {
-      authorization: header(req.headers.authorization),
-      'x-utilities-key': header(req.headers['x-utilities-key']),
-    };
+    const all: Record<string, string | undefined> = {};
+    for (const [name, value] of Object.entries(req.headers)) all[name] = header(value);
+    res.locals.fakeHeaders = all;
     checkAuth(req, res, next);
   };
 

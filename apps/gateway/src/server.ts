@@ -1,11 +1,11 @@
-import { McpServer } from '@modelcontextprotocol/server';
-import type { RequestHandler } from 'express';
 import { startMcpHttpServer, type Logger, type RunningMcpHttpServer } from '@urumi/shared';
 import { createApiRouter } from './api/router.js';
 import { AuditWriter } from './audit/writer.js';
 import type { LoginRateLimiter } from './auth/rateLimit.js';
 import { ssrfOptionsOf, type Config } from './config.js';
 import type { DbHandle } from './db/client.js';
+import { createMcpAuth } from './mcp/auth.js';
+import { createGatewayMcpServer } from './mcp/endpoint.js';
 import { UpstreamManager } from './upstreams/manager.js';
 import { UpstreamRepository } from './upstreams/repository.js';
 import { GATEWAY_VERSION } from './version.js';
@@ -45,21 +45,16 @@ export function sanitizeLogPath(path: string): string {
   return path.replace(/(\/api\/invites\/)([^/]+)/, (_m, prefix: string, seg: string) => (UUID.test(seg) ? `${prefix}${seg}` : `${prefix}:token`));
 }
 
-// Placeholder until the /mcp auth and the aggregated server are wired.
-const rejectAll: RequestHandler = (_req, res) => {
-  res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized' }, id: null });
-};
-
 export function startGateway(deps: GatewayDeps, listen: { port: number; host?: string }): Promise<RunningMcpHttpServer> {
   return startMcpHttpServer({
     name: 'urumi-gateway',
     version: GATEWAY_VERSION,
     port: listen.port,
     ...(listen.host !== undefined ? { host: listen.host } : {}),
-    auth: rejectAll,
+    auth: createMcpAuth(deps),
     logger: deps.logger,
     allowedHosts: deps.config.MCP_ALLOWED_HOSTS,
-    buildServer: () => new McpServer({ name: 'urumi-gateway', version: GATEWAY_VERSION }),
+    buildServer: createGatewayMcpServer(deps),
     extraRoutes: (app) => {
       // Number of reverse proxies in front of the gateway whose X-Forwarded-For is believed. Only req.ip
       // depends on it, and req.ip is only the login rate-limit key. 0 (default) = the socket peer; Helm
