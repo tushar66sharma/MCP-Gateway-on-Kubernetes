@@ -15,7 +15,13 @@ When `timezone` is omitted, `DEFAULT_TIMEZONE` is used.
 
 ### Calculator
 
-Operators `+ - * / % ^`, unary minus, parentheses and decimals. `^` is right-associative and `-2^2` is `-4`. It is a hand-written recursive-descent parser: there is no `eval`, `Function` or `vm`. Results are rounded to 12 significant digits (`0.1+0.2` is `0.3`). Errors: `division by zero` (for `/` and `%`), `unexpected character 'x' at position n`, `unexpected end of expression`, `result is not a finite number`, `too deeply nested` (more than 50 levels of parentheses or unary minus).
+Operators `+ - * / % ^`, unary minus, parentheses and decimals. `^` is right-associative and `-2^2` is `-4`. It is a hand-written recursive-descent parser: there is no `eval`, `Function` or `vm`. Results are rounded to 12 significant digits (`0.1+0.2` is `0.3`). Errors: `division by zero` (for `/` and `%`), `unexpected character 'x' at position n`, `unexpected end of expression`, `result is not a finite number`, `too deeply nested` (see Limits).
+
+### Limits
+
+- **Expression length:** at most 200 characters (longer input is rejected by the tool's input schema).
+- **Nesting depth:** at most 50 levels. Each parenthesis, each unary minus and each `^` counts one level, so a chain of more than 50 `^` (for example `2^2^2^…`) also fails with `too deeply nested`.
+- **Precision:** results go through `toPrecision(12)`, so an integer with more than 12 digits is rounded: `123456789012345` comes back as `123456789012000`.
 
 ## Authentication
 

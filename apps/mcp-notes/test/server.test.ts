@@ -2,6 +2,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
+import { NotesStore } from '../src/notesStore.js';
 import { startNotesServer } from '../src/server.js';
 
 const TOKEN = 'notes-token-1234567';
@@ -60,6 +61,23 @@ describe('mcp-notes over HTTP', () => {
     const res = await c.callTool({ name: 'delete_note', arguments: { id: 99 } });
     expect(res.isError).toBe(true);
     expect(JSON.stringify(res.content)).toContain('Note 99 not found.');
+  });
+  it('reports the store limit with the limit the store was built with', async () => {
+    running = await startNotesServer({
+      config: { ...loadConfig({ MCP_AUTH_TOKEN: TOKEN }), PORT: 0 },
+      logger: createLogger('test', 'silent'),
+      version: '0.0.0-test',
+      host: '127.0.0.1',
+      store: new NotesStore({ maxNotes: 2 }),
+    });
+    client = new Client({ name: 'test-client', version: '0.0.1' }, { versionNegotiation: { mode: 'auto' } });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${running.port}/mcp`), {
+      requestInit: { headers: { Authorization: `Bearer ${TOKEN}` } },
+    }));
+    for (const t of ['a', 'b']) expect((await client.callTool({ name: 'create_note', arguments: { title: t, content: t } })).isError).toBeFalsy();
+    const full = await client.callTool({ name: 'create_note', arguments: { title: 'c', content: 'c' } });
+    expect(full.isError).toBe(true);
+    expect(full.content).toEqual([{ type: 'text', text: 'Note limit reached (2); delete some notes first.' }]);
   });
   it('pings', async () => {
     const c = await connect();

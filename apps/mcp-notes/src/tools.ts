@@ -25,7 +25,8 @@ const createNote = defineTool({
       const note = store.create(title, content);
       return Promise.resolve(ok(`Saved note ${note.id}`, { note }));
     } catch (err) {
-      if (err instanceof NotesFullError) return Promise.resolve(toolError('Note limit reached (500); delete some notes first.'));
+      // The store's own message, so the text always shows the configured limit.
+      if (err instanceof NotesFullError) return Promise.resolve(toolError(err.message));
       throw err;
     }
   },
