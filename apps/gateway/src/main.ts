@@ -41,8 +41,9 @@ const services = createUpstreamServices(config, logger, db);
 try {
   // 3. First admin, only when the users table is empty.
   await ensureBootstrapAdmin(db.db, config.BOOTSTRAP_ADMIN_EMAIL, config.BOOTSTRAP_ADMIN_PASSWORD, logger);
-  // 4. Seed servers, insert-if-absent by slug; credentials come from the env vars the seeds name.
-  const seeded = await seedUpstreams(services.repo, config.SEED_SERVERS, process.env, config.GATEWAY_ENCRYPTION_KEY, logger);
+  // 4. Seed servers, each slug once ever (seeded_slugs), so a deleted built-in server stays deleted;
+  //    credentials come from the env vars the seeds name.
+  const seeded = await seedUpstreams(db.db, config.SEED_SERVERS, process.env, config.GATEWAY_ENCRYPTION_KEY, logger);
   // 5. One health check per server, then the 15 s interval.
   await services.upstreams.start();
   // 6. Listen.

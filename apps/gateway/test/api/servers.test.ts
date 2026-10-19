@@ -1,7 +1,8 @@
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { auditLogs, upstreamServers } from '../../src/db/schema.js';
+import { auditLogs, seededSlugs, upstreamServers } from '../../src/db/schema.js';
+import { seedUpstreams } from '../../src/upstreams/seed.js';
 import { startFakeUpstream, type FakeUpstream } from '../helpers/fakeUpstream.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, csrf, startHarness, type Harness } from '../helpers/harness.js';
 
@@ -227,5 +228,21 @@ describe('servers api', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ serverId: null, serverSlug: 'fake', toolName: 'ping' });
     expect((await csrf(request(h.baseUrl).delete(`/api/servers/${id}`), admin)).status).toBe(404);
+  });
+
+  it('a deleted built-in (seeded) server stays deleted when the seeds run again, and can be re-added', async () => {
+    const seeds = [{ slug: 'fake', name: 'Fake Server', url: fake.url, authType: 'bearer' as const, credentialEnv: 'SEED_FAKE' }];
+    const seedEnv = { SEED_FAKE: CRED };
+    const runSeeds = () => seedUpstreams(h.deps.db.db, seeds, seedEnv, h.deps.config.GATEWAY_ENCRYPTION_KEY, h.deps.logger);
+    expect((await runSeeds()).inserted).toEqual(['fake']);
+    const row = (await h.deps.repo.getBySlug('fake'))!;
+    expect((await csrf(request(h.baseUrl).delete(`/api/servers/${row.id}`), admin)).status).toBe(204);
+    // A restart runs the seeds again: DELETE left seeded_slugs alone, so nothing comes back.
+    expect(await runSeeds()).toEqual({ inserted: [], skipped: ['fake'], marked: [] });
+    expect(await h.deps.repo.getBySlug('fake')).toBeNull();
+    expect((await h.deps.db.db.select().from(seededSlugs)).map((r) => r.slug)).toEqual(['fake']);
+    // The documented way back: POST /api/servers.
+    expect((await post(valid())).status).toBe(201);
+    expect(h.deps.upstreams.listTools().map((t) => t.name)).toEqual(['fake__echo', 'fake__ping']);
   });
 });

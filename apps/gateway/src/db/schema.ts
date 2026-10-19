@@ -77,6 +77,16 @@ export const upstreamServers = pgTable('upstream_servers', {
   createdAt: ts('created_at').notNull().defaultNow(),
 });
 
+/**
+ * Every SEED_SERVERS slug the gateway has ever seeded (or found already present). A seed is inserted
+ * only when its slug is in neither this table nor upstream_servers, so an admin's DELETE of a built-in
+ * server survives restarts. DELETE /api/servers/:id never touches this table.
+ */
+export const seededSlugs = pgTable('seeded_slugs', {
+  slug: text('slug').primaryKey(),
+  seededAt: ts('seeded_at').notNull().defaultNow(),
+});
+
 export const auditLogs = pgTable(
   'audit_logs',
   {
