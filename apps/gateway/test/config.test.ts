@@ -62,6 +62,16 @@ describe('loadConfig', () => {
     expect(errorOf(validEnv({ SEED_SERVERS: seed })).message).toContain('SEED_SERVERS');
   });
 
+  it('requires a header name for header-auth seed servers, naming the entry and field', () => {
+    const seed = JSON.stringify([
+      { slug: 'notes', name: 'Notes', url: 'http://n.mcp.svc.cluster.local/mcp', authType: 'none' },
+      { slug: 'utils', name: 'Utils', url: 'http://u.mcp.svc.cluster.local/mcp', authType: 'header', credentialEnv: 'SECRET_ENV_NAME' },
+    ]);
+    const msg = errorOf(validEnv({ SEED_SERVERS: seed })).message;
+    expect(msg).toContain('SEED_SERVERS.1.authHeaderName');
+    expect(msg).not.toContain('SECRET_ENV_NAME');
+  });
+
   it('accepts a valid seed server', () => {
     const seed = [{ slug: 'notes', name: 'Notes', url: 'http://mcp-notes.mcp.svc.cluster.local:3002/mcp', authType: 'bearer', credentialEnv: 'NOTES_TOKEN' }];
     expect(loadConfig(validEnv({ SEED_SERVERS: JSON.stringify(seed) })).SEED_SERVERS).toEqual(seed);

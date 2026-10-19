@@ -53,6 +53,10 @@ const seedServerSchema = z.object({
   authType: z.enum(['none', 'bearer', 'header']),
   authHeaderName: z.string().min(1).optional(),
   credentialEnv: z.string().min(1).optional(),
+}).superRefine((v, ctx) => {
+  if (v.authType === 'header' && !/^[A-Za-z0-9-]{1,64}$/.test(v.authHeaderName ?? '')) {
+    ctx.addIssue({ code: 'custom', path: ['authHeaderName'], message: 'required for header auth' });
+  }
 });
 
 const encryptionKey = z.string().transform((v, ctx) => {
@@ -78,7 +82,10 @@ const seedServers = z
     }
     const parsed = z.array(seedServerSchema).safeParse(json);
     if (!parsed.success) {
-      ctx.addIssue({ code: 'custom', message: 'invalid seed server list' });
+      // Issue paths only (e.g. SEED_SERVERS.1.authHeaderName), never the values.
+      for (const issue of parsed.error.issues) {
+        ctx.addIssue({ code: 'custom', path: issue.path, message: 'invalid seed server' });
+      }
       return z.NEVER;
     }
     return parsed.data satisfies SeedServer[];

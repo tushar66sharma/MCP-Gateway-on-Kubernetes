@@ -17,10 +17,11 @@ export interface DbHandle {
 }
 
 /** Pool configured by pg from PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD. */
-export function createPostgresHandle(): DbHandle {
+export function createPostgresHandle(logger?: Logger): DbHandle {
   const pool = new pg.Pool({ max: 10 });
   // An idle client erroring (e.g. Postgres restarting) must not crash the process.
-  pool.on('error', () => {});
+  // Only a code or class name is logged: the message can embed connection details.
+  pool.on('error', (err) => logger?.warn({ reason: safeReason(err) }, 'postgres pool error'));
   const db = drizzle(pool, { schema });
   return {
     db,
