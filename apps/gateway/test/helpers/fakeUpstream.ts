@@ -91,7 +91,9 @@ export async function startFakeUpstream(o: {
   });
   fake.port = running.port;
   fake.url = `http://127.0.0.1:${running.port}/mcp`;
-  fake.stop = () => running.close();
+  fake.stop = async () => {
+    await running.close();
+  };
   return fake;
 }
 

@@ -4,9 +4,9 @@ import net from 'node:net';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
 import express from 'express';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createLogger } from '../src/logger.js';
-import { mcpRequestLocals, startMcpHttpServer, type McpHttpServerOptions, type RunningMcpHttpServer } from '../src/mcpHttpServer.js';
+import { mcpRequestLocals, startMcpHttpServer, UNLOGGABLE_PATH, type McpHttpServerOptions, type RunningMcpHttpServer } from '../src/mcpHttpServer.js';
 import { ok } from '../src/tools.js';
 
 const TOKEN = 'test-bearer-token';
@@ -312,6 +312,84 @@ describe('startMcpHttpServer', () => {
     expect(all).not.toContain('x=1');
     const line = lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((o) => o.msg === 'request');
     expect(line).toMatchObject({ path: '/api/invites/:token' });
+  });
+
+  it('survives a throwing logPath and logs the fixed placeholder instead of the path', async () => {
+    const lines: string[] = [];
+    const stream = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        lines.push(chunk.toString());
+        cb();
+      },
+    });
+    const { port } = await start({
+      logger: createLogger('test', 'info', stream),
+      logPath: () => {
+        throw new Error('sanitiser bug');
+      },
+    });
+    const first = await fetch(`http://127.0.0.1:${port}/healthz?secret=SECRET789`);
+    expect(first.status).toBe(200);
+    await first.text();
+    await new Promise((r) => setTimeout(r, 50));
+    // Still serving: the exception did not escape the 'finish' listener.
+    const second = await fetch(`http://127.0.0.1:${port}/healthz`);
+    expect(second.status).toBe(200);
+    await second.text();
+    await new Promise((r) => setTimeout(r, 50));
+    const reqLines = lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((o) => o.msg === 'request');
+    expect(reqLines.length).toBe(2);
+    for (const l of reqLines) expect(l.path).toBe(UNLOGGABLE_PATH);
+    expect(lines.join('')).not.toContain('SECRET789');
+  });
+
+  it('close({ graceMs }) refuses new connections but lets an in-flight request finish', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const srv = await startMcpHttpServer({
+      name: 'graceful',
+      version: '0.0.1',
+      port: 0,
+      host: '127.0.0.1',
+      auth: { kind: 'bearer', token: TOKEN },
+      logger,
+      allowedHosts: ['127.0.0.1'],
+      registerTools: () => {},
+      extraRoutes: (app) =>
+        app.get('/slow', async (_q, r) => {
+          await gate;
+          r.json({ done: true });
+        }),
+    });
+    const slow = rawRequest(srv.port, { method: 'GET', path: '/slow' });
+    await vi.waitFor(() => expect(srv.inFlight()).toBe(1));
+    const closing = srv.close({ graceMs: 5000 });
+    // Not accepting any more.
+    await new Promise((r) => setTimeout(r, 50));
+    await expect(rawRequest(srv.port, { method: 'GET', path: '/healthz' })).rejects.toThrow();
+    release();
+    expect(await slow).toEqual({ status: 200, body: JSON.stringify({ done: true }) });
+    expect(await closing).toEqual({ cutRequests: 0 });
+  });
+
+  it('close({ graceMs }) cuts a request still running when the grace period ends', async () => {
+    const srv = await startMcpHttpServer({
+      name: 'graceful',
+      version: '0.0.1',
+      port: 0,
+      host: '127.0.0.1',
+      auth: { kind: 'bearer', token: TOKEN },
+      logger,
+      allowedHosts: ['127.0.0.1'],
+      registerTools: () => {},
+      extraRoutes: (app) => app.get('/never', () => {}),
+    });
+    const never = rawRequest(srv.port, { method: 'GET', path: '/never' });
+    await vi.waitFor(() => expect(srv.inFlight()).toBe(1));
+    const t0 = performance.now();
+    expect(await srv.close({ graceMs: 200 })).toEqual({ cutRequests: 1 });
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(150);
+    await expect(never).rejects.toThrow();
   });
 
   it('exactly one of registerTools / buildServer', async () => {

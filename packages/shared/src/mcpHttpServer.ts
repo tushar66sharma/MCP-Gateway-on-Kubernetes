@@ -37,10 +37,29 @@ export interface McpHttpServerOptions {
   readinessCheck?: () => Promise<boolean>;
 }
 
+export interface CloseOptions {
+  /**
+   * Graceful mode: stop accepting connections, let in-flight requests finish for up to this many ms
+   * (keep-alive connections are told `Connection: close`), then cut whatever is left. Without it,
+   * close() cuts every connection at once (the default every server used so far).
+   */
+  graceMs?: number;
+}
+
+export interface CloseResult {
+  /** Requests still running when the grace period ended (0 when everything drained, or without graceMs). */
+  cutRequests: number;
+}
+
 export interface RunningMcpHttpServer {
   port: number;
-  close(): Promise<void>;
+  /** Requests currently being handled. */
+  inFlight(): number;
+  close(o?: CloseOptions): Promise<CloseResult>;
 }
+
+/** Logged in place of the path when the logPath sanitiser throws, so a bad path never kills the process. */
+export const UNLOGGABLE_PATH = '[unloggable path]';
 
 /**
  * The SDK compares `new URL(...).hostname`, which is always lowercase and has no port: so lowercase,
@@ -85,7 +104,23 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
   const app = express();
   app.disable('x-powered-by');
 
+  // In-flight requests, for a graceful close; while draining, responses ask the client to reconnect.
+  let inFlight = 0;
+  let draining = false;
+  let onIdle: (() => void) | null = null;
+
   app.use((req, res, next) => {
+    inFlight += 1;
+    let counted = true;
+    const done = () => {
+      if (!counted) return;
+      counted = false;
+      inFlight -= 1;
+      if (inFlight === 0) onIdle?.();
+    };
+    res.on('finish', done);
+    res.on('close', done);
+    if (draining) res.setHeader('Connection', 'close');
     const incoming = req.header('x-request-id');
     const requestId = incoming !== undefined && REQUEST_ID.test(incoming) ? incoming : randomUUID();
     res.locals.requestId = requestId;
@@ -95,7 +130,15 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-      logger.info({ requestId, method: req.method, path: opts.logPath ? opts.logPath(fullPath) : fullPath, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
+      // This runs in an event listener: a throwing sanitiser would be an uncaught exception and
+      // kill the process, so it falls back to a fixed placeholder (never the raw path).
+      let path: string;
+      try {
+        path = opts.logPath ? opts.logPath(fullPath) : fullPath;
+      } catch {
+        path = UNLOGGABLE_PATH;
+      }
+      logger.info({ requestId, method: req.method, path, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
     });
     next();
   });
@@ -158,12 +201,40 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
 
   return {
     port,
-    close: async () => {
-      await mcpHandler.close();
-      await new Promise<void>((resolve, reject) => {
+    inFlight: () => inFlight,
+    close: async (o: CloseOptions = {}) => {
+      if (o.graceMs === undefined || o.graceMs <= 0) {
+        // Default (unchanged): cut everything at once.
+        await mcpHandler.close();
+        await new Promise<void>((resolve, reject) => {
+          httpServer.close((err) => (err ? reject(err) : resolve()));
+          httpServer.closeAllConnections();
+        });
+        return { cutRequests: 0 };
+      }
+      // Graceful: stop accepting (close() refuses new connections and drops idle keep-alive ones),
+      // wait for in-flight requests up to graceMs, then cut whatever is left.
+      draining = true;
+      const closed = new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
-        httpServer.closeAllConnections();
       });
+      closed.catch(() => {}); // awaited below; avoids an unhandled rejection while waiting
+      if (inFlight > 0) {
+        const graceMs = o.graceMs;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, graceMs);
+          onIdle = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        onIdle = null;
+      }
+      const cutRequests = inFlight;
+      httpServer.closeAllConnections();
+      await closed;
+      await mcpHandler.close();
+      return { cutRequests };
     },
   };
 }

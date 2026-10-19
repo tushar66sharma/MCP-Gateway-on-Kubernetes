@@ -69,16 +69,23 @@ try {
   fail('startup', err);
 }
 
-// 8. Shutdown: stop health checks and upstream clients, stop listening, close the pool, exit 0.
+// 8. Shutdown (final-review M1): stop accepting connections, let in-flight requests (tool calls) finish
+//    for up to 25 s, cut what is left, then stop the upstream clients, close the pool and exit 0.
+//    The chart gives the pod 35 s in all (terminationGracePeriodSeconds): a 5 s preStop sleep, then
+//    SIGTERM, so 5 + 25 s fits with room for the last steps.
+const SHUTDOWN_GRACE_MS = 25_000;
 let closing = false;
 async function shutdown(signal: string): Promise<void> {
   if (closing) return;
   closing = true;
-  logger.info({ signal }, 'shutting down');
+  logger.info({ signal, inFlight: server.inFlight(), graceMs: SHUTDOWN_GRACE_MS }, 'shutting down: no new connections');
   try {
+    const { cutRequests } = await server.close({ graceMs: SHUTDOWN_GRACE_MS });
+    logger.info({ cutRequests }, 'shutdown: http server closed');
     await services.upstreams.stop();
-    await server.close();
+    logger.info('shutdown: upstream clients stopped');
     await db.close();
+    logger.info('shutdown: database pool closed; exiting');
   } catch (err) {
     logger.error({ reason: err instanceof Error ? err.name : 'UnknownError' }, 'error during shutdown');
   }
