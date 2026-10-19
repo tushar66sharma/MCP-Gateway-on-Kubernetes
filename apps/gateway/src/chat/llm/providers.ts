@@ -13,8 +13,11 @@ export const PROVIDER_IDS = ['groq', 'openrouter'] as const satisfies readonly P
 export const PROVIDERS: Record<ProviderId, ProviderDefinition> = {
   groq: {
     baseUrl: 'https://api.groq.com/openai/v1',
-    defaultModel: 'openai/gpt-oss-120b',
+    // Chosen by the 2026-10-19 tool-calling spike (scripts/dev/llm-probe.mjs): 6/6 correct for both gpt-oss
+    // models, the 20b with fewer tokens; reasoning_effort low stayed 6/6 with fewer completion tokens.
+    defaultModel: 'openai/gpt-oss-20b',
     apiKeyEnv: 'GROQ_API_KEY',
+    extraBody: { reasoning_effort: 'low' },
   },
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1',
