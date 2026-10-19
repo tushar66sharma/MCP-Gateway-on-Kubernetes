@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. **Implemented in Phase 3** (2026-10-19).
 
 ## Date
 
@@ -34,7 +34,18 @@ The gateway's `tools/list` must aggregate the tools of every registered upstream
 - The catalog can be stale for up to one health interval (15s): a newly broken upstream may still be listed until the next check or failing call, and tool changes upstream appear on the next successful tick. Calls to a dead server still return a clear error (timeout 20s, `isError`).
 - State is per replica, so multiple gateway replicas could briefly disagree; the demo runs one replica and this is documented.
 - Health checks add constant background traffic (one `tools/list` per server per 15s) and each failed check costs up to 5s of a background task, not of any user request.
-- Not implemented yet; verified later by integration tests with a healthy, a slow and a dead fake upstream.
+- Implemented; verified by integration tests with healthy, slow and dead fake upstreams and by the cluster isolation check (see "As built").
+
+## As built (Phase 3)
+
+- `apps/gateway/src/upstreams/manager.ts` as described. Intervals and limits are configuration: `UPSTREAM_HEALTH_INTERVAL_MS` (15000), `UPSTREAM_HEALTH_TIMEOUT_MS` (5000), `UPSTREAM_CALL_TIMEOUT_MS` (20000, which must stay above the WooCommerce server's own 10 s; the chart schema enforces at least 11000).
+- **After any failure the client is dropped and the next check builds a fresh one** (and a fresh connection pool), so a restarted upstream is never stuck behind a stale client (tested: an upstream restarted on the same port returns to `connected` within one interval).
+- **Every check re-runs the SSRF check** on the URL, and the connection itself re-checks addresses at connect time. Redirects are never followed (`HTTP 302 from upstream (redirects are not followed)`).
+- The `last_error` texts as built: `connection refused`, `DNS lookup failed`, `timeout after 5000ms`, `HTTP <status> from upstream` (the body is never copied), `HTTP 302 from upstream (redirects are not followed)`, `blocked by SSRF guard (<reason>)`, and `error: <message>` (at most 200 characters).
+- A **timeout** during a call does not mark the server unreachable; a connection-level error does, at once. A JSON-RPC error answered by the upstream leaves it connected.
+- An upstream tool whose prefixed name is invalid is skipped alone (`skippedTools`, ADR-006). A server's mirrored row (`last_status`, `last_error`, `last_checked_at`, `tool_count`) is updated after every check.
+- **Measured on the cluster (2026-10-19)**, with `mcp-utilities` scaled to 0 and back: its tools were gone from `tools/list` after 12.2 s in one run and 4.1 s in another, `woo__ping` kept working, and the tools were back after 16.4 s (both runs). So "stale for up to about 20 s" holds (interval 15 s + timeout 5 s).
+- State is per replica, and a server edit is applied on the replica that handled it; one replica is deployed ([system-design.md](../system-design.md#8-trade-offs-and-limits)). The login rate limiter is per replica too.
 
 ## Revisit if
 

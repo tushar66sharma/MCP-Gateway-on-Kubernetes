@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. **Implemented in Phase 3** (2026-10-19).
 
 ## Date
 
@@ -32,7 +32,18 @@ Team members connect external MCP clients (Claude Code, Cursor, Inspector) to th
 - A lost key cannot be shown again; users must rotate it.
 - Revocation is immediate, at the cost of a database lookup per `/mcp` request (we accept this; no caching of auth decisions).
 - Security rests on key generation using a cryptographically secure random source and on never logging keys (pino redaction covers `authorization`).
-- Implementation and unit tests (generation, hashing) arrive in a later phase.
+- Implemented and tested (see "As built").
+
+## As built (Phase 3)
+
+- `generateApiKey()` (`src/security/crypto.ts`): `ugw_` + 32 random bytes in base62, left-padded to 43 characters, so every key matches `^ugw_[0-9A-Za-z]{43}$` (47 characters). Stored: `SHA-256` hex in `api_keys.key_hash` (unique) and the first 12 characters as `prefix`.
+- `POST /api/keys` returns `{key, plaintext}` once; `GET /api/keys` returns id, name, prefix, `createdAt`, `lastUsedAt`, `revokedAt` and never the hash. The "shown once" dialog with client snippets is Phase 4; today the plaintext is in the API response only.
+- `/mcp` checks the key on every request with one query (hash, joined to its user); **no cache**. Verified live: after `DELETE /api/keys/:id` (204) the next `/mcp` request with that key got `401`.
+- Disabling a user (`PATCH /api/users/:id {"disabled":true}`) deletes their sessions and revokes all their keys in one transaction; enabling clears only `disabled_at`, so the keys stay revoked (tested).
+- Rejections write an `auth_rejected` audit row: `API key revoked` / `user disabled` (attributed to the owner, with the key id) and `unknown or malformed credential` (no user). A missing header writes nothing.
+- A bearer value not starting with `ugw_` is tried as the internal chat token (ADR-010).
+- User passwords: argon2id via `@node-rs/argon2`, 10-200 characters.
+- Not done (deferred): a rate limit on `/mcp`, so a flood of bad credentials grows the audit table (Phase 5); see [security.md](../security.md#8-residual-risks).
 
 ## Revisit if
 
