@@ -1,6 +1,6 @@
 # mcp-notes
 
-A small MCP server that keeps short text notes. It is one of the upstream servers the Phase 3 gateway aggregates (tools appear there as `notes__<tool>`). It exposes `POST /mcp` plus `/healthz` and `/readyz`. Helm packaging comes in a later task.
+A small MCP server that keeps short text notes. It is one of the upstream servers the Phase 3 gateway aggregates (tools appear there as `notes__<tool>`). It exposes `POST /mcp` plus `/healthz` and `/readyz`. The Helm chart deploys it in namespace `mcp` (internal only).
 
 **Notes are kept in memory only: a restart clears all of them.**
 

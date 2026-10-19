@@ -1,6 +1,6 @@
 # mcp-utilities
 
-A small stateless MCP server with date and time helpers and a safe calculator. It is one of the upstream servers the Phase 3 gateway aggregates (tools appear there as `utilities__<tool>`). It exposes `POST /mcp` plus `/healthz` and `/readyz`. Helm packaging comes in a later task.
+A small stateless MCP server with date and time helpers and a safe calculator. It is one of the upstream servers the Phase 3 gateway aggregates (tools appear there as `utils__<tool>`). It exposes `POST /mcp` plus `/healthz` and `/readyz`. The Helm chart deploys it in namespace `mcp` (internal only).
 
 ## Tools
 
