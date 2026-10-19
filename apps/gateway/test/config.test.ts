@@ -1,0 +1,85 @@
+import { describe, expect, it } from 'vitest';
+import { EnvValidationError } from '@urumi/shared';
+import { loadConfig } from '../src/config.js';
+
+const KEY = Buffer.alloc(32, 7).toString('base64');
+
+function validEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return {
+    PUBLIC_APP_URL: 'http://app.localhost',
+    GATEWAY_ENCRYPTION_KEY: KEY,
+    GATEWAY_INTERNAL_TOKEN_SECRET: 'x'.repeat(32),
+    BOOTSTRAP_ADMIN_EMAIL: 'admin@example.com',
+    BOOTSTRAP_ADMIN_PASSWORD: 'correct horse battery',
+    PGHOST: 'localhost',
+    PGDATABASE: 'gateway',
+    PGUSER: 'gateway',
+    PGPASSWORD: 'pw-not-in-errors',
+    ...extra,
+  };
+}
+
+function errorOf(env: NodeJS.ProcessEnv): EnvValidationError {
+  try {
+    loadConfig(env);
+  } catch (err) {
+    expect(err).toBeInstanceOf(EnvValidationError);
+    return err as EnvValidationError;
+  }
+  throw new Error('expected loadConfig to throw');
+}
+
+describe('loadConfig', () => {
+  it('loads a valid env with defaults', () => {
+    const c = loadConfig(validEnv());
+    expect(c.PORT).toBe(3000);
+    expect(c.LOG_LEVEL).toBe('info');
+    expect(c.COOKIE_SECURE).toBe(false);
+    expect(c.MCP_ALLOWED_HOSTS).toEqual(['localhost', '127.0.0.1']);
+    expect(Buffer.isBuffer(c.GATEWAY_ENCRYPTION_KEY)).toBe(true);
+    expect(c.GATEWAY_ENCRYPTION_KEY.length).toBe(32);
+    expect(c.SEED_SERVERS).toEqual([]);
+    expect(c.SSRF_ALLOWED_INTERNAL_HOSTS).toEqual(['*.mcp.svc.cluster.local']);
+    expect(c.SSRF_ALLOW_LOOPBACK).toBe(false);
+    expect(c.UPSTREAM_HEALTH_INTERVAL_MS).toBe(15000);
+    expect(c.UPSTREAM_HEALTH_TIMEOUT_MS).toBe(5000);
+    expect(c.UPSTREAM_CALL_TIMEOUT_MS).toBe(20000);
+  });
+
+  it('rejects an encryption key that is not 32 bytes, naming the variable but not the value', () => {
+    const bad = Buffer.alloc(16, 9).toString('base64');
+    const err = errorOf(validEnv({ GATEWAY_ENCRYPTION_KEY: bad }));
+    expect(err.message).toContain('GATEWAY_ENCRYPTION_KEY');
+    expect(err.message).not.toContain(bad);
+  });
+
+  it('names SEED_SERVERS when it is not JSON', () => {
+    expect(errorOf(validEnv({ SEED_SERVERS: 'not json' })).message).toContain('SEED_SERVERS');
+  });
+
+  it('names SEED_SERVERS when a slug is invalid', () => {
+    const seed = JSON.stringify([{ slug: 'Bad_Slug', name: 'X', url: 'http://x.mcp.svc.cluster.local/mcp', authType: 'none' }]);
+    expect(errorOf(validEnv({ SEED_SERVERS: seed })).message).toContain('SEED_SERVERS');
+  });
+
+  it('accepts a valid seed server', () => {
+    const seed = [{ slug: 'notes', name: 'Notes', url: 'http://mcp-notes.mcp.svc.cluster.local:3002/mcp', authType: 'bearer', credentialEnv: 'NOTES_TOKEN' }];
+    expect(loadConfig(validEnv({ SEED_SERVERS: JSON.stringify(seed) })).SEED_SERVERS).toEqual(seed);
+  });
+
+  it('rejects UPSTREAM_CALL_TIMEOUT_MS below 1000', () => {
+    expect(errorOf(validEnv({ UPSTREAM_CALL_TIMEOUT_MS: '500' })).message).toContain('UPSTREAM_CALL_TIMEOUT_MS');
+  });
+
+  it('requires the Postgres variables, naming them only', () => {
+    const env = validEnv();
+    delete env.PGPASSWORD;
+    const err = errorOf(env);
+    expect(err.message).toContain('PGPASSWORD');
+    expect(err.message).not.toContain('pw-not-in-errors');
+  });
+
+  it('trims and lowercases the bootstrap email', () => {
+    expect(loadConfig(validEnv({ BOOTSTRAP_ADMIN_EMAIL: ' Admin@Example.COM ' })).BOOTSTRAP_ADMIN_EMAIL).toBe('admin@example.com');
+  });
+});
