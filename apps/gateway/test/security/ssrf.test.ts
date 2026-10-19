@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { LookupAddress } from 'node:dns';
 import { assertSafeUpstreamUrl, createSafeLookup, SsrfError, type SsrfOptions } from '../../src/security/ssrf.js';
 
@@ -132,5 +132,47 @@ describe('createSafeLookup', () => {
     expect(allowedHost.err).toBeNull();
     const other = await runLookup(opts(['10.43.0.10']), false);
     expect((other.err as SsrfError).reason).toBe('private');
+  });
+
+  it('is callable like dns.lookup without options, and with a numeric family', async () => {
+    // dns.lookup(hostname, callback) and dns.lookup(hostname, family, callback): the typed
+    // LookupFunction always has options, so the plain-function forms go through a cast.
+    const lookup = createSafeLookup(opts(['93.184.216.34', '2606:2800:220:1::1'])) as unknown as (...args: unknown[]) => void;
+    const noOptions = await new Promise<LookupResult>((resolve) => {
+      lookup('upstream.example', (err: NodeJS.ErrnoException | null, address: string, family: number) => resolve({ err, address, family }));
+    });
+    expect(noOptions).toEqual({ err: null, address: '93.184.216.34', family: 4 });
+    const v6 = await new Promise<LookupResult>((resolve) => {
+      lookup('upstream.example', 6, (err: NodeJS.ErrnoException | null, address: string, family: number) => resolve({ err, address, family }));
+    });
+    expect(v6).toEqual({ err: null, address: '2606:2800:220:1::1', family: 6 });
+  });
+
+  it('calls back on a later tick, outside the promise chain', async () => {
+    const nextTick = vi.spyOn(process, 'nextTick');
+    try {
+      let sync = true;
+      const r = await new Promise<LookupResult & { sync: boolean }>((resolve) => {
+        createSafeLookup(opts(['93.184.216.34']))('upstream.example', { all: false }, (err, address) => resolve({ err, address, sync }));
+        sync = false;
+      });
+      expect(r).toMatchObject({ err: null, address: '93.184.216.34', sync: false });
+      expect(nextTick).toHaveBeenCalled();
+    } finally {
+      nextTick.mockRestore();
+    }
+  });
+});
+
+describe('assertSafeUpstreamUrl lookup timeout', () => {
+  it('fails as dns_failed when the lookup never answers within lookupTimeoutMs', async () => {
+    const never = (): Promise<string[]> => new Promise<string[]>(() => {});
+    const t0 = performance.now();
+    expect(await reason('http://slow-dns.example/', { allowedInternalHosts: [], lookup: never, lookupTimeoutMs: 50 })).toBe('dns_failed');
+    expect(performance.now() - t0).toBeLessThan(2000);
+  });
+
+  it('does not affect a lookup that answers in time', async () => {
+    expect(await reason('http://ok.example/', opts(['93.184.216.34'], { lookupTimeoutMs: 1000 }))).toBe('allowed');
   });
 });

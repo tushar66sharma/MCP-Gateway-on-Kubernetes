@@ -33,7 +33,8 @@ export function createGatewayMcpServer(deps: GatewayDeps): () => McpServer {
       // The auth middleware always runs before the MCP handler; reaching here without it is a wiring bug.
       if (!auth) throw new Error('tools/call reached without /mcp authentication');
       const { name, arguments: args } = request.params;
-      const tool = deps.upstreams.listTools().find((t) => t.name === name);
+      // Only for its outputSchema; an O(1) index lookup, not a sort of the whole catalog.
+      const tool = deps.upstreams.findTool(name);
       // SDK 2.3.1: BaseContext.mcpReq.signal aborts when the client cancels the request.
       const result = await deps.upstreams.callTool(name, args ?? {}, { userId: auth.user.id, apiKeyId: auth.apiKeyId, source: auth.source }, ctx.mcpReq.signal);
       return mcp.server.projectCallToolResult(result, tool?.outputSchema);

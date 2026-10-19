@@ -97,6 +97,16 @@ describe('loadConfig', () => {
     }
   });
 
+  it('validates SSRF_ALLOWED_INTERNAL_HOSTS entries, naming the variable but not the value', () => {
+    const ok = '*.mcp.svc.cluster.local,api.internal.example,*.svc.local,10.0.0.5';
+    expect(loadConfig(validEnv({ SSRF_ALLOWED_INTERNAL_HOSTS: ok })).SSRF_ALLOWED_INTERNAL_HOSTS).toEqual(ok.split(','));
+    for (const bad of ['*.', '*', '*.local', 'localhost', '*.*.example', 'bad_host.example', '*.mcp..local']) {
+      const err = errorOf(validEnv({ SSRF_ALLOWED_INTERNAL_HOSTS: `*.mcp.svc.cluster.local,${bad}` }));
+      expect(err.message, bad).toContain('SSRF_ALLOWED_INTERNAL_HOSTS.1');
+      expect(err.message).not.toContain(bad);
+    }
+  });
+
   it('trims and lowercases the bootstrap email', () => {
     expect(loadConfig(validEnv({ BOOTSTRAP_ADMIN_EMAIL: ' Admin@Example.COM ' })).BOOTSTRAP_ADMIN_EMAIL).toBe('admin@example.com');
   });

@@ -13,6 +13,8 @@ describe('describeUpstreamError', () => {
     ['refused at connect', probeFailed(fetchFailed(withCode('ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:1'))), 'connection refused'],
     ['refused, both families', probeFailed(fetchFailed(Object.assign(new AggregateError([withCode('ECONNREFUSED')]), { code: 'ECONNREFUSED' }))), 'connection refused'],
     ['refused during a call', fetchFailed(withCode('ECONNREFUSED')), 'connection refused'],
+    ['reset keep-alive socket', fetchFailed(withCode('ECONNRESET', 'read ECONNRESET')), 'connection reset'],
+    ['undici other side closed', fetchFailed(withCode('UND_ERR_SOCKET', 'other side closed')), 'connection reset'],
     ['ENOTFOUND', probeFailed(fetchFailed(withCode('ENOTFOUND', 'getaddrinfo ENOTFOUND x.invalid'))), 'DNS lookup failed'],
     ['EAI_AGAIN', fetchFailed(withCode('EAI_AGAIN')), 'DNS lookup failed'],
     ['request timeout', new SdkError(SdkErrorCode.RequestTimeout, 'Request timed out', { timeout: 500 }), 'timeout after 500ms'],
@@ -34,6 +36,12 @@ describe('isConnectionLevelError', () => {
     expect(isConnectionLevelError(fetchFailed(withCode('ECONNRESET')))).toBe(true);
     expect(isConnectionLevelError(new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, 'x', { status: 502 }))).toBe(true);
     expect(isConnectionLevelError(new UpstreamRedirectError(301))).toBe(true);
+  });
+  it('is true only for HTTP statuses that concern the whole server (401/403/404/5xx)', () => {
+    const http = (status: number) => new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, 'x', { status });
+    for (const status of [401, 403, 404, 500, 502, 503]) expect(isConnectionLevelError(http(status)), String(status)).toBe(true);
+    for (const status of [400, 405, 409, 413, 415, 422, 429]) expect(isConnectionLevelError(http(status)), String(status)).toBe(false);
+    expect(isConnectionLevelError(probeFailed(http(413)))).toBe(false);
   });
   it('is false for timeouts and upstream JSON-RPC errors', () => {
     expect(isConnectionLevelError(new SdkError(SdkErrorCode.RequestTimeout, 'Request timed out'))).toBe(false);

@@ -110,7 +110,8 @@ describe('aggregated /mcp endpoint', () => {
     expect(unknown.isError).toBe(true);
     expect(unknown.content).toEqual([{ type: 'text', text: 'Unknown tool: zzz__ping' }]);
     expect((await auditRows())[0]).toMatchObject({ event: 'tool_call', outcome: 'denied', userId: member.id, serverSlug: null, toolName: 'zzz__ping' });
-    await client.callTool({ name: 'x'.repeat(300), arguments: {} });
+    const long = await client.callTool({ name: 'x'.repeat(300), arguments: {} });
+    expect(long.content).toEqual([{ type: 'text', text: `Unknown tool: ${'x'.repeat(200)}…` }]);
     expect((await auditRows())[0]?.toolName).toBe('x'.repeat(200));
   });
 

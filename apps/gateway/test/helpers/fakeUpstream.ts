@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import {
   createLogger,
   defineTool,
@@ -38,6 +39,8 @@ export async function startFakeUpstream(o: {
   port?: number;
   slowMs?: number;
   isErrorTool?: string;
+  /** Advertise the tools without any description. */
+  noDescription?: boolean;
 }): Promise<FakeUpstream> {
   const checkAuth = upstreamAuthMiddleware(o.auth);
   const fake: FakeUpstream = { url: '', port: 0, calls: [], requests: 0, stop: async () => {} };
@@ -77,7 +80,13 @@ export async function startFakeUpstream(o: {
     logger: silent,
     allowedHosts: ['127.0.0.1', 'localhost', 'rebind.test'],
     registerTools: (s) => {
-      registerTools(s, tools, null);
+      if (!o.noDescription) {
+        registerTools(s, tools, null);
+        return;
+      }
+      for (const t of tools) {
+        s.registerTool(t.name, { inputSchema: t.inputSchema }, async (args) => (await t.handler(args, null)) as CallToolResult);
+      }
     },
   });
   fake.port = running.port;

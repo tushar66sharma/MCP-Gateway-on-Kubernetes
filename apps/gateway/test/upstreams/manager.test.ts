@@ -9,6 +9,7 @@ import type { DbHandle } from '../../src/db/client.js';
 import * as schema from '../../src/db/schema.js';
 import { encryptSecret } from '../../src/security/crypto.js';
 import type { SsrfOptions } from '../../src/security/ssrf.js';
+import type { UpstreamConnection } from '../../src/upstreams/connection.js';
 import { UpstreamManager, type CallContext } from '../../src/upstreams/manager.js';
 import { parseGatewayToolName } from '../../src/upstreams/naming.js';
 import { UpstreamRepository, type UpstreamRow } from '../../src/upstreams/repository.js';
@@ -42,7 +43,14 @@ interface Env {
   lookupCalls: () => number;
 }
 
-async function makeEnv(o: { healthIntervalMs?: number; healthTimeoutMs?: number; ssrf?: SsrfOptions } = {}): Promise<Env> {
+interface EnvOptions {
+  healthIntervalMs?: number;
+  healthTimeoutMs?: number;
+  callTimeoutMs?: number;
+  ssrf?: SsrfOptions;
+}
+
+async function makeEnv(o: EnvOptions = {}): Promise<Env> {
   const h = await createTestDb();
   const repo = new UpstreamRepository(h.db);
   const { logger, lines } = captureLogger();
@@ -71,7 +79,7 @@ async function makeEnv(o: { healthIntervalMs?: number; healthTimeoutMs?: number;
     // Generous: the first check (version probe + tools/list) competes for CPU with the other test files
     // (PGlite, argon2), and a 500 ms budget timed out under load. Call timeouts use callTimeoutMs.
     healthTimeoutMs: o.healthTimeoutMs ?? 5000,
-    callTimeoutMs: 1000,
+    callTimeoutMs: o.callTimeoutMs ?? 1000,
   });
   return { h, repo, manager, ctx: { userId: user!.id, apiKeyId: null, source: 'mcp' }, lines, lookupCalls: () => lookups };
 }
@@ -233,6 +241,31 @@ describe('UpstreamManager with healthy, slow and dead upstreams', () => {
     expect(row).toMatchObject({ outcome: 'denied', serverId: null, serverSlug: null, toolName: 'zzz__ping', userId: env.ctx.userId });
   });
 
+  it('findTool looks up one connected tool by gateway name', () => {
+    expect(env.manager.findTool('a__ping')).toBe(env.manager.listTools().find((t) => t.name === 'a__ping'));
+    expect(env.manager.findTool('b__ping')?.serverSlug).toBe('b');
+    for (const n of ['zzz__ping', 'a__nope', 'noseparator', 'dead__ping']) expect(env.manager.findTool(n)).toBeUndefined();
+  });
+
+  it('caps a long requested tool name at 200 characters in the Unknown tool text and the log line', async () => {
+    const shown = `${'x'.repeat(200)}…`;
+    const r = await env.manager.callTool('x'.repeat(300), {}, env.ctx);
+    expect(text(r)).toBe(`Unknown tool: ${shown}`);
+    const logs = env.lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => l.msg === 'tool call');
+    expect(logs.at(-1)).toMatchObject({ tool: shown, outcome: 'denied' });
+    expect(env.lines.join('\n')).not.toContain('x'.repeat(201));
+  });
+
+  it('fails only that call on an HTTP status that does not concern the server (413)', async () => {
+    // The fake's 1 MB body limit answers 413 Payload Too Large.
+    const r = await env.manager.callTool('a__echo', { note: 'x'.repeat(1_100_000) }, env.ctx);
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe("Upstream 'a' error: HTTP 413 from upstream");
+    expect(env.manager.getState(rowA.id).status).toBe('connected');
+    expect(names(env)).toContain('a__echo');
+    expect((await env.manager.callTool('a__echo', {}, env.ctx)).isError).toBeFalsy();
+  });
+
   it('denies an unparseable name and a tool missing from a known server', async () => {
     for (const name of ['noseparator', 'a__nope']) {
       const r = await env.manager.callTool(name, {}, env.ctx);
@@ -267,7 +300,7 @@ describe('UpstreamManager state changes', () => {
     for (const c of cleanups.splice(0).reverse()) await c();
   });
 
-  async function setup(o: { healthIntervalMs?: number; healthTimeoutMs?: number; ssrf?: SsrfOptions } = {}): Promise<Env> {
+  async function setup(o: EnvOptions = {}): Promise<Env> {
     const env = await makeEnv(o);
     cleanups.push(() => env.h.close());
     cleanups.push(() => env.manager.stop());
@@ -357,7 +390,7 @@ describe('UpstreamManager state changes', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/^Upstream 'b' is unreachable: /);
     // Refused on a new socket, or a reset when the pooled keep-alive socket is reused first.
-    expect(text(r)).toMatch(/: (connection refused|error: fetch failed \(.*(ECONNRESET|other side closed).*\))$/);
+    expect(text(r)).toMatch(/: connection (refused|reset)$/);
     expect(names(env)).toEqual(['a__ping']);
     expect((await env.repo.get(rowB.id))!.lastStatus).toBe('unreachable');
     expect((await auditRows(env, 'b__ping'))[0]).toMatchObject({ outcome: 'error', serverId: rowB.id });
@@ -415,6 +448,84 @@ describe('UpstreamManager state changes', () => {
     expect(state.lastError).toBe('error: upstream credential contains characters not allowed in an HTTP header');
     expect(env.lines.join('\n')).not.toContain('SECRET-PART');
     expect(f.requests).toBe(0);
+  });
+
+  it("prefixes '[<Server name>] ' (trailing space kept) when the upstream gives no description", async () => {
+    const env = await setup({ healthIntervalMs: 60_000 });
+    const f = await fake({ name: 'nd', tools: ['ping'], auth: none, noDescription: true });
+    const row = await addRow(env.repo, { slug: 'nd', url: f.url, auth: none, name: 'No Desc' });
+    await env.manager.start();
+    await waitConnected(env, row.id);
+    expect(env.manager.listTools().map((t) => t.description)).toEqual(['[No Desc] ']);
+  });
+
+  it('reports a call cut off by an upsert or a remove as reconfigured, not as unreachable', async () => {
+    const env = await setup({ healthIntervalMs: 60_000, callTimeoutMs: 10_000 });
+    const f = await fake({ name: 's', tools: ['ping'], auth: none, slowMs: 3000 });
+    const row = await addRow(env.repo, { slug: 's', url: f.url, auth: none });
+    await env.manager.start();
+    await waitConnected(env, row.id);
+
+    const during = env.manager.callTool('s__ping', {}, env.ctx);
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1), { timeout: 10_000, interval: 10 });
+    await env.manager.upsert(row);
+    const r = await during;
+    expect(r.isError).toBe(true);
+    expect(text(r)).toBe("Server 's' was reconfigured during the call");
+    expect((await auditRows(env, 's__ping')).at(-1)).toMatchObject({ outcome: 'error', errorMessage: "Server 's' was reconfigured during the call" });
+    await waitConnected(env, row.id);
+    expect((await env.repo.get(row.id))!.lastStatus).toBe('connected');
+
+    const again = env.manager.callTool('s__ping', {}, env.ctx);
+    await vi.waitFor(() => expect(f.calls).toHaveLength(2), { timeout: 10_000, interval: 10 });
+    await env.manager.remove(row.id);
+    expect(text(await again)).toBe("Server 's' was reconfigured during the call");
+    expect((await env.repo.get(row.id))!.lastStatus).toBe('connected');
+  });
+
+  it("drops a health check's result when a failed call took its connection meanwhile", async () => {
+    const env = await setup({ healthIntervalMs: 60_000 });
+    const f = await fake({ name: 'h', tools: ['ping'], auth: none });
+    const row = await addRow(env.repo, { slug: 'h', url: f.url, auth: none });
+    await env.manager.start();
+    await waitConnected(env, row.id);
+    // Test-only reach into the held connection: its next tools/list answers, then waits on a gate;
+    // its next call fails like a reset socket.
+    const entries = (env.manager as unknown as { entries: Map<string, { conn: UpstreamConnection | null }> }).entries;
+    const conn = entries.get(row.id)!.conn!;
+    const realList = conn.listTools.bind(conn);
+    let listed!: () => void;
+    let release!: () => void;
+    const listedP = new Promise<void>((resolve) => (listed = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    conn.listTools = async (ms) => {
+      const tools = await realList(ms);
+      listed();
+      await gate;
+      return tools;
+    };
+    conn.callTool = () => Promise.reject(new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) }));
+
+    const checking = env.manager.refresh(row.id);
+    await listedP;
+    const r = await env.manager.callTool('h__ping', {}, env.ctx);
+    expect(text(r)).toBe("Upstream 'h' is unreachable: connection reset");
+    release();
+    await checking;
+    // Without the guard the check would now publish 'connected' tools on the closed client.
+    expect(env.manager.getState(row.id)).toMatchObject({ status: 'unreachable', lastError: 'connection reset', tools: [] });
+    expect(names(env)).toEqual([]);
+  });
+
+  it('bounds the URL check DNS lookup by the health timeout', async () => {
+    const never = (): Promise<string[]> => new Promise<string[]>(() => {});
+    const env = await setup({ healthIntervalMs: 60_000, healthTimeoutMs: 300, ssrf: { allowedInternalHosts: [], allowLoopback: true, lookup: never } });
+    const row = await addRow(env.repo, { slug: 'nodns', url: 'http://never-resolves.test/mcp', auth: none });
+    const t0 = performance.now();
+    await env.manager.start();
+    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(env.manager.getState(row.id)).toMatchObject({ status: 'unreachable', lastError: 'DNS lookup failed' });
+    expect(env.lookupCalls()).toBe(1);
   });
 
   it('upsert adds a new server and remove drops it', async () => {

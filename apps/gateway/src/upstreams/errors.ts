@@ -55,6 +55,9 @@ export function describeUpstreamError(err: unknown, timeoutMs: number): string {
     // Error / AggregateError (one per address for a name with IPv4+IPv6) with code ECONNREFUSED,
     // as the cause of undici's TypeError 'fetch failed'.
     if (code === 'ECONNREFUSED') return 'connection refused';
+    // A pooled keep-alive socket the upstream closed: ECONNRESET, or undici's SocketError
+    // ('other side closed') with code UND_ERR_SOCKET.
+    if (code === 'ECONNRESET' || code === 'UND_ERR_SOCKET') return 'connection reset';
     // getaddrinfo Error with code ENOTFOUND (no such name) or EAI_AGAIN (resolver unavailable).
     if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'DNS lookup failed';
   }
@@ -72,22 +75,34 @@ export function describeUpstreamError(err: unknown, timeoutMs: number): string {
   return `error: ${(message + detail).slice(0, 200)}`;
 }
 
-/**
- * True for failures of the link to the upstream (refused, DNS, SSRF block, redirect, HTTP status,
- * socket reset, closed transport): the server is then marked unreachable. False for timeouts and for
- * JSON-RPC errors the upstream answered with (ProtocolError), which leave it connected.
- */
 /** True when the error (or a cause) is a request timeout or an abort. */
 export function isTimeoutError(err: unknown): boolean {
   return chain(err).some(isTimeout);
 }
 
+/**
+ * HTTP statuses that say the server as a whole is unusable (credential rejected, endpoint gone, server
+ * failing). Any other status (e.g. 413 for one oversized request) concerns that call only.
+ */
+function isServerLevelStatus(status: number | undefined): boolean {
+  return status === 401 || status === 403 || status === 404 || (status !== undefined && status >= 500);
+}
+
+/**
+ * True for failures of the link to the upstream (refused, DNS, SSRF block, redirect, socket reset,
+ * closed transport, HTTP 401/403/404/5xx): during a call the server is then marked unreachable.
+ * False for timeouts, for JSON-RPC errors the upstream answered with (ProtocolError) and for other HTTP
+ * statuses such as 413: those fail that call only and leave the server connected.
+ */
 export function isConnectionLevelError(err: unknown): boolean {
   if (err instanceof ProtocolError) return false;
   const all = chain(err);
   if (all.some(isTimeout)) return false;
+  // The upstream answered: its status decides, whatever wraps it.
+  const http = all.find((e): e is SdkHttpError => e instanceof SdkHttpError);
+  if (http) return isServerLevelStatus(http.status);
   return all.some((e) => {
-    if (e instanceof SsrfError || e instanceof UpstreamRedirectError || e instanceof SdkHttpError) return true;
+    if (e instanceof SsrfError || e instanceof UpstreamRedirectError) return true;
     if (e instanceof SdkError) return e.code === SdkErrorCode.ConnectionClosed || e.code === SdkErrorCode.NotConnected || e.code === SdkErrorCode.SendFailed;
     const code = codeOf(e);
     if (typeof code === 'string' && /^(E[A-Z]+|UND_ERR_[A-Z_]+)$/.test(code)) return true;

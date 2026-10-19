@@ -24,10 +24,35 @@ export interface SsrfOptions {
   allowedInternalHosts: string[];
   allowLoopback?: boolean;
   lookup?: (host: string) => Promise<string[]>;
+  /**
+   * Upper bound for assertSafeUpstreamUrl's DNS lookup (the health timeout). getaddrinfo can block for
+   * the resolver's whole retry budget when CoreDNS is unhealthy; past this the URL fails as dns_failed.
+   */
+  lookupTimeoutMs?: number;
 }
 
 const defaultLookup = async (host: string): Promise<string[]> =>
   (await dns.lookup(host, { all: true })).map((a) => a.address);
+
+/** The lookup raced against AbortSignal.timeout(ms); a timeout rejects with SsrfError('dns_failed'). */
+function lookupWithin(lookup: (host: string) => Promise<string[]>, host: string, ms: number | undefined): Promise<string[]> {
+  if (ms === undefined) return lookup(host);
+  const signal = AbortSignal.timeout(ms);
+  return new Promise<string[]>((resolve, reject) => {
+    const onAbort = () => reject(new SsrfError('dns_failed', `could not resolve ${host} within ${ms}ms`));
+    signal.addEventListener('abort', onAbort, { once: true });
+    lookup(host).then(
+      (addrs) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(addrs);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
 
 function ipv4ToInt(ip: string): number {
   const p = ip.split('.').map(Number);
@@ -169,8 +194,9 @@ export async function assertSafeUpstreamUrl(url: string, o: SsrfOptions): Promis
     addrs = [host];
   } else {
     try {
-      addrs = await (o.lookup ?? defaultLookup)(host);
-    } catch {
+      addrs = await lookupWithin(o.lookup ?? defaultLookup, host, o.lookupTimeoutMs);
+    } catch (err) {
+      if (err instanceof SsrfError) throw err;
       throw new SsrfError('dns_failed', `could not resolve ${host}`);
     }
   }
@@ -183,32 +209,45 @@ export async function assertSafeUpstreamUrl(url: string, o: SsrfOptions): Promis
  * window left by assertSafeUpstreamUrl: the name is resolved again when the socket opens, and every
  * address of that answer is judged by the same rules before the socket may use it.
  * A failed resolution is passed through unchanged (it keeps its ENOTFOUND / EAI_AGAIN code).
+ *
+ * Callable like `dns.lookup`: `(hostname, callback)`, `(hostname, family, callback)` or
+ * `(hostname, options, callback)`. The callback always runs on a later tick and outside the promise
+ * chain, so an exception it throws surfaces as it would from dns.lookup instead of as an unhandled
+ * rejection.
  */
 export function createSafeLookup(o: SsrfOptions): LookupFunction {
   const resolve = o.lookup ?? defaultLookup;
-  return (hostname, options, callback) => {
+  type Callback = (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void;
+  const lookup = (hostname: string, optionsOrCallback: unknown, maybeCallback?: unknown): void => {
+    const callback = (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback) as Callback;
+    const raw = typeof optionsOrCallback === 'function' ? undefined : optionsOrCallback;
+    const options: { family?: unknown; all?: unknown } = typeof raw === 'number' ? { family: raw } : typeof raw === 'object' && raw !== null ? raw : {};
+    const all = options.all === true;
+    const answer = (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number): void => {
+      process.nextTick(() => {
+        if (family === undefined) callback(err, address);
+        else callback(err, address, family);
+      });
+    };
     resolve(hostname).then(
       (addrs) => {
         try {
           assertAddressesAllowed(hostname, addrs, o);
         } catch (err) {
-          callback(err as SsrfError, options.all ? [] : '');
+          answer(err as SsrfError, all ? [] : '');
           return;
         }
         const wanted = options.family === 4 || options.family === 'IPv4' ? 4 : options.family === 6 || options.family === 'IPv6' ? 6 : 0;
         const list: LookupAddress[] = addrs.map((address) => ({ address, family: isIP(address) })).filter((a) => wanted === 0 || a.family === wanted);
         const first = list[0];
-        if (!first) {
-          callback(new SsrfError('dns_failed', `could not resolve ${hostname}`), options.all ? [] : '');
-          return;
-        }
-        if (options.all) callback(null, list);
-        else callback(null, first.address, first.family);
+        if (!first) answer(new SsrfError('dns_failed', `could not resolve ${hostname}`), all ? [] : '');
+        else if (all) answer(null, list);
+        else answer(null, first.address, first.family);
       },
       (err: unknown) => {
-        const e = err instanceof Error ? (err as NodeJS.ErrnoException) : new SsrfError('dns_failed', `could not resolve ${hostname}`);
-        callback(e, options.all ? [] : '');
+        answer(err instanceof Error ? (err as NodeJS.ErrnoException) : new SsrfError('dns_failed', `could not resolve ${hostname}`), all ? [] : '');
       },
     );
   };
+  return lookup as LookupFunction;
 }

@@ -49,6 +49,26 @@ const bool = z
 
 const intRange = (def: number, min: number, max: number) => z.coerce.number().int().min(min).max(max).default(def);
 
+const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+/**
+ * An SSRF allowlist entry is `*.<suffix>` with at least two labels after the wildcard, or an exact name
+ * with at least one dot. A bare `*.`, `*.local` or `localhost` would let private addresses through for
+ * far more names than intended.
+ */
+export function isValidAllowlistEntry(entry: string): boolean {
+  const wildcard = entry.startsWith('*.');
+  const labels = (wildcard ? entry.slice(2) : entry).split('.');
+  return labels.length >= 2 && labels.every((l) => DNS_LABEL.test(l));
+}
+
+const allowlist = csv('*.mcp.svc.cluster.local').superRefine((entries, ctx) => {
+  entries.forEach((entry, i) => {
+    // The index only, never the value (loadEnv reports SSRF_ALLOWED_INTERNAL_HOSTS.<i>).
+    if (!isValidAllowlistEntry(entry)) ctx.addIssue({ code: 'custom', path: [i], message: 'invalid allowlist entry' });
+  });
+});
+
 const seedServerSchema = z.object({
   slug: z.string().regex(/^[a-z][a-z0-9-]{1,15}$/),
   name: z.string().min(1).max(100),
@@ -105,7 +125,7 @@ const appSchema = z.object({
   BOOTSTRAP_ADMIN_EMAIL: z.string().trim().toLowerCase().pipe(z.email()),
   BOOTSTRAP_ADMIN_PASSWORD: z.string().min(10).max(200),
   SEED_SERVERS: seedServers,
-  SSRF_ALLOWED_INTERNAL_HOSTS: csv('*.mcp.svc.cluster.local'),
+  SSRF_ALLOWED_INTERNAL_HOSTS: allowlist,
   SSRF_ALLOW_LOOPBACK: bool,
   UPSTREAM_HEALTH_INTERVAL_MS: intRange(15000, 1000, 300000),
   UPSTREAM_HEALTH_TIMEOUT_MS: intRange(5000, 500, 60000),
@@ -132,5 +152,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
 /** The SSRF rules for upstream URLs, shared by the servers API and the upstream manager. */
 export function ssrfOptionsOf(config: Config): SsrfOptions {
-  return { allowedInternalHosts: config.SSRF_ALLOWED_INTERNAL_HOSTS, allowLoopback: config.SSRF_ALLOW_LOOPBACK };
+  return {
+    allowedInternalHosts: config.SSRF_ALLOWED_INTERNAL_HOSTS,
+    allowLoopback: config.SSRF_ALLOW_LOOPBACK,
+    // The URL check's DNS lookup gets the same budget as a health check.
+    lookupTimeoutMs: config.UPSTREAM_HEALTH_TIMEOUT_MS,
+  };
 }

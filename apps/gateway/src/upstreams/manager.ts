@@ -68,12 +68,28 @@ const emptyState = (status: UpstreamStatus): UpstreamState => ({ status, lastErr
 
 const byName = (a: GatewayTool, b: GatewayTool): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
+/** The requested tool name as it appears in the log line and the `Unknown tool:` text: at most 200 characters. */
+const MAX_SHOWN_NAME = 200;
+function shownName(name: string): string {
+  return name.length > MAX_SHOWN_NAME ? `${name.slice(0, MAX_SHOWN_NAME)}…` : name;
+}
+
+/** Thrown inside check() when the entry or its connection was replaced meanwhile: the result is dropped. */
+class SupersededError extends Error {
+  constructor() {
+    super('superseded');
+    this.name = 'SupersededError';
+  }
+}
+
 /**
  * Health-checked, cached catalog of upstream tools (ADR-014). `listTools()` never does I/O; a dead or
  * slow upstream only costs its own background check. Calls are never retried.
  */
 export class UpstreamManager {
   private readonly entries = new Map<string, Entry>();
+  /** slug → row id (slugs are unique and immutable), for O(1) routing of a gateway tool name. */
+  private readonly slugs = new Map<string, string>();
   private readonly clock: () => Date;
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
@@ -85,7 +101,7 @@ export class UpstreamManager {
   /** Loads all rows, checks every one once (disabled rows are recorded as such), then starts the interval. */
   async start(): Promise<void> {
     this.stopped = false;
-    for (const row of await this.o.repo.list()) this.entries.set(row.id, this.newEntry(row));
+    for (const row of await this.o.repo.list()) this.put(this.newEntry(row));
     await Promise.all([...this.entries.values()].map((e) => this.runCheck(e)));
     this.timer = setInterval(() => this.tick(), this.o.healthIntervalMs);
     this.timer.unref();
@@ -105,7 +121,7 @@ export class UpstreamManager {
   async upsert(row: UpstreamRow): Promise<void> {
     const old = this.entries.get(row.id);
     const entry = this.newEntry(row);
-    this.entries.set(row.id, entry); // makes `old` stale before its connection is closed
+    this.put(entry); // makes `old` stale before its connection is closed
     if (old) await this.dropConnection(old);
     await this.runCheck(entry);
   }
@@ -113,6 +129,7 @@ export class UpstreamManager {
   async remove(id: string): Promise<void> {
     const old = this.entries.get(id);
     this.entries.delete(id);
+    if (old && this.slugs.get(old.row.slug) === id) this.slugs.delete(old.row.slug);
     if (old) await this.dropConnection(old);
   }
 
@@ -132,6 +149,14 @@ export class UpstreamManager {
       if (e.row.enabled && e.state.status === 'connected') out.push(...e.state.tools);
     }
     return out.sort(byName);
+  }
+
+  /** One tool of an enabled and connected server, by gateway name: two map lookups, no sort, no I/O. */
+  findTool(gatewayName: string): GatewayTool | undefined {
+    const parsed = parseGatewayToolName(gatewayName);
+    const entry = parsed ? this.findBySlug(parsed.slug) : undefined;
+    if (!entry || !entry.row.enabled || entry.state.status !== 'connected') return undefined;
+    return entry.index.get(gatewayName);
   }
 
   getState(id: string): UpstreamState {
@@ -159,15 +184,16 @@ export class UpstreamManager {
         outcome,
         errorMessage,
       });
-      // Never args, results, credentials or headers.
-      this.o.logger.info({ tool: gatewayName, server: server?.slug ?? null, outcome, durationMs, userId: ctx.userId, source: ctx.source }, 'tool call');
+      // Never args, results, credentials or headers. The requested name is the client's, so it is capped.
+      this.o.logger.info({ tool: shownName(gatewayName), server: server?.slug ?? null, outcome, durationMs, userId: ctx.userId, source: ctx.source }, 'tool call');
       return result;
     };
     const fail = (outcome: AuditEntry['outcome'], text: string) => finish(outcome, gatewayError(text), text);
+    const unknownTool = () => fail('denied', `Unknown tool: ${shownName(gatewayName)}`);
 
     const parsed = parseGatewayToolName(gatewayName);
     const entry = parsed ? this.findBySlug(parsed.slug) : undefined;
-    if (!parsed || !entry) return fail('denied', `Unknown tool: ${gatewayName}`);
+    if (!parsed || !entry) return unknownTool();
     const { slug } = entry.row;
     server = { id: entry.row.id, slug };
     toolName = parsed.tool;
@@ -176,7 +202,7 @@ export class UpstreamManager {
       return fail('denied', `Server '${slug}' is disabled or unreachable`);
     }
     const tool = entry.index.get(gatewayName);
-    if (!tool) return fail('denied', `Unknown tool: ${gatewayName}`);
+    if (!tool) return unknownTool();
 
     const timeoutMs = this.o.callTimeoutMs;
     const deadline = AbortSignal.timeout(timeoutMs);
@@ -189,6 +215,10 @@ export class UpstreamManager {
       return finish('success', result, null);
     } catch (err) {
       if (signal?.aborted && !deadline.aborted) return fail('error', `Call to '${gatewayName}' was cancelled`);
+      // An upsert or remove (or shutdown) replaced this entry and closed its connection under the call:
+      // not the upstream's fault, so the server is not marked unreachable. Checked before the timeout
+      // rule because closing the client aborts the request.
+      if (!this.isCurrent(entry)) return fail('error', `Server '${slug}' was reconfigured during the call`);
       if (deadline.aborted || isTimeoutError(err)) return fail('timeout', `Upstream '${slug}' did not respond within ${timeoutMs}ms`);
       if (err instanceof ProtocolError) return fail('error', `Upstream '${slug}' error: ${err.message}`);
       if (isConnectionLevelError(err)) {
@@ -204,9 +234,14 @@ export class UpstreamManager {
     return { row, conn: null, state: emptyState('unknown'), index: new Map(), checking: null };
   }
 
+  private put(e: Entry): void {
+    this.entries.set(e.row.id, e);
+    this.slugs.set(e.row.slug, e.row.id);
+  }
+
   private findBySlug(slug: string): Entry | undefined {
-    for (const e of this.entries.values()) if (e.row.slug === slug) return e;
-    return undefined;
+    const id = this.slugs.get(slug);
+    return id === undefined ? undefined : this.entries.get(id);
   }
 
   private isCurrent(e: Entry): boolean {
@@ -239,8 +274,8 @@ export class UpstreamManager {
     const timeoutMs = this.o.healthTimeoutMs;
     let conn = e.conn;
     try {
-      // Every check, not only on create: DNS answers change.
-      await assertSafeUpstreamUrl(row.url, this.o.ssrf);
+      // Every check, not only on create: DNS answers change. The lookup is bounded by the same timeout.
+      await assertSafeUpstreamUrl(row.url, { ...this.o.ssrf, lookupTimeoutMs: timeoutMs });
       if (!conn) {
         // A fresh client (and socket pool) after any failure: a restarted upstream never meets a stale client.
         conn = new UpstreamConnection(toUpstreamRecord(row, this.o.encKey), this.o.logger, this.o.ssrf);
@@ -248,7 +283,9 @@ export class UpstreamManager {
         await conn.connect(timeoutMs);
       }
       const infos = await conn.listTools(timeoutMs);
-      if (!this.isCurrent(e)) throw new Error('superseded');
+      // Superseded: an upsert/remove/stop replaced the entry, or a failed call dropped this connection
+      // (markUnreachable). Committing 'connected' then would revive tools on a closed client.
+      if (!this.isCurrent(e) || e.conn !== conn) throw new SupersededError();
       const tools: GatewayTool[] = [];
       const skippedTools: string[] = [];
       for (const t of infos) {
@@ -257,17 +294,22 @@ export class UpstreamManager {
           skippedTools.push(t.name);
           continue;
         }
-        const description = t.description ? `[${row.name}] ${t.description}` : `[${row.name}]`;
+        // Spec §6.4: the prefix is always '[<Server name>] ', trailing space included, even without a description.
+        const description = `[${row.name}] ${t.description ?? ''}`;
         tools.push({ ...t, name, description, serverId: row.id, serverSlug: row.slug, upstreamName: t.name });
       }
       tools.sort(byName);
       if (skippedTools.length > 0) this.o.logger.warn({ server: row.slug, skippedTools }, 'upstream tools skipped: invalid gateway tool name');
       return this.commit(e, { status: 'connected', lastError: null, tools, skippedTools, checkedAt });
     } catch (err) {
+      // Whoever took the connection away (markUnreachable, upsert, remove, stop) already published the
+      // state; this check's result is dropped rather than overwriting it.
+      const superseded = err instanceof SupersededError || (conn !== null && e.conn !== conn);
       if (conn) {
         if (e.conn === conn) e.conn = null;
         await conn.close();
       }
+      if (superseded) return e.state;
       return this.commit(e, { status: 'unreachable', lastError: describeUpstreamError(err, timeoutMs), tools: [], skippedTools: [], checkedAt });
     }
   }
