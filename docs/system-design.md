@@ -236,7 +236,7 @@ Audit outcomes: `success`; `error` (the upstream returned `isError`, a protocol 
 | Health check interval / timeout | 15 s / 5 s | `UPSTREAM_HEALTH_INTERVAL_MS`, `UPSTREAM_HEALTH_TIMEOUT_MS`; the gateway refuses to start unless the timeout is below the interval. |
 | Tool call | 20 s | `UPSTREAM_CALL_TIMEOUT_MS`; must stay above the WooCommerce server's own 10 s so a slow store comes back as that server's clean `isError`. Both the gateway's config and the chart schema reject values below 11000. |
 | Postgres connect at start | 30 attempts, 2 s apart | `src/main.ts` |
-| Postgres pool | connect 5 s, statement 10 s, idle client 30 s | `src/db/client.ts` (`connectionTimeoutMillis`, `statement_timeout`, `idleTimeoutMillis`) |
+| Postgres pool | connect 5 s, statement 10 s (migrations run on a separate one-client pool with no statement timeout), idle client 30 s | `src/db/client.ts` (`connectionTimeoutMillis`, `statement_timeout`, `idleTimeoutMillis`) |
 | Shutdown drain | 25 s for in-flight requests, after a 5 s `preStop` sleep; pod grace 35 s | `src/main.ts`, `terminationGracePeriodSeconds` |
 | Session | 12 h | cookie `Max-Age=43200` |
 | Invite | 72 h, single use | |

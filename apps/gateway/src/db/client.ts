@@ -40,7 +40,17 @@ export function createPostgresHandle(logger?: Logger): DbHandle {
         return false;
       }
     },
-    migrate: () => migratePg(db, { migrationsFolder: migrationsFolder() }),
+    // Migrations run on their own one-client pool without the 10 s statement_timeout: a future
+    // migration on a large table (e.g. audit_logs) must not be cancelled and crash-loop the pod.
+    migrate: async () => {
+      const migrationPool = new pg.Pool({ ...PG_POOL_OPTIONS, max: 1, statement_timeout: undefined });
+      migrationPool.on('error', (err) => logger?.warn({ reason: safeReason(err) }, 'postgres migration pool error'));
+      try {
+        await migratePg(drizzle(migrationPool, { schema }), { migrationsFolder: migrationsFolder() });
+      } finally {
+        await migrationPool.end();
+      }
+    },
     close: () => pool.end(),
   };
 }
