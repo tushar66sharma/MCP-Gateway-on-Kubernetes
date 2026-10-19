@@ -82,8 +82,67 @@ async function pollTools(predicate, timeoutMs) {
 
 const kubectl = (...a) => execFileSync('kubectl', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
+const RESTORE_CMD = 'kubectl -n mcp scale deploy/mcp-utilities --replicas=1';
+let utilsScaledDown = false;
 let keyId = null;
+let keyRevoked = false;
+
+/** Scales mcp-utilities back to 1 (synchronous so signal handlers can use it). One retry, then a loud error. */
+function restoreUtilities() {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      kubectl('-n', 'mcp', 'scale', 'deploy/mcp-utilities', '--replicas=1');
+      utilsScaledDown = false;
+      return true;
+    } catch {
+      // retry once
+    }
+  }
+  console.error(`ERROR: could not scale mcp-utilities back to 1 replica. Run this by hand NOW: ${RESTORE_CMD}`);
+  process.exitCode = 1;
+  return false;
+}
+
+/** Revokes the smoke key once; a non-204 prints a warning naming the key id (never the key). */
+async function revokeKey() {
+  if (!keyId || keyRevoked) return;
+  try {
+    const res = await api('DELETE', `/api/keys/${keyId}`);
+    if (res.status === 204) {
+      keyRevoked = true;
+    } else {
+      console.error(`WARNING: revoking the smoke API key ${keyId} returned HTTP ${res.status}. Revoke it with DELETE /api/keys/${keyId} (see docs/run-guide.md).`);
+    }
+  } catch (err) {
+    console.error(`WARNING: could not revoke the smoke API key ${keyId} (${err instanceof Error ? err.name : 'error'}). Revoke it with DELETE /api/keys/${keyId} (see docs/run-guide.md).`);
+  }
+}
+
+let interrupted = false;
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    if (interrupted) return;
+    interrupted = true;
+    console.error(`${sig}: cleaning up`);
+    if (utilsScaledDown) restoreUtilities();
+    void revokeKey().finally(() => process.exit(130));
+  });
+}
+
+let utilsRestoredAtStart = false;
+let failed = false;
 try {
+  // Self-heal a previous aborted --isolation run: mcp-utilities must be at 1 replica and ready.
+  if (isolation) {
+    const replicas = kubectl('-n', 'mcp', 'get', 'deploy/mcp-utilities', '-o', 'jsonpath={.spec.replicas}').trim();
+    if (replicas !== '1') {
+      kubectl('-n', 'mcp', 'scale', 'deploy/mcp-utilities', '--replicas=1');
+      utilsRestoredAtStart = true;
+      console.log(`isolation: mcp-utilities was at ${replicas || '?'} replicas (aborted earlier run?); restored to 1`);
+    }
+    kubectl('-n', 'mcp', 'rollout', 'status', 'deploy/mcp-utilities', '--timeout=120s');
+  }
+
   // 1. Log in. Only the name=value pair of the session cookie is kept.
   const login = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
@@ -111,7 +170,7 @@ try {
   console.log('api key: created (not printed)');
 
   // 3. tools/list: 15 tools, 6 woo__, 5 notes__, 4 utils__.
-  const names = await listToolNames();
+  const names = utilsRestoredAtStart ? (await pollTools((n) => n.length === 15, 60000)).names : await listToolNames();
   const count = (p) => names.filter((n) => n.startsWith(p)).length;
   assert(names.length === 15, `expected 15 tools, got ${names.length}: ${names.join(', ')}`);
   assert(count('woo__') === 6 && count('notes__') === 5 && count('utils__') === 4, `unexpected split woo=${count('woo__')} notes=${count('notes__')} utils=${count('utils__')}`);
@@ -146,6 +205,7 @@ try {
   if (isolation) {
     const t0 = Date.now();
     kubectl('-n', 'mcp', 'scale', 'deploy/mcp-utilities', '--replicas=0');
+    utilsScaledDown = true;
     console.log('isolation: mcp-utilities scaled to 0');
     try {
       const gone = await pollTools((n) => !n.some((x) => x.startsWith('utils__')), 45000);
@@ -158,7 +218,7 @@ try {
       console.log('isolation: woo__ping still ok while utils is down');
     } finally {
       const t1 = Date.now();
-      kubectl('-n', 'mcp', 'scale', 'deploy/mcp-utilities', '--replicas=1');
+      if (!restoreUtilities()) throw new Error('could not restore mcp-utilities');
       console.log('isolation: mcp-utilities scaled back to 1');
       const back = await pollTools((n) => n.filter((x) => x.startsWith('utils__')).length === 4, 90000);
       console.log(`isolation: utils__ tools back after ${secs(t1)}s (${back.names.length} tools; total ${secs(t0)}s)`);
@@ -168,7 +228,7 @@ try {
   // 7. Revoke the key, expect 401 on /mcp, then the audit rows.
   const del = await api('DELETE', `/api/keys/${keyId}`);
   assert(del.status === 204, `revoke key returned HTTP ${del.status}`);
-  keyId = null;
+  keyRevoked = true;
   const after = await fetch(`${base}/mcp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: `Bearer ${apiKey}` },
@@ -186,14 +246,17 @@ try {
   const mine = audit.items.filter((r) => r.userEmail === email.trim().toLowerCase());
   assert(mine.length > 0, 'no audit rows attributed to the admin');
   const slugs = [...new Set(mine.map((r) => r.serverSlug).filter(Boolean))].sort();
-  assert(['notes', 'utils', 'woo'].every((s) => slugs.includes(s)) || isolation || !write, 'audit rows do not cover every server');
+  // Every run calls ping on all three servers, so all three must appear in the admin's audit rows.
+  for (const s of ['utils', 'notes', 'woo']) assert(slugs.includes(s), `audit rows by the admin do not include server ${s}`);
   console.log(`audit: ${audit.items.length} row(s), ${mine.length} by the admin; servers=[${slugs.join(',')}]`);
   for (const r of mine.slice(0, 8)) console.log(`  ${r.event} ${r.serverSlug ?? '-'} ${r.toolName ?? '-'} ${r.outcome} ${r.durationMs}ms`);
 
   console.log('Gateway smoke test passed.');
 } catch (err) {
   console.error(`Gateway smoke test FAILED: ${err instanceof Error ? err.message : String(err)}`);
-  // Best effort: never leave the smoke key behind.
-  if (keyId) await api('DELETE', `/api/keys/${keyId}`).catch(() => {});
-  process.exit(1);
+  failed = true;
+} finally {
+  if (utilsScaledDown) restoreUtilities();
+  await revokeKey();
 }
+if (failed || process.exitCode) process.exit(1);

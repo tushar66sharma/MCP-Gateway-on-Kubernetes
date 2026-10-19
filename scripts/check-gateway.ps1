@@ -40,6 +40,14 @@ try {
 } finally {
   Remove-Item Env:GATEWAY_ADMIN_EMAIL -ErrorAction SilentlyContinue
   Remove-Item Env:GATEWAY_ADMIN_PASSWORD -ErrorAction SilentlyContinue
+  if ($Isolation) {
+    # Covers the case where node itself was killed mid-run: mcp-utilities must never stay at 0 replicas.
+    kubectl -n mcp scale deploy/mcp-utilities --replicas=1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host 'ERROR: could not restore mcp-utilities. Run this by hand NOW: kubectl -n mcp scale deploy/mcp-utilities --replicas=1' -ForegroundColor Red
+      $code = 1
+    }
+  }
 }
 if ($code -ne 0) { Stop-WithError 'Gateway end-to-end check failed. See docs/troubleshooting.md.' }
 Write-Host 'Gateway works end to end (login, API key, 15 aggregated tools, audit log).' -ForegroundColor Green
