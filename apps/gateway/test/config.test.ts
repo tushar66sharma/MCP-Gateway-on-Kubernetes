@@ -89,6 +89,14 @@ describe('loadConfig', () => {
     expect(err.message).not.toContain('pw-not-in-errors');
   });
 
+  it('reads TRUST_PROXY as 0..5 proxy hops, default 0', () => {
+    expect(loadConfig(validEnv()).TRUST_PROXY).toBe(0);
+    expect(loadConfig(validEnv({ TRUST_PROXY: '1' })).TRUST_PROXY).toBe(1);
+    for (const bad of ['-1', '6', '1.5', 'true']) {
+      expect(errorOf(validEnv({ TRUST_PROXY: bad })).message).toContain('TRUST_PROXY');
+    }
+  });
+
   it('trims and lowercases the bootstrap email', () => {
     expect(loadConfig(validEnv({ BOOTSTRAP_ADMIN_EMAIL: ' Admin@Example.COM ' })).BOOTSTRAP_ADMIN_EMAIL).toBe('admin@example.com');
   });

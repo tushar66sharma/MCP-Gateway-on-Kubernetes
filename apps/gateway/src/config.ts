@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { loadEnv } from '@urumi/shared';
+import type { SsrfOptions } from './security/ssrf.js';
 
 export interface SeedServer {
   slug: string;
@@ -26,6 +27,8 @@ export interface Config {
   UPSTREAM_HEALTH_INTERVAL_MS: number;
   UPSTREAM_HEALTH_TIMEOUT_MS: number;
   UPSTREAM_CALL_TIMEOUT_MS: number;
+  /** Express 'trust proxy' hop count: 0 trusts no X-Forwarded-For; 1 = one reverse proxy (Traefik) in front. */
+  TRUST_PROXY: number;
 }
 
 const csv = (fallback: string) =>
@@ -107,6 +110,7 @@ const appSchema = z.object({
   UPSTREAM_HEALTH_INTERVAL_MS: intRange(15000, 1000, 300000),
   UPSTREAM_HEALTH_TIMEOUT_MS: intRange(5000, 500, 60000),
   UPSTREAM_CALL_TIMEOUT_MS: intRange(20000, 1000, 120000),
+  TRUST_PROXY: intRange(0, 0, 5),
 });
 
 // Read by `pg` itself; required here so a misconfigured pod fails at startup with the variable named.
@@ -124,4 +128,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // Parse once so every problem is reported together, then return only the app settings.
   loadEnv(envSchema, env);
   return loadEnv(appSchema, env);
+}
+
+/** The SSRF rules for upstream URLs, shared by the servers API and the upstream manager. */
+export function ssrfOptionsOf(config: Config): SsrfOptions {
+  return { allowedInternalHosts: config.SSRF_ALLOWED_INTERNAL_HOSTS, allowLoopback: config.SSRF_ALLOW_LOOPBACK };
 }

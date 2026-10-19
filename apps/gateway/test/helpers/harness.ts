@@ -7,9 +7,8 @@ import { LoginRateLimiter } from '../../src/auth/rateLimit.js';
 import { createUser as insertUser, type AuthUser, type Role } from '../../src/auth/users.js';
 import { loadConfig } from '../../src/config.js';
 import { encryptSecret } from '../../src/security/crypto.js';
-import { startGateway, type GatewayDeps } from '../../src/server.js';
+import { createUpstreamServices, startGateway, type GatewayDeps } from '../../src/server.js';
 import type { UpstreamRecord } from '../../src/upstreams/connection.js';
-import { UpstreamRepository } from '../../src/upstreams/repository.js';
 import { createTestDb } from './testDb.js';
 
 export const PUBLIC_APP_URL = 'http://app.localhost';
@@ -49,8 +48,11 @@ export function sessionCookieOf(res: request.Response): string | null {
   return null;
 }
 
-/** PGlite + startGateway on port 0. Seeds admin@example.com / admin-password-123 unless seedAdmin is false. */
-export async function startHarness(o: { seedAdmin?: boolean; upstreams?: UpstreamRecord[] } = {}): Promise<Harness> {
+/**
+ * PGlite + a started UpstreamManager (loopback allowed, so fake upstreams on 127.0.0.1 work) + startGateway
+ * on port 0. Seeds admin@example.com / admin-password-123 unless seedAdmin is false. `env` overrides config.
+ */
+export async function startHarness(o: { seedAdmin?: boolean; upstreams?: UpstreamRecord[]; env?: Record<string, string> } = {}): Promise<Harness> {
   const db = await createTestDb();
   const logs: string[] = [];
   const sink = new Writable({
@@ -70,22 +72,26 @@ export async function startHarness(o: { seedAdmin?: boolean; upstreams?: Upstrea
     PGDATABASE: 'gateway',
     PGUSER: 'gateway',
     PGPASSWORD: 'pw',
+    SSRF_ALLOW_LOOPBACK: 'true',
+    ...o.env,
   });
   let offsetMs = 0;
   const clock = () => new Date(Date.now() + offsetMs);
+  const { upstreams, audit, repo } = createUpstreamServices(config, logger, db);
   const deps: GatewayDeps = {
     config,
     logger,
     db,
     clock,
     rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock }),
+    upstreams,
+    audit,
+    repo,
   };
 
   if (o.seedAdmin ?? true) await ensureBootstrapAdmin(db.db, config.BOOTSTRAP_ADMIN_EMAIL, config.BOOTSTRAP_ADMIN_PASSWORD, logger);
 
-  // Rows only: Task 3.7 starts the upstream manager over them.
   if (o.upstreams && o.upstreams.length > 0) {
-    const repo = new UpstreamRepository(db.db);
     for (const u of o.upstreams) {
       const secret = u.auth.kind === 'bearer' ? u.auth.token : u.auth.kind === 'header' ? u.auth.value : '';
       await repo.insert({
@@ -101,6 +107,7 @@ export async function startHarness(o: { seedAdmin?: boolean; upstreams?: Upstrea
     }
   }
 
+  await upstreams.start();
   const running: RunningMcpHttpServer = await startGateway(deps, { port: 0, host: '127.0.0.1' });
   const baseUrl = `http://127.0.0.1:${running.port}`;
 
@@ -125,6 +132,7 @@ export async function startHarness(o: { seedAdmin?: boolean; upstreams?: Upstrea
         password: u.password ?? DEFAULT_PASSWORD,
       }),
     close: async () => {
+      await upstreams.stop();
       await running.close();
       await db.close();
     },
