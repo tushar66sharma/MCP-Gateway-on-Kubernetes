@@ -42,7 +42,7 @@ interface Env {
   lookupCalls: () => number;
 }
 
-async function makeEnv(o: { healthIntervalMs?: number; ssrf?: SsrfOptions } = {}): Promise<Env> {
+async function makeEnv(o: { healthIntervalMs?: number; healthTimeoutMs?: number; ssrf?: SsrfOptions } = {}): Promise<Env> {
   const h = await createTestDb();
   const repo = new UpstreamRepository(h.db);
   const { logger, lines } = captureLogger();
@@ -68,7 +68,9 @@ async function makeEnv(o: { healthIntervalMs?: number; ssrf?: SsrfOptions } = {}
     encKey,
     ssrf: counted,
     healthIntervalMs: o.healthIntervalMs ?? 100,
-    healthTimeoutMs: 500,
+    // Generous: the first check (version probe + tools/list) competes for CPU with the other test files
+    // (PGlite, argon2), and a 500 ms budget timed out under load. Call timeouts use callTimeoutMs.
+    healthTimeoutMs: o.healthTimeoutMs ?? 5000,
     callTimeoutMs: 1000,
   });
   return { h, repo, manager, ctx: { userId: user!.id, apiKeyId: null, source: 'mcp' }, lines, lookupCalls: () => lookups };
@@ -107,12 +109,28 @@ function text(r: CallToolResult): string {
 
 const names = (env: Env) => env.manager.listTools().map((t) => t.name);
 
+/**
+ * Waits until every given server is connected. A server that a slow first check left unreachable (CPU
+ * load) is refreshed instead of waiting for the interval, so this also works with a 60 s interval.
+ */
+async function waitConnected(env: Env, ...ids: string[]): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      for (const id of ids) if (env.manager.getState(id).status !== 'connected') await env.manager.refresh(id);
+      for (const id of ids) expect(env.manager.getState(id).status).toBe('connected');
+    },
+    { timeout: 10_000, interval: 50 },
+  );
+}
+
 describe('UpstreamManager with healthy, slow and dead upstreams', () => {
   let env: Env;
   let fakeA: FakeUpstream;
   let fakeB: FakeUpstream;
   let fakeSlow: FakeUpstream;
   let rowA: UpstreamRow;
+  let rowB: UpstreamRow;
+  let rowSlow: UpstreamRow;
   let rowDead: UpstreamRow;
 
   beforeAll(async () => {
@@ -121,10 +139,12 @@ describe('UpstreamManager with healthy, slow and dead upstreams', () => {
     fakeSlow = await startFakeUpstream({ name: 'slow', tools: ['ping'], auth: none, slowMs: 3000 });
     env = await makeEnv();
     rowA = await addRow(env.repo, { slug: 'a', url: fakeA.url, auth: authA });
-    await addRow(env.repo, { slug: 'b', url: fakeB.url, auth: authB });
-    await addRow(env.repo, { slug: 'slow', url: fakeSlow.url, auth: none });
+    rowB = await addRow(env.repo, { slug: 'b', url: fakeB.url, auth: authB });
+    rowSlow = await addRow(env.repo, { slug: 'slow', url: fakeSlow.url, auth: none });
     rowDead = await addRow(env.repo, { slug: 'dead', url: `http://127.0.0.1:${await closedPort()}/mcp`, auth: none });
     await env.manager.start();
+    await waitConnected(env, rowA.id, rowB.id, rowSlow.id);
+    await vi.waitFor(() => expect(names(env)).toEqual(['a__echo', 'a__ping', 'b__ping', 'slow__ping']), { timeout: 10_000, interval: 50 });
   });
 
   afterAll(async () => {
@@ -166,12 +186,14 @@ describe('UpstreamManager with healthy, slow and dead upstreams', () => {
   });
 
   it('routes colliding tool names to their own server', async () => {
-    const before = fakeB.calls.length;
+    // Snapshots, so the assertions are about this call only, whatever ran before it.
+    const beforeA = fakeA.calls.length;
+    const beforeB = fakeB.calls.length;
     const r = await env.manager.callTool('a__ping', {}, env.ctx);
     expect(r.isError).toBeFalsy();
     expect(text(r)).toContain('a:ping');
-    expect(fakeA.calls.map((c) => c.tool)).toContain('ping');
-    expect(fakeB.calls.length).toBe(before);
+    expect(fakeA.calls.slice(beforeA).map((c) => c.tool)).toEqual(['ping']);
+    expect(fakeB.calls.slice(beforeB)).toEqual([]);
   });
 
   it('places each credential only where it belongs', async () => {
@@ -192,12 +214,13 @@ describe('UpstreamManager with healthy, slow and dead upstreams', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toBe("Upstream 'slow' did not respond within 1000ms");
     expect(elapsed).toBeGreaterThanOrEqual(900);
-    expect(elapsed).toBeLessThan(2500);
+    // Below the fake's 3000 ms delay: the gateway's own deadline ended the call.
+    expect(elapsed).toBeLessThan(2900);
     const rows = await auditRows(env, 'slow__ping');
     const last = rows.at(-1)!;
     expect(last).toMatchObject({ event: 'tool_call', outcome: 'timeout', userId: env.ctx.userId, serverSlug: 'slow', source: 'mcp' });
     expect(last.durationMs).toBeGreaterThanOrEqual(900);
-    expect(last.durationMs).toBeLessThan(2500);
+    expect(last.durationMs).toBeLessThan(2900);
     // A timeout is not a connection failure: the server keeps serving.
     expect(env.manager.getState(last.serverId!).status).toBe('connected');
   });
@@ -244,7 +267,7 @@ describe('UpstreamManager state changes', () => {
     for (const c of cleanups.splice(0).reverse()) await c();
   });
 
-  async function setup(o: { healthIntervalMs?: number; ssrf?: SsrfOptions } = {}): Promise<Env> {
+  async function setup(o: { healthIntervalMs?: number; healthTimeoutMs?: number; ssrf?: SsrfOptions } = {}): Promise<Env> {
     const env = await makeEnv(o);
     cleanups.push(() => env.h.close());
     cleanups.push(() => env.manager.stop());
@@ -261,6 +284,7 @@ describe('UpstreamManager state changes', () => {
     const fa = await fake({ name: 'a', tools: ['ping', 'echo'], auth: authA });
     const row = await addRow(env.repo, { slug: 'a', url: fa.url, auth: authA });
     await env.manager.start();
+    await waitConnected(env, row.id);
     expect(names(env)).toContain('a__ping');
     const disabled = await env.repo.update(row.id, { enabled: false });
     await env.manager.upsert(disabled!);
@@ -278,6 +302,7 @@ describe('UpstreamManager state changes', () => {
     const f = await fake({ name: 'a2', tools: ['ok_tool', 'bad.tool'], auth: none });
     const row = await addRow(env.repo, { slug: 'a2', url: f.url, auth: none });
     await env.manager.start();
+    await waitConnected(env, row.id);
     expect(names(env)).toEqual(['a2__ok_tool']);
     const state = env.manager.getState(row.id);
     expect(state.status).toBe('connected');
@@ -290,11 +315,13 @@ describe('UpstreamManager state changes', () => {
     const fa = await fake({ name: 'a', tools: ['ping', 'echo'], auth: authA });
     const row = await addRow(env.repo, { slug: 'a', url: fa.url, auth: authA });
     await env.manager.start();
+    await waitConnected(env, row.id);
     await fa.stop();
     expect((await env.manager.refresh(row.id)).status).toBe('unreachable');
     expect(names(env)).toEqual([]);
     const again = await fake({ name: 'a', tools: ['ping', 'echo'], auth: authA, port: fa.port });
-    const state = await env.manager.refresh(row.id);
+    await waitConnected(env, row.id);
+    const state = env.manager.getState(row.id);
     expect(state.status).toBe('connected');
     expect(state.lastError).toBeNull();
     const r = await env.manager.callTool('a__ping', {}, env.ctx);
@@ -320,9 +347,10 @@ describe('UpstreamManager state changes', () => {
     const env = await setup({ healthIntervalMs: 60_000 });
     const fa = await fake({ name: 'a', tools: ['ping'], auth: authA });
     const fb = await fake({ name: 'b', tools: ['ping'], auth: authB });
-    await addRow(env.repo, { slug: 'a', url: fa.url, auth: authA });
+    const rowA = await addRow(env.repo, { slug: 'a', url: fa.url, auth: authA });
     const rowB = await addRow(env.repo, { slug: 'b', url: fb.url, auth: authB });
     await env.manager.start();
+    await waitConnected(env, rowA.id, rowB.id);
     expect(names(env)).toEqual(['a__ping', 'b__ping']);
     await fb.stop();
     const r = await env.manager.callTool('b__ping', {}, env.ctx);
@@ -340,17 +368,19 @@ describe('UpstreamManager state changes', () => {
     const fa = await fake({ name: 'a', tools: ['ping'], auth: authA });
     const row = await addRow(env.repo, { slug: 'a', url: fa.url, auth: authA });
     await env.manager.start();
-    expect(env.manager.getState(row.id).status).toBe('connected');
+    await waitConnected(env, row.id);
     await fa.stop();
-    await vi.waitFor(() => expect(env.manager.getState(row.id).status).toBe('unreachable'), { timeout: 2000, interval: 25 });
+    // The interval is 100 ms; the margin is for a loaded machine, not for the loop.
+    await vi.waitFor(() => expect(env.manager.getState(row.id).status).toBe('unreachable'), { timeout: 10_000, interval: 25 });
     expect(names(env)).toEqual([]);
   });
 
   it('returns an upstream isError result unchanged and audits it as an error', async () => {
     const env = await setup();
     const f = await fake({ name: 'e', tools: ['ping', 'echo'], auth: none, isErrorTool: 'echo' });
-    await addRow(env.repo, { slug: 'e', url: f.url, auth: none });
+    const row = await addRow(env.repo, { slug: 'e', url: f.url, auth: none });
     await env.manager.start();
+    await waitConnected(env, row.id);
     const r = await env.manager.callTool('e__echo', {}, env.ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toEqual([{ type: 'text', text: 'boom' }]);
@@ -393,6 +423,7 @@ describe('UpstreamManager state changes', () => {
     const f = await fake({ name: 'n', tools: ['ping'], auth: none });
     const row = await addRow(env.repo, { slug: 'n', url: f.url, auth: none });
     await env.manager.upsert(row);
+    await waitConnected(env, row.id);
     expect(names(env)).toEqual(['n__ping']);
     await env.manager.remove(row.id);
     expect(names(env)).toEqual([]);

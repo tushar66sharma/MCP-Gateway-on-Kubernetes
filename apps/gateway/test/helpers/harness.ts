@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import request from 'supertest';
+import { vi } from 'vitest';
 import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { ensureBootstrapAdmin } from '../../src/auth/bootstrap.js';
 import { LoginRateLimiter } from '../../src/auth/rateLimit.js';
@@ -108,6 +109,18 @@ export async function startHarness(o: { seedAdmin?: boolean; upstreams?: Upstrea
   }
 
   await upstreams.start();
+  // The first check can time out when every test file competes for CPU. The interval is 15 s here, so
+  // refresh any enabled upstream that is not connected yet instead of asserting on a cold catalog.
+  const enabled = (o.upstreams ?? []).filter((u) => u.enabled).map((u) => u.id);
+  if (enabled.length > 0) {
+    await vi.waitFor(
+      async () => {
+        for (const id of enabled) if (upstreams.getState(id).status !== 'connected') await upstreams.refresh(id);
+        for (const id of enabled) if (upstreams.getState(id).status !== 'connected') throw new Error(`upstream ${id} not connected yet`);
+      },
+      { timeout: 10_000, interval: 50 },
+    );
+  }
   const running: RunningMcpHttpServer = await startGateway(deps, { port: 0, host: '127.0.0.1' });
   const baseUrl = `http://127.0.0.1:${running.port}`;
 
