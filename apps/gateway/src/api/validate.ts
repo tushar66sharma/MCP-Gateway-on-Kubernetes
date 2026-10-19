@@ -16,3 +16,11 @@ export function parseBody<S extends z.ZodType>(schema: S, body: unknown): z.infe
 export function parseQuery<S extends z.ZodType>(schema: S, query: unknown): z.infer<S> {
   return parse(schema, query);
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A path id that is not a UUID cannot match a row: answer 404 instead of letting Postgres reject the cast. */
+export function uuidParam(value: unknown): string {
+  if (typeof value !== 'string' || !UUID.test(value)) throw new ApiError(404, 'NOT_FOUND', 'Not found');
+  return value.toLowerCase();
+}
