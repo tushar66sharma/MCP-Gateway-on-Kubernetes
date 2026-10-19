@@ -28,7 +28,11 @@ secrets:
     storeDb: ""       # keys: root-password, password
     storeAdmin: ""    # keys: password
     storeWooApi: ""   # keys: consumer-key, consumer-secret
-    mcpWoocommerceToken: ""   # key: token
+    mcpWoocommerceToken: ""   # key: token (also needed in namespace gateway)
+    mcpNotesToken: ""         # key: token (also needed in namespace gateway)
+    mcpUtilitiesKey: ""       # key: key (also needed in namespace gateway)
+    gatewaySecrets: ""        # namespace gateway; keys: postgres-password, encryption-key (base64 of 32 bytes), internal-token-secret
+    gatewayBootstrap: ""      # namespace gateway; keys: email, password
 
 mariadb:
   image: mariadb:11.8.9
@@ -77,3 +81,47 @@ mcpWoocommerce:
   resources:
     requests: { cpu: 20m, memory: 64Mi }
     limits: { cpu: 200m, memory: 160Mi }
+
+mcpNotes:
+  enabled: true
+  image:
+    repository: urumi/mcp-notes
+    tag: ""               # "" = global.imageTag
+  port: 3002
+  logLevel: info
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 160Mi }
+
+mcpUtilities:
+  enabled: true
+  image:
+    repository: urumi/mcp-utilities
+    tag: ""               # "" = global.imageTag
+  port: 3003
+  logLevel: info
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 160Mi }
+
+postgres:
+  image: postgres:17.11-bookworm
+  storage: 1Gi
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+gateway:
+  enabled: true
+  image:
+    repository: urumi/gateway
+    tag: ""               # "" = global.imageTag
+  port: 3000
+  logLevel: info
+  bootstrapAdminEmail: admin@example.com
+  healthIntervalMs: 15000
+  healthTimeoutMs: 5000
+  callTimeoutMs: 20000    # must stay greater than mcpWoocommerce.timeoutMs (10000)
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 384Mi }

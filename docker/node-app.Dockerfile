@@ -12,6 +12,8 @@ RUN npm ci --include-workspace-root --workspace @urumi/shared --workspace @urumi
 COPY packages/shared packages/shared
 COPY apps/${APP} apps/${APP}
 RUN npm run build -w @urumi/shared && npm run build -w @urumi/${APP}
+# Only the gateway has SQL migrations; the folder is created so the runtime COPY works for every app.
+RUN mkdir -p apps/${APP}/drizzle
 RUN npm prune --omit=dev --workspace @urumi/shared --workspace @urumi/${APP}
 
 FROM node:24-alpine AS runtime
@@ -24,6 +26,7 @@ COPY --from=build /app/packages/shared/package.json packages/shared/package.json
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/apps/${APP}/package.json apps/${APP}/package.json
 COPY --from=build /app/apps/${APP}/dist apps/${APP}/dist
+COPY --from=build /app/apps/${APP}/drizzle apps/${APP}/drizzle
 USER node
 EXPOSE 3001
 # ARG values are not visible to an exec-form CMD, so the entry path goes through ENV. `exec` keeps

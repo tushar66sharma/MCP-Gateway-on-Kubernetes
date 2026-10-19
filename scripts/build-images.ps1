@@ -13,7 +13,7 @@ foreach ($tool in 'docker', 'k3d', 'git') {
   if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { Stop-WithError "'$tool' was not found on PATH." }
 }
 
-$apps = @('mcp-woocommerce')   # later phases add more apps here
+$apps = @('mcp-woocommerce','mcp-notes','mcp-utilities','gateway')
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 

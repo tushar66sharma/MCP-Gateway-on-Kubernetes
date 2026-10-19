@@ -1,0 +1,5 @@
+{{- if .Values.mcpNotes.enabled }}
+{{- $tokenSecret := default "mcp-notes-token" .Values.secrets.existing.mcpNotesToken -}}
+{{- $env := list (dict "name" "MCP_AUTH_TOKEN" "valueFrom" (dict "secretKeyRef" (dict "name" $tokenSecret "key" "token"))) -}}
+{{ include "urumi.simpleMcpServer" (dict "root" $ "name" "mcp-notes" "port" .Values.mcpNotes.port "values" .Values.mcpNotes "env" $env "component" "mcp-server") }}
+{{- end }}

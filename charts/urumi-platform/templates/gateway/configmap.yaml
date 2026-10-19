@@ -1,0 +1,22 @@
+{{- if .Values.gateway.enabled }}
+{{- $mcpNs := .Values.namespaces.mcp -}}
+{{- $seeds := list -}}
+{{- if .Values.mcpWoocommerce.enabled -}}
+{{- $seeds = append $seeds (dict "slug" "woo" "name" "WooCommerce" "url" (printf "http://mcp-woocommerce.%s.svc.cluster.local:%d/mcp" $mcpNs (int .Values.mcpWoocommerce.port)) "authType" "bearer" "credentialEnv" "SEED_WOO_TOKEN") -}}
+{{- end -}}
+{{- if .Values.mcpNotes.enabled -}}
+{{- $seeds = append $seeds (dict "slug" "notes" "name" "Notes" "url" (printf "http://mcp-notes.%s.svc.cluster.local:%d/mcp" $mcpNs (int .Values.mcpNotes.port)) "authType" "bearer" "credentialEnv" "SEED_NOTES_TOKEN") -}}
+{{- end -}}
+{{- if .Values.mcpUtilities.enabled -}}
+{{- $seeds = append $seeds (dict "slug" "utils" "name" "Utilities" "url" (printf "http://mcp-utilities.%s.svc.cluster.local:%d/mcp" $mcpNs (int .Values.mcpUtilities.port)) "authType" "header" "authHeaderName" "X-Utilities-Key" "credentialEnv" "SEED_UTILS_KEY") -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: {{ .Values.namespaces.gateway }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "gateway" "component" "gateway") | nindent 4 }}
+data:
+  SEED_SERVERS: {{ toJson $seeds | quote }}
+{{- end }}

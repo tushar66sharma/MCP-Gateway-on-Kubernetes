@@ -18,4 +18,8 @@ secrets:
     storeDb: store-db            # must exist in namespace "store"
     storeAdmin: store-admin      # must exist in namespace "store"
     storeWooApi: store-woo-api   # must exist in "store" (and in "mcp" from Phase 2)
-    mcpWoocommerceToken: mcp-woocommerce-token   # must exist in "mcp" (key: token)
+    mcpWoocommerceToken: mcp-woocommerce-token   # must exist in "mcp" AND "gateway" (key: token)
+    mcpNotesToken: mcp-notes-token       # must exist in "mcp" AND "gateway" (key: token)
+    mcpUtilitiesKey: mcp-utilities-key   # must exist in "mcp" AND "gateway" (key: key)
+    gatewaySecrets: gateway-secrets      # must exist in "gateway" (keys: postgres-password, encryption-key = base64 of 32 bytes, internal-token-secret)
+    gatewayBootstrap: gateway-bootstrap  # must exist in "gateway" (keys: email, password)
