@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { loadEnv } from '@urumi/shared';
 import type { SsrfOptions } from './security/ssrf.js';
+import { PROVIDER_IDS } from './chat/llm/providers.js';
+import type { LlmConfig } from './chat/llm/registry.js';
 
 export interface SeedServer {
   slug: string;
@@ -11,7 +13,7 @@ export interface SeedServer {
   credentialEnv?: string;
 }
 
-export interface Config {
+export interface Config extends LlmConfig {
   PORT: number;
   LOG_LEVEL: string;
   PUBLIC_APP_URL: string;
@@ -29,6 +31,11 @@ export interface Config {
   UPSTREAM_CALL_TIMEOUT_MS: number;
   /** Express 'trust proxy' hop count: 0 trusts no X-Forwarded-For; 1 = one reverse proxy (Traefik) in front. */
   TRUST_PROXY: number;
+  CHAT_TURN_TIMEOUT_MS: number;
+  CHAT_MAX_STEPS: number;
+  CHAT_RATE_LIMIT_PER_MIN: number;
+  /** IANA zone the chat agent uses to resolve "today"; validated, default UTC. */
+  STORE_TIMEZONE: string;
 }
 
 const csv = (fallback: string) =>
@@ -48,6 +55,20 @@ const bool = z
   .transform((v) => v === 'true');
 
 const intRange = (def: number, min: number, max: number) => z.coerce.number().int().min(min).max(max).default(def);
+
+const providerId = z.enum(PROVIDER_IDS);
+
+const timeZone = z
+  .string()
+  .default('UTC')
+  .refine((tz) => {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz });
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
 const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
 
@@ -133,7 +154,27 @@ const appFields = z.object({
   // clean isError instead of a gateway timeout. Enforced here too, not only by the chart schema.
   UPSTREAM_CALL_TIMEOUT_MS: intRange(20000, 11000, 120000),
   TRUST_PROXY: intRange(0, 0, 5),
+  LLM_PROVIDER: providerId.default('groq'),
+  LLM_MODEL: z.string().trim().default(''),
+  LLM_BASE_URL: z.union([z.literal(''), z.url()]).default(''),
+  LLM_FALLBACK_PROVIDER: z.union([z.literal(''), providerId]).default(''),
+  LLM_FALLBACK_MODEL: z.string().trim().default(''),
+  GROQ_API_KEY: z.string().trim().default(''),
+  OPENROUTER_API_KEY: z.string().trim().default(''),
+  LLM_TIMEOUT_MS: intRange(30000, 5000, 120000),
+  LLM_MAX_RETRIES: intRange(2, 0, 5),
+  CHAT_TURN_TIMEOUT_MS: intRange(60000, 10000, 120000),
+  CHAT_MAX_STEPS: intRange(8, 1, 16),
+  CHAT_RATE_LIMIT_PER_MIN: intRange(10, 1, 120),
+  STORE_TIMEZONE: timeZone,
 });
+
+/** A fallback identical to the primary would just repeat the failed call. */
+function fallbackDiffersFromPrimary(v: { LLM_PROVIDER: string; LLM_FALLBACK_PROVIDER: string }, ctx: z.RefinementCtx): void {
+  if (v.LLM_FALLBACK_PROVIDER !== '' && v.LLM_FALLBACK_PROVIDER === v.LLM_PROVIDER) {
+    ctx.addIssue({ code: 'custom', path: ['LLM_FALLBACK_PROVIDER'], message: 'must differ from LLM_PROVIDER' });
+  }
+}
 
 /** A health check must finish before the next one is due. */
 function healthTimeoutBelowInterval(v: { UPSTREAM_HEALTH_TIMEOUT_MS: number; UPSTREAM_HEALTH_INTERVAL_MS: number }, ctx: z.RefinementCtx): void {
@@ -142,7 +183,7 @@ function healthTimeoutBelowInterval(v: { UPSTREAM_HEALTH_TIMEOUT_MS: number; UPS
   }
 }
 
-const appSchema = appFields.superRefine(healthTimeoutBelowInterval);
+const appSchema = appFields.superRefine(healthTimeoutBelowInterval).superRefine(fallbackDiffersFromPrimary);
 
 // Read by `pg` itself; required here so a misconfigured pod fails at startup with the variable named.
 const pgSchema = z.object({
@@ -153,7 +194,7 @@ const pgSchema = z.object({
   PGPASSWORD: z.string().min(1),
 });
 
-const envSchema = appFields.extend(pgSchema.shape).superRefine(healthTimeoutBelowInterval);
+const envSchema = appFields.extend(pgSchema.shape).superRefine(healthTimeoutBelowInterval).superRefine(fallbackDiffersFromPrimary);
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // Parse once so every problem is reported together, then return only the app settings.

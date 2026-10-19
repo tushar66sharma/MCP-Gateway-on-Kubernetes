@@ -129,4 +129,42 @@ describe('loadConfig', () => {
   it('trims and lowercases the bootstrap email', () => {
     expect(loadConfig(validEnv({ BOOTSTRAP_ADMIN_EMAIL: ' Admin@Example.COM ' })).BOOTSTRAP_ADMIN_EMAIL).toBe('admin@example.com');
   });
+
+  it('has LLM and chat defaults', () => {
+    const c = loadConfig(validEnv());
+    expect(c).toMatchObject({
+      LLM_PROVIDER: 'groq',
+      LLM_MODEL: '',
+      LLM_BASE_URL: '',
+      LLM_FALLBACK_PROVIDER: '',
+      LLM_FALLBACK_MODEL: '',
+      GROQ_API_KEY: '',
+      OPENROUTER_API_KEY: '',
+      LLM_TIMEOUT_MS: 30000,
+      LLM_MAX_RETRIES: 2,
+      CHAT_TURN_TIMEOUT_MS: 60000,
+      CHAT_MAX_STEPS: 8,
+      CHAT_RATE_LIMIT_PER_MIN: 10,
+      STORE_TIMEZONE: 'UTC',
+    });
+  });
+
+  it('LLM_FALLBACK_PROVIDER equal to LLM_PROVIDER is rejected', () => {
+    const err = errorOf(validEnv({ LLM_PROVIDER: 'groq', LLM_FALLBACK_PROVIDER: 'groq' }));
+    expect(err.message).toContain('LLM_FALLBACK_PROVIDER');
+    expect(loadConfig(validEnv({ LLM_PROVIDER: 'groq', LLM_FALLBACK_PROVIDER: 'openrouter' })).LLM_FALLBACK_PROVIDER).toBe('openrouter');
+  });
+
+  it('bounds the LLM and chat numbers and the provider id', () => {
+    for (const [k, v] of [['CHAT_TURN_TIMEOUT_MS', '9999'], ['CHAT_MAX_STEPS', '17'], ['CHAT_RATE_LIMIT_PER_MIN', '0'], ['LLM_TIMEOUT_MS', '4999'], ['LLM_MAX_RETRIES', '6'], ['LLM_PROVIDER', 'gemini'], ['LLM_BASE_URL', 'not a url']] as const) {
+      expect(errorOf(validEnv({ [k]: v })).message, k).toContain(k);
+    }
+  });
+
+  it('invalid STORE_TIMEZONE names the variable only', () => {
+    const err = errorOf(validEnv({ STORE_TIMEZONE: 'Mars/Olympus_Mons' }));
+    expect(err.message).toContain('STORE_TIMEZONE');
+    expect(err.message).not.toContain('Olympus');
+    expect(loadConfig(validEnv({ STORE_TIMEZONE: 'Asia/Kolkata' })).STORE_TIMEZONE).toBe('Asia/Kolkata');
+  });
 });
