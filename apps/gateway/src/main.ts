@@ -1,6 +1,7 @@
 import { EnvValidationError, createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { ensureBootstrapAdmin } from './auth/bootstrap.js';
 import { LoginRateLimiter } from './auth/rateLimit.js';
+import { createLlmFromConfig, llmStatusOf } from './chat/llm/registry.js';
 import { loadConfig, type Config } from './config.js';
 import { connectWithRetry, createPostgresHandle, type DbHandle } from './db/client.js';
 import { createUpstreamServices, startGateway } from './server.js';
@@ -38,6 +39,11 @@ try {
 
 let server: RunningMcpHttpServer;
 const services = createUpstreamServices(config, logger, db);
+// The chat model: provider and model names only, never a key. Without a key chat answers LLM_NOT_CONFIGURED.
+const llm = createLlmFromConfig(config);
+const llmStatus = llmStatusOf(config);
+if (llm) logger.info({ provider: llm.name, model: llm.model, fallbackProvider: llmStatus.fallbackProvider }, `llm configured: ${llm.name}/${llm.model}`);
+else logger.warn({ provider: llmStatus.provider }, 'llm not configured: chat is disabled (no API key for the provider)');
 try {
   // 3. First admin, only when the users table is empty.
   await ensureBootstrapAdmin(db.db, config.BOOTSTRAP_ADMIN_EMAIL, config.BOOTSTRAP_ADMIN_PASSWORD, logger);
@@ -48,7 +54,7 @@ try {
   await services.upstreams.start();
   // 6. Listen.
   server = await startGateway(
-    { config, logger, db, clock, rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock }), ...services },
+    { config, logger, db, clock, rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock }), ...services, llm },
     { port: config.PORT },
   );
   // 7. No secrets: port, slugs and counts only.

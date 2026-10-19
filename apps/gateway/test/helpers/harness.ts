@@ -6,6 +6,7 @@ import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { ensureBootstrapAdmin } from '../../src/auth/bootstrap.js';
 import { LoginRateLimiter } from '../../src/auth/rateLimit.js';
 import { createUser as insertUser, type AuthUser, type Role } from '../../src/auth/users.js';
+import type { LlmProvider } from '../../src/chat/llm/types.js';
 import { loadConfig } from '../../src/config.js';
 import { encryptSecret } from '../../src/security/crypto.js';
 import { createUpstreamServices, startGateway, type GatewayDeps } from '../../src/server.js';
@@ -52,8 +53,11 @@ export function sessionCookieOf(res: request.Response): string | null {
 /**
  * PGlite + a started UpstreamManager (loopback allowed, so fake upstreams on 127.0.0.1 work) + startGateway
  * on port 0. Seeds admin@example.com / admin-password-123 unless seedAdmin is false. `env` overrides config.
+ * `llm` is the chat provider (a scripted fake in tests); null (default) answers LLM_NOT_CONFIGURED.
  */
-export async function startHarness(o: { seedAdmin?: boolean; upstreams?: UpstreamRecord[]; env?: Record<string, string> } = {}): Promise<Harness> {
+export async function startHarness(
+  o: { seedAdmin?: boolean; upstreams?: UpstreamRecord[]; env?: Record<string, string>; llm?: LlmProvider | null } = {},
+): Promise<Harness> {
   const db = await createTestDb();
   const logs: string[] = [];
   const sink = new Writable({
@@ -88,6 +92,7 @@ export async function startHarness(o: { seedAdmin?: boolean; upstreams?: Upstrea
     upstreams,
     audit,
     repo,
+    llm: o.llm ?? null,
   };
 
   if (o.seedAdmin ?? true) await ensureBootstrapAdmin(db.db, config.BOOTSTRAP_ADMIN_EMAIL, config.BOOTSTRAP_ADMIN_PASSWORD, logger);

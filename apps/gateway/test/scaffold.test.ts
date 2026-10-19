@@ -55,6 +55,7 @@ describe('gateway scaffold', () => {
         clock: () => new Date(),
         rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }),
         ...createUpstreamServices(config, createLogger('test', 'silent'), db),
+        llm: null,
       },
       { port: 0, host: '127.0.0.1' },
     );
