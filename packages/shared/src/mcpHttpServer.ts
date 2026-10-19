@@ -90,10 +90,12 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
     const requestId = incoming !== undefined && REQUEST_ID.test(incoming) ? incoming : randomUUID();
     res.locals.requestId = requestId;
     res.setHeader('X-Request-Id', requestId);
+    // Captured now: Express strips the mount prefix from req.path inside mounted routers.
+    const fullPath = req.originalUrl.split('?')[0] ?? req.path;
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-      logger.info({ requestId, method: req.method, path: opts.logPath ? opts.logPath(req.path) : req.path, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
+      logger.info({ requestId, method: req.method, path: opts.logPath ? opts.logPath(fullPath) : fullPath, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
     });
     next();
   });

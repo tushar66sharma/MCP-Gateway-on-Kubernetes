@@ -3,6 +3,7 @@ import { Writable } from 'node:stream';
 import net from 'node:net';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
+import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createLogger } from '../src/logger.js';
 import { mcpRequestLocals, startMcpHttpServer, type McpHttpServerOptions, type RunningMcpHttpServer } from '../src/mcpHttpServer.js';
@@ -284,6 +285,33 @@ describe('startMcpHttpServer', () => {
     expect(lines.join('')).not.toContain('SECRET123');
     const line = lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((o) => o.msg === 'request');
     expect(line).toMatchObject({ path: '/api/invites/:token', requestId: 'req-abcdefgh' });
+  });
+
+  it('logPath sees the full path for routes mounted under a prefix, without the query', async () => {
+    const lines: string[] = [];
+    const stream = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        lines.push(chunk.toString());
+        cb();
+      },
+    });
+    const { port } = await start({
+      logger: createLogger('test', 'info', stream),
+      logPath: (p) => p.replace(/^\/api\/invites\/[^/]+/, '/api/invites/:token'),
+      extraRoutes: (app) => {
+        const router = express.Router();
+        router.get('/invites/:t', (_q, r) => r.json({ ok: true }));
+        app.use('/api', router);
+      },
+    });
+    const res = await fetch(`http://127.0.0.1:${port}/api/invites/SECRET123?x=1`);
+    await res.text();
+    await new Promise((r) => setTimeout(r, 50));
+    const all = lines.join('');
+    expect(all).not.toContain('SECRET123');
+    expect(all).not.toContain('x=1');
+    const line = lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((o) => o.msg === 'request');
+    expect(line).toMatchObject({ path: '/api/invites/:token' });
   });
 
   it('exactly one of registerTools / buildServer', async () => {
