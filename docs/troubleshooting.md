@@ -602,7 +602,8 @@ The `reason` is a driver code, never a password or host: `ECONNREFUSED` (Postgre
 | `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | Missing, not an email, or the password is not 10-200 characters. |
 | `SEED_SERVERS.<n>.<field>` | The JSON from the ConfigMap `gateway-config` is invalid; the number is the entry, the field is the problem. |
 | `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | Missing; they come from the chart and the `gateway-secrets` Secret. |
-| `UPSTREAM_CALL_TIMEOUT_MS` and the other `_MS` values | Outside the allowed range. |
+| `UPSTREAM_CALL_TIMEOUT_MS` and the other `_MS` values | Outside the allowed range (the call timeout must be at least 11000), or `UPSTREAM_HEALTH_TIMEOUT_MS` is not below `UPSTREAM_HEALTH_INTERVAL_MS`. |
+| `SSRF_ALLOWED_INTERNAL_HOSTS.<n>` | Entry `n` is not `*.` plus at least two labels, nor a name with a dot (for example `*.local` or `localhost`). |
 
 `kubectl -n gateway describe pod -l app.kubernetes.io/name=gateway` and `kubectl -n gateway get secret` show whether a Secret key is missing (a missing key is `CreateContainerConfigError`, not a crash loop). Fix the Secret or the Helm value, then `scripts\up.ps1 -Redeploy`. Statement is **tested** (`test/config.test.ts`); a crash loop from this cause was not reproduced on the cluster.
 
@@ -618,10 +619,10 @@ The `reason` is a driver code, never a password or host: `ECONNREFUSED` (Postgre
    "SELECT id, event, outcome, error_message, started_at FROM audit_logs WHERE event = 'auth_rejected' ORDER BY id DESC LIMIT 5;" | kubectl -n gateway exec -i postgres-0 -- psql -U gateway gateway
    ```
 
-   The `error_message` says `API key revoked`, `user disabled`, `unknown or malformed credential` or `internal token expired` (**live**: `API key revoked` and `unknown or malformed credential` seen). Create a new key ([run guide](run-guide.md#log-in-and-create-an-api-key-powershell-51)).
-2. **The key was pasted wrongly**: a truncated or changed key, extra quotes, or the clipboard held something else. A key is exactly `ugw_` plus 43 letters and digits (47 characters). `unknown or malformed credential`.
+   The `error_message` says `API key revoked`, `user disabled`, `unknown credential` (a well-formed key that is not stored) or `internal token expired` (**live** before the final-review fix: `API key revoked`, and the older text `unknown or malformed credential`). A malformed value or another scheme writes **no** row (see causes 2 and 4). Create a new key ([run guide](run-guide.md#log-in-and-create-an-api-key-powershell-51)).
+2. **The key was pasted wrongly**: a truncated or changed key, extra quotes, or the clipboard held something else. A key is exactly `ugw_` plus 43 letters and digits (47 characters). A changed character gives `unknown credential`; a wrong length writes no audit row at all.
 3. **No `Authorization` header** (a client that does not send headers, or a typo in its configuration). Nothing is written to the audit log in this case, only a log line `mcp auth rejected` with reason `missing`.
-4. **The header is not `Authorization: Bearer <key>`** (`Basic`, a missing space, a different header name) is treated as an unknown credential.
+4. **The header is not `Authorization: Bearer <key>`** (`Basic`, a missing space, a different header name): rejected like an unknown credential, but not audited (only a debug log line), so it does not show in `audit_logs`.
 5. **An old key after the gateway database was reset.** The users and keys are gone with it.
 
 **Not the cause:** the API key does not expire by itself. A revoked key gets 401 on its very next request (**live**).

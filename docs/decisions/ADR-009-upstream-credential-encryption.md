@@ -18,7 +18,7 @@ Admins register upstream MCP servers in the dashboard, optionally with a static 
 - The key is `GATEWAY_ENCRYPTION_KEY` (32 random bytes, base64), stored in Secret `gateway-secrets`, never in values files or Git.
 - The API only ever returns `hasCredential: boolean`. Editing a server without supplying a credential keeps the existing one; an empty value with `clearCredential: true` removes it.
 - The credential is decrypted only when the MCP client for that upstream is built, held in memory, and attached as a header. pino redaction covers `authorization`, `x-*-key` and `credential`.
-- Credential Secrets in the `gateway` namespace are used only to **seed** servers (upsert by slug if absent); after that the encrypted column is the source of truth.
+- Credential Secrets in the `gateway` namespace are used only to **seed** servers (each slug once, ever, if absent; a deleted built-in server is not re-created); after that the encrypted column is the source of truth.
 - Per the spec, the client's gateway key is never forwarded upstream (no token passthrough).
 
 ## Alternatives considered
@@ -41,12 +41,12 @@ Admins register upstream MCP servers in the dashboard, optionally with a static 
 - **Blob layout:** `nonce(12) ‖ ciphertext ‖ tag(16)`. The nonce is **96 bits** (12 random bytes), fresh for every encryption.
 - **AAD = the server row id.** `encryptSecret(plain, key, aad)` binds the blob to its row, so a ciphertext copied into another row fails to decrypt. The id is therefore generated **before** the insert (`randomUUID()` in the create route and in the seeder). Tests: round trip, every-byte tamper, wrong AAD, too-short input, a unique nonce each time; the 32-byte key rule is in the config tests.
 - **The key:** `GATEWAY_ENCRYPTION_KEY` must be canonical base64 of exactly 32 bytes, checked at start (the pod exits naming the variable). Helm generates it with `randBytes 32` in Secret `gateway-secrets` (`resource-policy: keep`).
-- **Seeding:** insert-if-absent by slug, credential from the env var the seed names; an edited server is never overwritten. Seed env var missing: the row is inserted without a credential and a warning names the variable.
+- **Seeding:** each seed slug is inserted once, ever: only when it is in neither `upstream_servers` nor the `seeded_slugs` table, which records it in the same transaction. An edited server is never overwritten, and a deleted built-in server stays deleted (re-add it with `POST /api/servers`). Credential from the env var the seed names; if that variable is missing, the row is inserted without a credential and a warning names the variable.
 - **API:** `hasCredential` only; `credential` is accepted on create and `PATCH`, printable ASCII up to 4096 characters (so CR/LF is refused at the door and never echoed); omitted keeps the stored one, `clearCredential: true` removes it, and `authType: none` never keeps one. A test checks that the plaintext appears in no response, log or header of the whole server flow.
 - **Decrypted only** when the connection for that upstream is built, held in memory, attached as one header. A malformed value that gets through (for example from a seed) is caught by a header check in the connection and reported without the value.
 - **Connect-time address pinning.** Beyond the create/edit-time SSRF check, the connection uses an undici dispatcher with a checking DNS lookup, so the name is resolved and judged again when the socket opens; redirects are never followed. This closes DNS rebinding for the place where the credential is sent ([security.md](../security.md#5-ssrf-guard)).
 - Verified live: all three stored credentials are 76 bytes (12 + 16 + a 48-character credential) and `GET /api/servers` shows `hasCredential` true and nothing else.
-- **Known gap (planned fix):** editing a server's URL keeps its stored credential, so an admin can point it at a host they control (the URL must still pass the SSRF guard). The Phase 3 final-review fix wave plans to require the credential again, or clear it, when the origin changes. Key rotation is still not built.
+- **A credential is bound to its origin.** A `PATCH` that changes the URL's origin (scheme, host or port) of a server with a stored credential must re-enter the credential or send `clearCredential: true`, or it gets `400 VALIDATION_FAILED`; a path-only change keeps it (tested). So an admin cannot redirect a stored credential to another host without knowing it. Key rotation is still not built.
 
 ## Revisit if
 

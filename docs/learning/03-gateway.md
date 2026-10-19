@@ -182,7 +182,7 @@ Audit row: `tool_call | mcp | (no server) | zzz__ping | denied | 0 ms | Unknown 
 {"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized"},"id":null}
 ```
 
-**401, a well-formed but unknown key** (`Authorization: Bearer <redacted>`; `401`, 8 ms, same header and the same body). The answer is deliberately identical for a missing, unknown, revoked or disabled credential, so a caller learns nothing about which keys exist. The difference is internal: the unknown key wrote an audit row `auth_rejected | unauthorized | unknown or malformed credential`, and the request with no header wrote none (**live**). A revoked key is the same 401, with the audit message `API key revoked` (**live**: the isolation check shows it).
+**401, a well-formed but unknown key** (`Authorization: Bearer <redacted>`; `401`, 8 ms, same header and the same body). The answer is deliberately identical for a missing, unknown, revoked or disabled credential, so a caller learns nothing about which keys exist. The difference is internal: the unknown key wrote an audit row `auth_rejected | unauthorized | unknown or malformed credential` (**live**, captured before the final-review fix; the message is now `unknown credential`, and only a well-formed `ugw_` key or a validly signed internal token writes a row at all), and the request with no header wrote none (**live**). A revoked key is the same 401, with the audit message `API key revoked` (**live**: the isolation check shows it).
 
 **405, `GET /mcp`** (`405`, header `Allow: POST`):
 

@@ -135,6 +135,8 @@ It also reads the Helm release state, because `helm status` succeeds even for a 
 ===========================================================
 ```
 
+The three `Gateway` lines appear only when the gateway is enabled (`gateway.enabled`), and the admin email is the release's `gateway.bootstrapAdminEmail`, both read from the installed release's values.
+
 Options:
 
 | Option | Effect |
@@ -235,7 +237,7 @@ In namespace `gateway` (verified 2026-10-19 by the pods running and the checks p
 |---|---|---|
 | `gateway-bootstrap` | `email`, `password` | The first admin account, created on first start. Copy the password with `scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password`. |
 | `gateway-secrets` | `postgres-password`, `encryption-key`, `internal-token-secret` | Postgres; the AES key for stored upstream credentials (32 random bytes, base64); the signing secret of the internal chat token. `postgres-password` is for the database (section 10). Do not lose `encryption-key`: stored credentials cannot be read without it. |
-| `mcp-woocommerce-token`, `mcp-notes-token`, `mcp-utilities-key` | as in `mcp` | Byte-identical copies of the `mcp` Secrets, used only to **seed** the server registry on first start. After that the encrypted copy in the database is the source of truth, so editing a credential in the gateway does not touch these Secrets. |
+| `mcp-woocommerce-token`, `mcp-notes-token`, `mcp-utilities-key` | as in `mcp` | Byte-identical copies of the `mcp` Secrets, used only to **seed** the server registry on first start. After that the encrypted copy in the database is the source of truth, so editing a credential in the gateway does not touch these Secrets. Each built-in server is seeded once: a deleted one is not re-created ([re-add it](#delete-and-re-add-a-built-in-server)). |
 
 `get-secret.ps1` works for any Secret value: `-Namespace`, `-Name` and `-Key` are required, the value goes to the clipboard, and it is printed only with `-Show`. The same clipboard caveat as above applies.
 
@@ -590,7 +592,32 @@ $servers | Select-Object slug, status, toolCount, hasCredential, lastError | For
 $me = Invoke-RestMethod -Uri "$base/api/auth/me" -WebSession $s; $me.user | Format-List
 ```
 
-Admin-only changes (register, edit, disable, delete servers; users; invites) use the same pattern with the CSRF headers. The full list of endpoints is in [system-design.md](system-design.md#the-rest-api-api). A server URL that points at a forbidden address is refused with `400 SSRF_REJECTED` and nothing is stored (verified with the metadata address, loopback, a private address, `file:` and a URL with a password).
+Admin-only changes (register, edit, disable, delete servers; users; invites) use the same pattern with the CSRF headers. The full list of endpoints is in [system-design.md](system-design.md#the-rest-api-api). A server URL that points at a forbidden address is refused with `400 SSRF_REJECTED` and nothing is stored (verified with the metadata address, loopback, a private address, `file:` and a URL with a password). Changing a server's URL to another scheme, host or port needs the credential again in the same `PATCH` (`credential`), or `clearCredential: true`; otherwise the answer is `400 VALIDATION_FAILED`.
+
+#### Delete and re-add a built-in server
+
+The three built-in servers (`woo`, `notes`, `utils`) are seeded from the Helm values only once, ever. **A deleted built-in server stays deleted**, also across gateway restarts and `helm upgrade`; re-add it with `POST /api/servers`. To take a server out only for a while, disable it instead (`PATCH` with `{"enabled": false}`).
+
+Delete (after the login above):
+
+```powershell
+$servers = Invoke-RestMethod -Uri "$base/api/servers" -WebSession $s
+$utils = $servers | Where-Object { $_.slug -eq 'utils' }
+Invoke-WebRequest -Method Delete -Uri "$base/api/servers/$($utils.id)" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing | Select-Object -ExpandProperty StatusCode   # 204
+```
+
+Re-add it with the same URL, auth type and header name, and the credential read from its Secret into a variable (never printed):
+
+```powershell
+$cred = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n gateway get secret mcp-utilities-key -o 'jsonpath={.data.key}')))
+$body = @{ slug = 'utils'; name = 'Utilities'; url = 'http://mcp-utilities.mcp.svc.cluster.local:3003/mcp'; authType = 'header'; authHeaderName = 'X-Utilities-Key'; credential = $cred } | ConvertTo-Json
+$cred = $null
+$added = Invoke-RestMethod -Method Post -Uri "$base/api/servers" -WebSession $s -Headers $h -ContentType 'application/json' -Body $body
+$body = $null
+"$($added.slug): $($added.status), $($added.toolCount) tools, hasCredential $($added.hasCredential)"
+```
+
+The seeds of the other two: `woo` is `bearer` at `http://mcp-woocommerce.mcp.svc.cluster.local:3001/mcp` (Secret `mcp-woocommerce-token`, key `token`), `notes` is `bearer` at `http://mcp-notes.mcp.svc.cluster.local:3002/mcp` (Secret `mcp-notes-token`, key `token`). Which slugs have been seeded: query 9 below.
 
 ### Call the gateway with MCP Inspector (command line)
 
@@ -683,7 +710,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1 -W
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1 -Write -Isolation     # also scales mcp-utilities to 0 and back
 ```
 
-It needs Node and `npm ci` (section 2) and `app.localhost` resolving for Node. It reads the admin credentials from the Secret, logs in, makes a temporary key named `gateway-smoke <time>`, lists the tools, calls all three upstreams, revokes the key, checks the revoked key gets 401, and reads the audit log. It never prints the password, the cookie or the key. Real output of the `-Write` run on 2026-10-19:
+It needs Node and `npm ci` (section 2) and `app.localhost` resolving for Node. It reads the admin credentials from the Secret, logs in, makes a temporary key named `gateway-smoke <time>`, lists the tools, calls all three upstreams, revokes the key, checks the revoked key gets 401, reads the audit log, and logs out (also when it fails or is interrupted), so a run leaves no session behind. It never prints the password, the cookie or the key. Real output of the `-Write` run on 2026-10-19:
 
 ```text
 login: ok (role=admin)
@@ -774,6 +801,9 @@ SELECT id, email, role, expires_at FROM invites WHERE accepted_at IS NULL ORDER 
 
 -- 8. Live sessions
 SELECT count(*) AS live_sessions FROM sessions WHERE expires_at > now();
+
+-- 9. Built-in servers seeded so far (a slug here is never seeded again, even after a DELETE)
+SELECT slug, seeded_at FROM seeded_slugs ORDER BY slug;
 ```
 
 What they showed (no secrets): query 3 listed `notes connected 5`, `utils connected 4`, `woo connected 6`; query 4 showed all three with `has_credential t` and `enc_bytes 76`; query 5 showed rows such as `tool_call | mcp | utils | calculate | success`, `tool_call | mcp | notes | delete_note | error | ... | Note 999 not found.` and `auth_rejected | mcp | | | unauthorized | ... | API key revoked`; query 6 grouped them by server and outcome; query 1 showed the one admin.
@@ -811,7 +841,8 @@ Press Ctrl+C in terminal 1 to close the tunnel. The tunnel itself was verified o
 | Browser sessions | `sessions` | Hash of the cookie, expiry (12 h) |
 | Invites | `invites` | Token hash, expiry (72 h), `accepted_at` |
 | MCP servers | `upstream_servers` | URL, auth type, encrypted credential, last health result |
-| Every tool call and every rejected credential | `audit_logs` | `tool_name` is the upstream's name, `server_slug` says which server; `auth_rejected` rows are written for every request with an unknown, revoked or malformed credential (a missing header writes nothing) |
+| Every tool call and every rejected recognisable credential | `audit_logs` | `tool_name` is the upstream's name, `server_slug` says which server; `auth_rejected` rows are written for a well-formed `ugw_` key that is unknown, revoked or of a disabled user, and for an expired internal token; a missing header, another scheme or a malformed value writes nothing |
+| Built-in servers already seeded | `seeded_slugs` | One row per seed slug; a slug here is never seeded again, so a deleted built-in server stays deleted |
 
 Table definitions and relationships: [system-design.md](system-design.md#2-data-model).
 

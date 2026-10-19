@@ -2,7 +2,7 @@
 
 > **Status: partial (end of Phase 3).** Covers the automated tests and cluster checks that exist today (shared package, the three MCP servers and the gateway). The dashboard tests, the Playwright smoke test, the NetworkPolicy checks and `scripts/smoke-test.ps1` belong to Phases 4-5 and do not exist yet. The complete document is Phase 6.
 
-Test counts below come from a full run on 2026-10-19 (`npm test` from the repository root: **362 tests, all passing**).
+Test counts below come from a full run on 2026-10-19 (`npm test` from the repository root: **399 tests, all passing**, after the Phase 3 final-review fix wave; the root run passed three times back to back).
 
 ## 1. The layers
 
@@ -32,11 +32,11 @@ Run from the repository root.
 
 ## 3. What each suite proves (counts from the 2026-10-19 run)
 
-### `packages/shared` (52 tests)
+### `packages/shared` (55 tests)
 
 | File | Tests | Proves |
 |---|---|---|
-| `mcpHttpServer.test.ts` | 20 | The shared MCP HTTP server: Host check before auth, auth hook (a function or a bearer/header config), `extraRoutes`, request ids, `logPath` redaction of mounted paths, 405, malformed JSON, 413, probes, exactly one of `registerTools` or `buildServer` |
+| `mcpHttpServer.test.ts` | 23 | The shared MCP HTTP server: Host check before auth, auth hook (a function or a bearer/header config), `extraRoutes`, request ids, `logPath` redaction of mounted paths, a throwing `logPath` logs `[unloggable path]` and the server keeps serving, graceful `close({ graceMs })` (in-flight request finishes, new connections refused, a request past the grace is cut), 405, malformed JSON, 413, probes, exactly one of `registerTools` or `buildServer` |
 | `upstreamAuth.test.ts` | 12 | The bearer and header upstream auth middleware (timing-safe compare) |
 | `logger.test.ts` | 7 | Secret redaction, including keys ending in `key` or `secret` |
 | `period.test.ts` | 7 | `today`, `yesterday`, `last_7_days` in a time zone |
@@ -47,22 +47,22 @@ Run from the repository root.
 
 | Workspace | Tests | Proves |
 |---|---|---|
-| `mcp-notes` | 11 | The in-memory store (limits, ids never reused, search) and the five tools over HTTP, including a 401 without the bearer token |
+| `mcp-notes` | 12 | The in-memory store (limits, ids never reused, search) and the five tools over HTTP, including a 401 without the bearer token and the note-limit text taken from the store's error |
 | `mcp-utilities` | 27 | The hand-written calculator (precedence, `^` right-associative, `-2^2`, nesting depth, division by zero, no `eval`), the time tools, header auth |
 | `mcp-woocommerce` | 70 | OAuth1 signing against a known vector, the REST client (timeouts, redirects not followed, redaction), the six tools, the server |
 
-### `apps/gateway` (202 tests in 21 files)
+### `apps/gateway` (235 tests in 21 files)
 
 | Area | Files (tests) | Proves |
 |---|---|---|
-| Config and scaffold | `config.test.ts` (10), `scaffold.test.ts` (9), `api.test.ts` (3) | Env validation names variables only; the 32-byte key rule; `SEED_SERVERS` rules; the six tables exist; foreign key actions; `/healthz`, `/readyz` (503 until the database answers); the startup retry succeeds and gives up; error shapes; invite tokens redacted in logs |
-| Security | `crypto.test.ts` (6), `passwords.test.ts` (2), `ssrf.test.ts` (39) | AES-GCM round trip, tampering, wrong associated data, unique nonces; argon2id; SSRF: metadata, private, loopback and IPv6 forms, DNS failure, allow-list, connect-time lookup |
-| Auth | `bearer.test.ts` (13), `internalToken.test.ts` (3), `rateLimit.test.ts` (1) | API keys and the HS256-only internal token, revoked and disabled users, the limiter window |
-| API | `auth` (15), `invites` (9), `keys` (7), `users` (5), `servers` (12), `audit` (5), `trustProxy` (2) | Login (case and whitespace in emails, one answer for every failure, 429), CSRF, sessions, invite lifecycle (single use, 72 h, conflict), key lifecycle and ownership, role checks, server CRUD without any credential in any response, audit filters and pagination, `TRUST_PROXY` |
-| Upstreams | `naming` (8), `errors` (15), `seed` (5), `manager` (20) | Naming and the 64-character rule; the `lastError` texts derived from real SDK errors; seeding is insert-if-absent; the manager (below) |
-| `/mcp` | `endpoint.test.ts` (13) | The aggregated list, routing, collision prefixes, per-user audit, 401 variants and their audit rows, `isError` becomes outcome `error`, unknown tool becomes `denied`, no secrets in logs |
+| Config and scaffold | `config.test.ts` (13), `scaffold.test.ts` (9), `api.test.ts` (4) | Env validation names variables only; the 32-byte key rule; `SEED_SERVERS` rules; `SSRF_ALLOWED_INTERNAL_HOSTS` entry rules; call timeout at least 11000 and health timeout below the interval; the Postgres pool bounds; the six tables exist; foreign key actions; `/healthz`, `/readyz` (503 until the database answers); the startup retry succeeds and gives up; error shapes; invite tokens redacted in logs in any case, and `/invite/<token>` |
+| Security | `crypto.test.ts` (6), `passwords.test.ts` (2), `ssrf.test.ts` (43) | AES-GCM round trip, tampering, wrong associated data, unique nonces; argon2id; SSRF: metadata, private, loopback and IPv6 forms, DNS failure, a lookup that never answers (bounded), allow-list, connect-time lookup in every `dns.lookup` calling form, called back on a later tick |
+| Auth | `bearer.test.ts` (16), `internalToken.test.ts` (4), `rateLimit.test.ts` (1) | API keys and the HS256-only internal token, revoked and disabled users (disabled reported first), which credentials are recognisable (audited), an expired token keeps its user, the limiter window |
+| API | `auth` (17), `invites` (9), `keys` (9), `users` (5), `servers` (16), `audit` (5), `trustProxy` (2) | Login (case and whitespace in emails, one answer for every failure, 429), CSRF, sessions (expired ones swept at login; a disable racing the login leaves no session), invite lifecycle (single use, 72 h, conflict), key lifecycle and ownership (no key for a disabled user or another admin; a racing disable leaves no live key), role checks, server CRUD without any credential in any response, URL origin change needs the credential again, a DELETE during a PATCH, a deleted seeded server stays deleted, audit filters and pagination, `TRUST_PROXY` |
+| Upstreams | `naming` (8), `errors` (18), `seed` (7), `manager` (27) | Naming and the 64-character rule; the `lastError` texts derived from real SDK errors (including `connection reset`), which HTTP statuses concern the whole server; seeding each slug once ever (`seeded_slugs`), marking rows from before the table; the manager (below) |
+| `/mcp` | `endpoint.test.ts` (14) | The aggregated list, routing, collision prefixes, per-user audit, 401 variants (only recognisable credentials write audit rows; an expired internal token is attributed to its user with source `chat`), `isError` becomes outcome `error`, unknown tool becomes `denied`, no secrets in logs |
 
-The manager tests (`test/upstreams/manager.test.ts`) pin the five inputs that hurt a user most: a tool with an invalid prefixed name is skipped alone and listed in `skippedTools`; a restarted upstream gets a **fresh** client and returns to `connected` within one interval; a 302 to `169.254.169.254` is never followed (`HTTP 302 from upstream (redirects are not followed)`); a timeout leaves the server connected; a DNS-rebinding resolver is stopped at connect time.
+The manager tests (`test/upstreams/manager.test.ts`) pin the five inputs that hurt a user most: a tool with an invalid prefixed name is skipped alone and listed in `skippedTools`; a restarted upstream gets a **fresh** client and returns to `connected` within one interval; a 302 to `169.254.169.254` is never followed (`HTTP 302 from upstream (redirects are not followed)`); a timeout leaves the server connected; a DNS-rebinding resolver is stopped at connect time. Also: a 413 fails one call only; a call cut by an upsert or remove reports `reconfigured`; a health check whose connection a failed call dropped publishes nothing; the SSRF DNS lookup is bounded by the health timeout; `findTool`; long requested names are capped at 200 characters. The suite uses a 5 s health timeout and waits for servers to connect after `start()` (refreshing any that a slow first check left unreachable), so it is stable when every test file runs in parallel.
 
 ## 4. How the fakes work
 

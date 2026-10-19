@@ -64,8 +64,11 @@ export function startGateway(deps: GatewayDeps, listen: { port: number; host?: s
     extraRoutes: (app) => {
       // Number of reverse proxies in front of the gateway whose X-Forwarded-For is believed. Only req.ip
       // depends on it, and req.ip is only the login rate-limit key. 0 (default) = the socket peer; Helm
-      // sets 1 (Task 3.8) because Traefik is exactly one hop. Too high a value lets a client pick its own
-      // rate-limit bucket by sending X-Forwarded-For.
+      // sets 1 (Task 3.8) because Traefik is exactly one hop: req.ip is then the RIGHTMOST
+      // X-Forwarded-For entry, the address Traefik saw (entries a client added further left are
+      // ignored). Too high a value lets a client pick its own rate-limit bucket by sending
+      // X-Forwarded-For. On k3s, ServiceLB may SNAT every client to one node address before Traefik
+      // (expected, not tested; Phase 5 checks it).
       app.set('trust proxy', deps.config.TRUST_PROXY);
       app.use('/api', createApiRouter(deps));
     },

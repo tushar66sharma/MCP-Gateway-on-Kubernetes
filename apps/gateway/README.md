@@ -34,18 +34,18 @@ A missing or invalid variable stops the process at start with a message that lis
 | `MCP_ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | `Host` header allow-list for `/mcp` (names without ports). |
 | `TRUST_PROXY` | no | `0` | Reverse-proxy hops whose `X-Forwarded-For` is believed. Helm sets `1` (Traefik). Only the login rate limit reads it. |
 | `SEED_SERVERS` | no | `[]` | JSON array of upstreams inserted at start if their slug is absent: `{slug,name,url,authType,authHeaderName?,credentialEnv?}`. `credentialEnv` names the environment variable that holds the credential. |
-| `SSRF_ALLOWED_INTERNAL_HOSTS` | no | `*.mcp.svc.cluster.local` | Names allowed to resolve to private addresses (exact names or `*.suffix`). |
+| `SSRF_ALLOWED_INTERNAL_HOSTS` | no | `*.mcp.svc.cluster.local` | Names allowed to resolve to private addresses: exact names with at least one dot, or `*.suffix` with at least two labels after `*.` (checked at start). |
 | `SSRF_ALLOW_LOOPBACK` | no | `false` | **Development and tests only.** Allows upstream URLs that resolve to loopback. The Helm chart never sets it. |
 | `UPSTREAM_HEALTH_INTERVAL_MS` | no | `15000` | Health-check period (1000-300000). |
-| `UPSTREAM_HEALTH_TIMEOUT_MS` | no | `5000` | Timeout of one health check (500-60000). |
-| `UPSTREAM_CALL_TIMEOUT_MS` | no | `20000` | Timeout of one tool call (1000-120000). Keep it above `WOO_TIMEOUT_MS` (10000); the chart schema enforces at least 11000. |
+| `UPSTREAM_HEALTH_TIMEOUT_MS` | no | `5000` | Timeout of one health check (500-60000); must be below `UPSTREAM_HEALTH_INTERVAL_MS`. |
+| `UPSTREAM_CALL_TIMEOUT_MS` | no | `20000` | Timeout of one tool call (11000-120000): above `WOO_TIMEOUT_MS` (10000), enforced here and by the chart schema. |
 
 ## Startup order (`src/main.ts`)
 
 1. Load and validate the configuration.
 2. Connect to Postgres, ping and run the migrations in `drizzle/`, up to 30 attempts 2 s apart. If all fail the process exits non-zero (Kubernetes restarts it). `/mcp` is never served on an unmigrated database.
 3. Create the bootstrap admin if there are no users.
-4. Insert the seed servers whose slug is not in the table yet. A seed never overwrites an existing row, so admin edits survive restarts.
+4. Insert each seed server whose slug is in neither `upstream_servers` nor `seeded_slugs`, recording the slug in `seeded_slugs` in the same transaction. A seed never overwrites a row, so admin edits survive restarts, and a deleted built-in server stays deleted (re-add it with `POST /api/servers`).
 5. Run one health check per server, then start the 15 s interval.
 6. Listen. On `SIGTERM` or `SIGINT`: stop the checks and upstream clients, stop listening, close the pool, exit 0.
 

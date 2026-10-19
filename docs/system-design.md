@@ -42,7 +42,7 @@ The gateway is two things at once ([learning/03-gateway.md](learning/03-gateway.
 
 ## 2. Data model
 
-Six tables in database `gateway`, created by the migration `apps/gateway/drizzle/0000_init.sql` that runs at every start.
+Seven tables in database `gateway`, created by the migrations in `apps/gateway/drizzle/` (`0000_init.sql`, and `0001_seeded_slugs.sql` from the final-review fix wave), which run at every start.
 
 ```mermaid
 erDiagram
@@ -117,10 +117,15 @@ erDiagram
     text outcome "success, error, timeout, denied or unauthorized"
     text error_message
   }
+  seeded_slugs {
+    text slug PK "a SEED_SERVERS slug seeded once"
+    timestamptz seeded_at
+  }
 ```
 
 Points worth knowing:
 
+- **`seeded_slugs` is a tombstone list.** Seeding inserts a built-in server only if its slug is in neither `upstream_servers` nor `seeded_slugs`, and records the slug in the same transaction; `DELETE /api/servers/:id` never touches it, so **a deleted built-in server stays deleted; re-add it with `POST /api/servers`**. On the first start after the upgrade, slugs already present in `upstream_servers` were marked as seeded without being re-inserted.
 - **`invites` has no `created_at`** (the spec lists none). Pending invites are listed by `expires_at`, newest first.
 - **`audit_logs.server_id` is `ON DELETE SET NULL`.** Deleting a server keeps its history readable because `server_slug` is denormalised into every row. `audit_logs.user_id` is also `SET NULL`. `api_key_id` has no foreign key, so a key row can never block or be blocked by history.
 - **`tool_name` holds the upstream's own tool name** (`list_orders`) with `server_slug` beside it (`woo`). A call that matched no server keeps the name as the client sent it (`zzz__ping`) with a null slug. The gateway name is `<server_slug>__<tool_name>`.
@@ -197,9 +202,11 @@ Rules, each pinned by a test in `test/upstreams/manager.test.ts`:
 
 - **The loop.** Every 15 s (`UPSTREAM_HEALTH_INTERVAL_MS`) each enabled server whose previous check has finished gets a check: re-run the SSRF check on the URL (DNS answers change), connect if there is no client, `tools/list` with a 5 s timeout (`UPSTREAM_HEALTH_TIMEOUT_MS`). A check never throws; every failure becomes `unreachable` with a readable `lastError`.
 - **A failure drops the client and the tools.** The next check builds a **fresh** client and connection pool, so a restarted upstream is never met with a stale socket. The tools are removed from `tools/list` at once.
-- **Call-time failures.** A connection-level error during `tools/call` (refused, DNS, SSRF block, redirect, HTTP status, reset) marks the server `unreachable` immediately, without waiting for the tick. A timeout or an error answered by the upstream (JSON-RPC error) leaves it `connected`.
+- **Call-time failures.** A transport error during `tools/call` (refused, `connection reset`, DNS, SSRF block, redirect) or an HTTP 401, 403, 404 or 5xx marks the server `unreachable` immediately, without waiting for the tick. Any other HTTP status (for example 413 for one oversized request), a timeout or an error answered by the upstream (JSON-RPC error) fails that call only and leaves the server `connected`.
 - **Mirror.** After each check the status, error, time and tool count are written to `upstream_servers.last_*` and `tool_count`, which is what the dashboard will show.
-- **Edits.** `upsert` replaces the entry as a whole and checks it now; a check still running for the old entry sees it is stale and drops its result. `remove` closes the connection.
+- **Edits.** `upsert` replaces the entry as a whole and checks it now; a check still running for the old entry sees it is stale and drops its result. `remove` closes the connection. A call cut off by an upsert or remove answers `Server '<slug>' was reconfigured during the call` (outcome `error`) and does not mark the server unreachable.
+- **Superseded checks.** If a failed call drops the connection while a check is still listing tools on it, that check publishes nothing, so it cannot bring back tools on a closed client.
+- **DNS.** The SSRF check's DNS lookup is bounded by the 5 s health timeout, so a hung resolver cannot hold a check forever.
 - **Disabled servers** are not connected, not checked and not listed; a call to them is `denied`.
 - **Isolation.** Because `tools/list` reads memory only, a dead or slow upstream costs its own background check and nothing else. Measured on the cluster (2026-10-19): with `mcp-utilities` scaled to 0 its `utils__` tools were gone from the list after 12.2 s (4.1 s in a later run), `woo__ping` kept working, and 16.4 s after scaling back the 15 tools were complete again ([run guide](run-guide.md#the-end-to-end-and-isolation-checks)).
 
@@ -208,13 +215,13 @@ Rules, each pinned by a test in `test/upstreams/manager.test.ts`:
 - Slug: `^[a-z][a-z0-9-]{1,15}$`, unique, immutable (the API refuses a `slug` in a `PATCH`).
 - Gateway tool name: `<slug>__<upstream tool>`, which must match `^[a-zA-Z0-9_-]{1,64}$`. A tool whose prefixed name does not match (too long, a dot, a space) is **skipped on its own** and listed in `skippedTools`; the server's other tools are still served, and a warning is logged.
 - Routing splits on the **first** `__`. Slugs cannot contain `_`, so the first `__` always ends the slug; the tool part may itself contain `__`.
-- The description is prefixed with `[<Server name>] ` and the input schema is passed through unchanged.
+- The description is prefixed with `[<Server name>] ` (trailing space included, even when the upstream gives no description) and the input schema is passed through unchanged.
 - This is why the three `ping` tools coexist as `woo__ping`, `notes__ping` and `utils__ping`.
 
 ## 6. `tools/call` routing
 
-1. Auth (section 3). On failure: 401, and an `auth_rejected` audit row unless the header was missing.
-2. Split the name, find the server by slug. Unknown name or server: `isError` `Unknown tool: <name>`, audit outcome `denied`.
+1. Auth (section 3). On failure: 401, and an `auth_rejected` audit row only when the credential is recognisable (a well-formed `ugw_` key, or an internal token with a valid signature); other values write no row.
+2. Split the name, find the server by slug (a map lookup, no sort). Unknown name or server: `isError` `Unknown tool: <name>` (a requested name longer than 200 characters is cut to 200 plus `…` here and in the log line), audit outcome `denied`.
 3. Server disabled or not connected: `isError` `Server '<slug>' is disabled or unreachable`, outcome `denied`.
 4. Call the upstream with its own credential and a 20 s deadline (`UPSTREAM_CALL_TIMEOUT_MS`), also aborted if the client cancels. **Never retried.**
 5. Write the audit row (`tool_call`, `source`, user, key, server, upstream tool name, duration, outcome, message capped at 500 characters) and one `tool call` log line (name, server, outcome, duration, user, never arguments or results).
@@ -226,9 +233,11 @@ Audit outcomes: `success`; `error` (the upstream returned `isError`, a protocol 
 
 | What | Value | Where set |
 |---|---|---|
-| Health check interval / timeout | 15 s / 5 s | `UPSTREAM_HEALTH_INTERVAL_MS`, `UPSTREAM_HEALTH_TIMEOUT_MS` |
-| Tool call | 20 s | `UPSTREAM_CALL_TIMEOUT_MS`; must stay above the WooCommerce server's own 10 s so a slow store comes back as that server's clean `isError`. The chart schema rejects values below 11000. |
+| Health check interval / timeout | 15 s / 5 s | `UPSTREAM_HEALTH_INTERVAL_MS`, `UPSTREAM_HEALTH_TIMEOUT_MS`; the gateway refuses to start unless the timeout is below the interval. |
+| Tool call | 20 s | `UPSTREAM_CALL_TIMEOUT_MS`; must stay above the WooCommerce server's own 10 s so a slow store comes back as that server's clean `isError`. Both the gateway's config and the chart schema reject values below 11000. |
 | Postgres connect at start | 30 attempts, 2 s apart | `src/main.ts` |
+| Postgres pool | connect 5 s, statement 10 s, idle client 30 s | `src/db/client.ts` (`connectionTimeoutMillis`, `statement_timeout`, `idleTimeoutMillis`) |
+| Shutdown drain | 25 s for in-flight requests, after a 5 s `preStop` sleep; pod grace 35 s | `src/main.ts`, `terminationGracePeriodSeconds` |
 | Session | 12 h | cookie `Max-Age=43200` |
 | Invite | 72 h, single use | |
 | Internal chat token | 5 min | built, not yet used by anything (Phase 4) |
@@ -243,14 +252,14 @@ Audit outcomes: `success`; `error` (the upstream returned `isError`, a protocol 
 | Cached catalog instead of live fan-out ([ADR-014](decisions/ADR-014-cached-tool-catalog.md)) | `tools/list` is fast and survives dead upstreams. | The list can be stale for up to one interval (about 20 s with the 5 s timeout). Observed in the isolation check: 4-12 s to disappear, 16 s to return. |
 | No auth cache ([ADR-008](decisions/ADR-008-api-key-hashing.md)) | Revocation is immediate (verified: a revoked key gets 401 on the next request). | One indexed database read per `/mcp` request. |
 | Stateless `/mcp` | No session affinity; any pod can answer. | The client re-sends its context each request. |
-| One gateway client per upstream with a pinned connection | Cheap calls, fresh client after any failure. | A reconfigured server drops in-flight calls. |
+| One gateway client per upstream with a pinned connection | Cheap calls, fresh client after any failure. | A reconfigured server drops in-flight calls (they answer `Server '<slug>' was reconfigured during the call`). |
 | No retries of tool calls | No duplicate writes (`create_product` is not idempotent). | The caller sees the failure and decides. |
-| In-memory state per replica | Simple. | **Health and catalog state is per replica, and a server edit is applied on the replica that handled it.** Several replicas could briefly disagree. One replica is deployed, so this does not occur today. The login rate limiter is per replica too. |
+| In-memory state per replica | Simple. | **Health and catalog state is per replica, and a server edit is applied on the replica that handled it.** One replica is deployed, and the Deployment uses the `Recreate` strategy: a rollout stops the old pod before the new one starts, so two gateway pods never overlap (no stale catalog on the new pod, no migration or seed race), at the cost of a short downtime per rollout. Any future scale-out would need a shared catalog or a periodic resync from the database; the login rate limiter is per replica too. |
 | Notes in memory | Trivial upstream. | A `mcp-notes` restart empties the notes. |
 | Audit row written after the call | Records the outcome and duration. | A crash mid-call leaves no row (spec §6.8). |
-| Seeding by insert-if-absent | Admin edits survive restarts. | Changing the Helm seed later does not change an existing row; edit it through the API. |
+| Seeding each slug once, ever (table `seeded_slugs`) | Admin edits and deletions survive restarts: **a deleted built-in server stays deleted; re-add it with `POST /api/servers`**. | Changing the Helm seed later does not change an existing row; edit it through the API. A seed slug is inserted only if it is in neither `upstream_servers` nor `seeded_slugs`; rows from before the table existed are marked as seeded on the first start, never re-inserted. |
 | One shared upstream credential per server | Simple, matches the spec. | All users act through the same upstream identity; per-user attribution is in the gateway audit log only. |
 
 ## 9. Kubernetes shape (as deployed)
 
-Postgres: StatefulSet `postgres-0`, uid/gid 999, `PGDATA` in a subdirectory of the volume, Service `postgres`. Gateway: Deployment `gateway`, 1 replica, uid 1000, read-only root filesystem with a `/tmp` emptyDir, probes on `/healthz` and `/readyz`, requests 50m/128Mi, limits 500m/384Mi. Ingress `gateway` for host `app.localhost` routes `/api` and `/mcp` (the dashboard will own `/` in Phase 4). Secrets: `gateway-secrets` (Postgres password, encryption key, internal token secret), `gateway-bootstrap` (admin email and password), plus gateway copies of the three upstream credentials used only to seed. Details and commands: [run guide](run-guide.md#9-the-gateway-phase-3) and [deployment.md](deployment.md).
+Postgres: StatefulSet `postgres-0`, uid/gid 999, `PGDATA` in a subdirectory of the volume, Service `postgres`. Gateway: Deployment `gateway`, 1 replica, strategy `Recreate`, `terminationGracePeriodSeconds: 35` with a 5 s `preStop` sleep (then SIGTERM: stop accepting, drain in-flight requests up to 25 s, stop upstream clients, close the pool), uid 1000, read-only root filesystem with a `/tmp` emptyDir, probes on `/healthz` and `/readyz`, requests 50m/128Mi, limits 500m/384Mi. Ingress `gateway` for host `app.localhost` routes `/api` and `/mcp` (the dashboard will own `/` in Phase 4). Secrets: `gateway-secrets` (Postgres password, encryption key, internal token secret), `gateway-bootstrap` (admin email and password), plus gateway copies of the three upstream credentials used only to seed. Details and commands: [run guide](run-guide.md#9-the-gateway-phase-3) and [deployment.md](deployment.md).

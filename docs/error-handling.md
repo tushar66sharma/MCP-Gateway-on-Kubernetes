@@ -17,20 +17,23 @@ Each row answers: what fails, how it is detected, whether it is retried, what th
 | Failure | Detected by | Retried? | What the client sees | Log and audit |
 |---|---|---|---|---|
 | No `Authorization` header | `authenticateBearer` | no | `401`, header `WWW-Authenticate: Bearer`, `{"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized"},"id":null}` (**live**) | log `mcp auth rejected` reason `missing`; **no audit row** |
-| Unknown or malformed key (not `ugw_` + valid, or bad internal token) | hash lookup finds nothing | no | the same 401 (**live**) | audit row `auth_rejected`, outcome `unauthorized`, message `unknown or malformed credential`, user null (**live**) |
+| Well-formed but unknown key (`ugw_` + 43 base62 characters) | hash lookup finds nothing | no | the same 401 (**live**) | audit row `auth_rejected`, outcome `unauthorized`, message `unknown credential`, user null (**tested**) |
+| Unrecognisable value: another scheme (`Basic …`), `Bearer` alone, a malformed `ugw_` value, a token with a bad signature | format check, or JWT verification | no | the same 401 (**tested**) | **no audit row** (spec §6.8: rejections are audited "when the key is recognizable"); debug log line only, so garbage cannot grow the audit table (**tested**) |
 | Revoked key | `revoked_at` set | no | the same 401 (**live**: the isolation check revokes its key and sees 401) | audit `auth_rejected`, message `API key revoked`, attributed to the key's owner (**live**) |
-| Key of a disabled user | `users.disabled_at` set | no | the same 401 (**tested**) | audit `auth_rejected`, message `user disabled` |
-| Expired internal chat token | JWT `exp` | no | the same 401 (**tested**) | audit `auth_rejected`, message `internal token expired` |
+| Key of a disabled user | `users.disabled_at` set (checked before `revoked_at`; disabling also revokes the keys) | no | the same 401 (**tested**) | audit `auth_rejected`, message `user disabled`, attributed to the owner |
+| Expired internal chat token (valid signature) | JWT `exp` | no | the same 401 (**tested**) | audit `auth_rejected`, message `internal token expired`, **source `chat`, attributed to the token's user** (**tested**) |
 | `GET /mcp` (or any non-POST) | route | no | `405`, header `Allow: POST`, `{"jsonrpc":"2.0","error":{"code":-32000,"message":"Method not allowed"},"id":null}` (**live**) | request log line only |
 | Host header not in `MCP_ALLOWED_HOSTS` | host check, before auth | no | `403`, `-32000 Invalid Host: <name>` (**tested** in the shared package; captured on the WooCommerce server in Phase 2, same code) | request log line |
 | Malformed JSON body | body parser | no | `400`, `-32700 Invalid request body` (**tested**) | request log line |
 | Body over 1 MB | body parser | no | `413`, `-32700 Invalid request body` (**tested**) | request log line |
-| Unknown tool or unknown server slug | `callTool` | no | result `isError`: `Unknown tool: zzz__ping` (**live**) | audit `tool_call`, outcome `denied`, server null, tool name as sent (**live**) |
+| Unknown tool or unknown server slug | `callTool` | no | result `isError`: `Unknown tool: zzz__ping` (**live**); a requested name over 200 characters is shown as its first 200 plus `…` (**tested**) | audit `tool_call`, outcome `denied`, server null, tool name as sent, capped at 200 (**live**) |
 | Server disabled or unreachable | state check | no | result `isError`: `Server '<slug>' is disabled or unreachable` (**tested**; tools of such servers are not listed, so only a stale client can call them) | audit `denied` |
 | Upstream returns `isError` (for example `notes__delete_note` with a missing id) | the result flag | no | the upstream's own result, unchanged: `Note 999 not found.` (**live**) | audit outcome `error`, message = the first text, server `notes`, tool `delete_note` (**live**) |
 | Upstream does not answer in 20 s | `AbortSignal.timeout` and the SDK request timeout | no | result `isError`: `Upstream '<slug>' did not respond within 20000ms` (**tested**) | audit outcome `timeout`; the server **stays connected** |
 | Upstream answers a JSON-RPC error (protocol error) | `ProtocolError` | no | result `isError`: `Upstream '<slug>' error: <message>` (**tested**) | audit outcome `error`; stays connected |
-| Connection-level failure during a call (refused, reset, DNS, SSRF block, redirect, HTTP status) | `isConnectionLevelError` | no | result `isError`: `Upstream '<slug>' is unreachable: <reason>` (**tested**) | audit outcome `error`; the server is marked `unreachable` **at once** and its tools leave the list |
+| Connection-level failure during a call (refused, reset, DNS, SSRF block, redirect, HTTP 401/403/404/5xx) | `isConnectionLevelError` | no | result `isError`: `Upstream '<slug>' is unreachable: <reason>` (**tested**) | audit outcome `error`; the server is marked `unreachable` **at once** and its tools leave the list |
+| Any other HTTP status during a call (for example `413` for an oversized request) | `SdkHttpError` status | no | result `isError`: `Upstream '<slug>' error: HTTP 413 from upstream` (**tested**) | audit outcome `error`; the server **stays connected** (the status concerns that call only) |
+| The server is edited or deleted (`PATCH`/`DELETE /api/servers/:id`) while a call to it runs | the manager's entry was replaced | no | result `isError`: `Server '<slug>' was reconfigured during the call` (**tested**) | audit outcome `error`; the server is **not** marked unreachable |
 | Client cancels the request | the request's abort signal | no | result `isError`: `Call to '<name>' was cancelled` (**tested**) | audit outcome `error` |
 | Wrong arguments (for example `create_product` with price `abc`) | the **upstream's** zod validation (the gateway passes arguments through) | no | the upstream's `isError` text, for example `Input validation error: Invalid arguments for tool create_product: ...` (**live** on the upstream directly, [captured](learning/02-mcp-protocol.md#54-toolscall-tool-level-error-iserror-true)) | audit outcome `error` |
 | Unexpected exception in the handler | shared server | no | `500`, `-32603 Internal error`, no details (**tested**) | error log line |
@@ -41,12 +44,13 @@ Each row answers: what fails, how it is detected, whether it is retried, what th
 | `lastError` | Meaning |
 |---|---|
 | `connection refused` | Nothing listens at the address (pod down or port wrong). |
-| `DNS lookup failed` | The name does not resolve (or the resolver is unavailable). |
+| `connection reset` | The upstream closed the connection (`ECONNRESET`, or undici's "other side closed"), typically a pooled keep-alive socket of a pod that just restarted. |
+| `DNS lookup failed` | The name does not resolve, the resolver is unavailable, or the lookup took longer than the health timeout. |
 | `timeout after 5000ms` | No answer within the check timeout. |
 | `HTTP 401 from upstream` (or 403, 404, 5xx) | The upstream answered with that status. The body is never copied. 401 usually means the stored credential is wrong. |
 | `HTTP 302 from upstream (redirects are not followed)` | The URL redirects; the gateway never follows a redirect (a redirect could point at an internal address). |
 | `blocked by SSRF guard (<reason>)` | The name now resolves to a forbidden address. Reasons: `loopback`, `link_local`, `private`, `unspecified`, `scheme`, `credentials_in_url`, `invalid_url`. |
-| `error: <message>` | Anything else, for example a socket reset, shortened to 200 characters. |
+| `error: <message>` | Anything else, shortened to 200 characters. |
 
 ## 2. `/api` (the REST API)
 
@@ -55,14 +59,15 @@ All errors have the shape `{"error":{"code","message","details"?,"requestId"}}`.
 | Status and code | When | Example (live unless noted) |
 |---|---|---|
 | `400 VALIDATION_FAILED` | A zod schema failed, or a body is malformed JSON or unknown fields (`.strict()`) | `details.issues[{path,message}]`, for example `slug: must match ^[a-z][a-z0-9-]{1,15}$` |
+| `400 VALIDATION_FAILED` (server URL origin) | A `PATCH` changes the scheme, host or port of a server that has a stored credential, without a new `credential` or `clearCredential: true` | `changing the server URL origin requires re-entering the credential (or clearCredential: true)` (**tested**). A path-only change keeps the credential. |
 | `400 SSRF_REJECTED` | A server URL fails the SSRF guard | `Upstream URL rejected: 169.254.169.254 resolves to a link-local address`, `details.reason` `link_local`. Also `loopback`, `private` (`... and is not allowlisted`), `scheme` (`file:`), `credentials_in_url`. |
 | `401 UNAUTHENTICATED` | No session cookie, expired session, disabled user | `GET /api/keys` without logging in |
 | `401 INVALID_CREDENTIALS` | Login failed. One answer for unknown email, wrong password and disabled user, so it reveals nothing. | `Email or password is incorrect` |
-| `403 FORBIDDEN` | A member calls an admin route, or asks for another user's audit rows | `You do not have permission to do this` (**tested**) |
+| `403 FORBIDDEN` | A member calls an admin route, or asks for another user's audit rows; an admin issues a key for **another admin** (`POST /api/users/:id/keys`) | `You do not have permission to do this`; `Admins create their own keys` (**tested**) |
 | `403 CSRF_REJECTED` | A `POST`, `PUT`, `PATCH` or `DELETE` without `Content-Type: application/json` **or** without `Origin: http://app.localhost` | `Request rejected by CSRF protection`. Includes a body-less `DELETE`. |
-| `404 NOT_FOUND` | Unknown route, server, user, key or invite id. Another user's key looks the same as a missing one. | `Key not found` |
+| `404 NOT_FOUND` | Unknown route, server, user, key or invite id. Another user's key looks the same as a missing one. Also a server `PATCH` whose server was deleted by a concurrent `DELETE` (the server is then removed from the catalog too, **tested**). | `Key not found` |
 | `404 INVITE_INVALID` | Invite token unknown, expired, used or cancelled | `This invite link is invalid or has expired` |
-| `409 CONFLICT` | Duplicate slug, a user with that email exists, changing your own role or disabling yourself | `A server with this slug already exists` |
+| `409 CONFLICT` | Duplicate slug, a user with that email exists, changing your own role or disabling yourself, an admin issuing a key for a disabled user | `A server with this slug already exists`; `User is disabled` (**tested**) |
 | `413` (code `VALIDATION_FAILED`) | `/api` body over 100 kb | `Request body too large` (**tested**) |
 | `429 RATE_LIMITED` | More than 10 login attempts per minute for the same IP and email | `Too many login attempts; try again later`, header `Retry-After` (seconds left in the window, 1-60). The 11th attempt was refused, with `Retry-After: 60` (**live**). |
 | `500 INTERNAL` | Anything unexpected, including a database error | `Internal error`, no message or stack; the log line has the request id and the error class only (**tested**) |
@@ -70,7 +75,7 @@ All errors have the shape `{"error":{"code","message","details"?,"requestId"}}`.
 Details worth knowing:
 
 - **CSRF runs before the session check**, even on public routes, so a request without the two headers is `403` whether or not you are logged in.
-- **The login rate limit** counts every attempt, successful or not, keyed on `IP|email`. Behind Traefik the real client IP comes from `X-Forwarded-For` because the pod runs with `TRUST_PROXY=1`; without it every user would share the ingress IP. The limiter is in memory, so a pod restart clears it.
+- **The login rate limit** counts every attempt, successful or not, keyed on `IP|email`. Behind Traefik the client IP is the rightmost `X-Forwarded-For` entry (the address Traefik saw) because the pod runs with `TRUST_PROXY=1`; without it every user would share the ingress IP. On k3s the ServiceLB in front of Traefik may SNAT every client to one address, so the limiter may effectively be per email (expected, not tested; Phase 5). The limiter is in memory, so a pod restart clears it.
 - **Passwords** shorter than 10 characters are refused at invite acceptance (`VALIDATION_FAILED`), not at login.
 
 ## 3. Startup and Kubernetes
@@ -83,7 +88,8 @@ Details worth knowing:
 | An upstream pod is down | health loop | The gateway stays Ready (readiness does not depend on upstreams); that server becomes `unreachable` and its tools vanish within about 20 s (**live**: 4-12 s) | `GET /api/servers`, the Postgres `upstream_servers` table |
 | An upstream comes back | next health check | A fresh client is built; status `connected` and the tools return, within one interval (**live**: 16.4 s after scaling back) | same |
 | A seed credential env var is missing | seeding | The server is inserted without a credential and a warning names the variable; the upstream will answer 401 (**tested**) | gateway log `seed server credential env var is missing` |
-| Pod receives SIGTERM | signal handler | Stops the checks and upstream clients, stops listening, closes the pool, exits 0. Observed: the old pod was gone after 8 s (**live**, grace period 30 s) | gateway log `shutting down` |
+| Pod receives SIGTERM | `preStop` sleep 5 s, then the signal handler | Stops accepting connections, lets in-flight requests finish for up to 25 s (then cuts the rest), stops the upstream clients, closes the pool, exits 0; grace period 35 s. A rollout uses `Recreate`: the new pod starts after the old one is gone | gateway log `shutting down: no new connections`, then `shutdown: http server closed` (`cutRequests`), `shutdown: upstream clients stopped`, `shutdown: database pool closed; exiting` |
+| A built-in (seeded) server was deleted | seeding at start | It is **not** re-created: each seed slug is inserted once, ever (table `seeded_slugs`). Re-add it with `POST /api/servers` (**tested**) | `GET /api/servers` |
 | The process is killed in the middle of a tool call | none | No audit row exists for that call, because the row is written after the call (spec §6.8; a known limit, no code change) | |
 
 ## 4. Not built yet (Phase 4)
