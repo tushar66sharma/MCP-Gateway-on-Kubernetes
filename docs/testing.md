@@ -94,7 +94,7 @@ Verified 2026-10-19: plain, `-Write` and `-Isolation` runs passed. Isolation tim
 ### Other cluster checks
 
 - Persistence: deleting `postgres-0` and letting it return kept the data (1 user, audit rows grew from 27 to 35 across runs, and the bootstrap admin was not created again) (Task 3.8).
-- `SIGTERM`: `kubectl -n gateway rollout restart deploy/gateway` logged `shutting down` and the old pod was gone after 8 s.
+- `SIGTERM` (after the final-review fix wave): `kubectl -n gateway rollout restart deploy/gateway` made the old pod log, in order, `shutting down: no new connections`, `shutdown: http server closed`, `shutdown: upstream clients stopped` and `shutdown: database pool closed; exiting`, about 6 s after the restart (the 5 s `preStop` sleep comes first). Before the fix wave the same command logged a single `shutting down` line and the pod was gone after 8 s.
 - MCP Inspector 2.11.0 (`--cli`) against `http://app.localhost/mcp`: `tools/list` (15 tools) and `woo__list_orders` with `period=today` worked (Task 3.8), and `utils__calculate` with `expression=6*7` returned `42` while writing these docs.
 - Chart: `helm lint` passes with `deploy/values-local.yaml` and `deploy/values-prod.yaml`; the rendered chart has no `SSRF_ALLOW_LOOPBACK`.
 - Not tested: Claude Code and Cursor against the gateway (snippets are in the [run guide](run-guide.md#connect-claude-code-for-you-to-try) and labelled as such), a multi-replica gateway, the production values on a real cluster.

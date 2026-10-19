@@ -33,7 +33,7 @@ A missing or invalid variable stops the process at start with a message that lis
 | `COOKIE_SECURE` | no | `false` | `true` adds `Secure` to the session cookie (Helm sets it from the public scheme). |
 | `MCP_ALLOWED_HOSTS` | no | `localhost,127.0.0.1` | `Host` header allow-list for `/mcp` (names without ports). |
 | `TRUST_PROXY` | no | `0` | Reverse-proxy hops whose `X-Forwarded-For` is believed. Helm sets `1` (Traefik). Only the login rate limit reads it. |
-| `SEED_SERVERS` | no | `[]` | JSON array of upstreams inserted at start if their slug is absent: `{slug,name,url,authType,authHeaderName?,credentialEnv?}`. `credentialEnv` names the environment variable that holds the credential. |
+| `SEED_SERVERS` | no | `[]` | JSON array of built-in upstreams, each inserted once ever (a slug recorded in `seeded_slugs` is never re-inserted, so a deleted built-in server stays deleted): `{slug,name,url,authType,authHeaderName?,credentialEnv?}`. `credentialEnv` names the environment variable that holds the credential. |
 | `SSRF_ALLOWED_INTERNAL_HOSTS` | no | `*.mcp.svc.cluster.local` | Names allowed to resolve to private addresses: exact names with at least one dot, or `*.suffix` with at least two labels after `*.` (checked at start). |
 | `SSRF_ALLOW_LOOPBACK` | no | `false` | **Development and tests only.** Allows upstream URLs that resolve to loopback. The Helm chart never sets it. |
 | `UPSTREAM_HEALTH_INTERVAL_MS` | no | `15000` | Health-check period (1000-300000). |
@@ -47,7 +47,7 @@ A missing or invalid variable stops the process at start with a message that lis
 3. Create the bootstrap admin if there are no users.
 4. Insert each seed server whose slug is in neither `upstream_servers` nor `seeded_slugs`, recording the slug in `seeded_slugs` in the same transaction. A seed never overwrites a row, so admin edits survive restarts, and a deleted built-in server stays deleted (re-add it with `POST /api/servers`).
 5. Run one health check per server, then start the 15 s interval.
-6. Listen. On `SIGTERM` or `SIGINT`: stop the checks and upstream clients, stop listening, close the pool, exit 0.
+6. Listen. On `SIGTERM` or `SIGINT`: stop accepting connections, wait up to 25 s for in-flight requests, cut any still open, stop the health checks and upstream clients, close the pool, exit 0. In Kubernetes a 5 s `preStop` sleep runs first and the pod has a 35 s termination grace period.
 
 ## Source layout
 
