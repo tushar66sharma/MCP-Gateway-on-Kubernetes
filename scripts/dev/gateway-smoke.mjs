@@ -19,7 +19,7 @@ const dumpTools = argValue('--dump-tools');
 const email = process.env.GATEWAY_ADMIN_EMAIL;
 const password = process.env.GATEWAY_ADMIN_PASSWORD;
 if (!base || !email || !password) {
-  console.error('usage: GATEWAY_ADMIN_EMAIL=<email> GATEWAY_ADMIN_PASSWORD=<password> node scripts/dev/gateway-smoke.mjs --base <url> [--write] [--isolation]');
+  console.error('usage: GATEWAY_ADMIN_EMAIL=<email> GATEWAY_ADMIN_PASSWORD=<password> node scripts/dev/gateway-smoke.mjs --base <url> [--write] [--isolation] [--dump-tools <file>]');
   process.exit(1);
 }
 const origin = new URL(base).origin;

@@ -62,4 +62,29 @@ describe('LLM registry', () => {
     expect(status).toEqual({ configured: true, provider: 'groq', model: expect.any(String), fallbackProvider: 'openrouter' });
     expect(llmStatusOf({ ...BASE, GROQ_API_KEY: '', LLM_FALLBACK_PROVIDER: '' }).configured).toBe(false);
   });
+
+  it('sends reasoning_effort only for gpt-oss models', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const f = (async (_u: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return okResponse();
+    }) as typeof fetch;
+    for (const model of ['llama-3.1-8b-instant', 'openai/gpt-oss-120b', '']) {
+      await createLlmFromConfig({ ...BASE, LLM_MODEL: model, LLM_FALLBACK_PROVIDER: '' }, { fetch: f })!.chat(request());
+    }
+    expect(bodies[0]).not.toHaveProperty('reasoning_effort');
+    expect(bodies[1]).toMatchObject({ model: 'openai/gpt-oss-120b', reasoning_effort: 'low' });
+    expect(bodies[2]).toMatchObject({ model: 'openai/gpt-oss-120b', reasoning_effort: 'low' });
+  });
+
+  it('makes exactly one fallback request even with retries configured, and reports its code', async () => {
+    const { f, urls } = fakeFetch((u) => new Response('{}', { status: u.includes('groq') ? 429 : 503 }));
+    const llm = createLlmFromConfig({ ...BASE, LLM_MAX_RETRIES: 2 }, { fetch: f, sleep: async () => {}, random: () => 0 })!;
+    const err = (await llm.chat(request()).catch((e: unknown) => e)) as LlmError;
+    expect(err.code).toBe('LLM_RATE_LIMITED');
+    expect(err.fallbackProvider).toBe('openrouter');
+    expect(err.fallbackCode).toBe('LLM_UNAVAILABLE');
+    expect(urls.filter((u) => u.includes('groq'))).toHaveLength(3);
+    expect(urls.filter((u) => u.includes('openrouter'))).toHaveLength(1);
+  });
 });

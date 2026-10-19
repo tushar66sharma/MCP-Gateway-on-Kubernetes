@@ -21,16 +21,21 @@ const keyOf = (c: LlmConfig, id: ProviderId): string => c[PROVIDERS[id].apiKeyEn
 
 function build(c: LlmConfig, id: ProviderId, model: string, baseUrl: string, maxRetries: number, rt: LlmRuntime): LlmProvider {
   const def = PROVIDERS[id];
+  const resolvedModel = model || def.defaultModel;
+  const extraBody = {
+    ...def.extraBody,
+    ...def.modelExtraBody?.filter((m) => m.match.test(resolvedModel)).reduce<Record<string, unknown>>((acc, m) => ({ ...acc, ...m.body }), {}),
+  };
   return createOpenAiCompatible(
     {
       name: id,
       baseUrl: baseUrl || def.baseUrl,
       apiKey: keyOf(c, id),
-      model: model || def.defaultModel,
+      model: resolvedModel,
       timeoutMs: c.LLM_TIMEOUT_MS,
       maxRetries,
       ...(def.extraHeaders ? { extraHeaders: def.extraHeaders } : {}),
-      ...(def.extraBody ? { extraBody: def.extraBody } : {}),
+      ...(Object.keys(extraBody).length > 0 ? { extraBody } : {}),
     },
     rt,
   );
@@ -52,12 +57,13 @@ export function createLlmFromConfig(c: LlmConfig, rt: LlmRuntime = {}): LlmProvi
       try {
         return await primary.chat(r);
       } catch (err) {
-        const eligible = err instanceof LlmError && (err.code === 'LLM_RATE_LIMITED' || err.code === 'LLM_UNAVAILABLE');
-        if (!eligible || r.signal.aborted) throw err;
+        if (!(err instanceof LlmError) || (err.code !== 'LLM_RATE_LIMITED' && err.code !== 'LLM_UNAVAILABLE') || r.signal.aborted) throw err;
         try {
           return await fallback.chat(r);
-        } catch {
-          // Report the primary's failure (it carries retryAfterSec when the provider gave one).
+        } catch (fbErr) {
+          // Report the primary's failure (it carries retryAfterSec when the provider gave one), noting the fallback's.
+          err.fallbackProvider = fallback.name;
+          if (fbErr instanceof LlmError) err.fallbackCode = fbErr.code;
           throw err;
         }
       }

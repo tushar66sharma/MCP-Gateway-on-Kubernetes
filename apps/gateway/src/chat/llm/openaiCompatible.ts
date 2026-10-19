@@ -89,6 +89,20 @@ function retryAfterOf(res: Response): number | undefined {
   return Number.isFinite(v) && v > 0 ? Math.ceil(v) : undefined;
 }
 
+/** Reads an error body for its error.code only; a body that cannot be read is treated as empty. */
+async function readBodySafely(res: Response): Promise<string> {
+  try {
+    return await res.text();
+  } catch {
+    try {
+      await res.body?.cancel();
+    } catch {
+      // nothing more to release
+    }
+    return '';
+  }
+}
+
 type Attempt = { result: LlmChatResult } | { error: LlmError; retryable: boolean; toolUseFailed?: boolean };
 
 export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRuntime = {}): LlmProvider {
@@ -98,8 +112,8 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
   const now = rt.now ?? Date.now;
   const url = `${opts.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-  const fail = (code: LlmError['code'], message: string, retryAfterSec?: number): LlmError =>
-    new LlmError(code, message, { provider: opts.name, ...(retryAfterSec !== undefined ? { retryAfterSec } : {}) });
+  const fail = (code: LlmError['code'], message: string, extra: { retryAfterSec?: number; httpStatus?: number; providerCode?: string } = {}): LlmError =>
+    new LlmError(code, message, { provider: opts.name, ...extra });
   const badResponse = (): LlmError => fail('LLM_BAD_RESPONSE', 'The language model returned a response that could not be used.');
 
   function parseSuccess(text: string): Attempt {
@@ -132,21 +146,23 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
       return { error: fail('LLM_UNAVAILABLE', 'The language model provider could not be reached.'), retryable: true };
     }
     const status = res.status;
-    if (status === 401 || status === 403) return { error: fail('LLM_AUTH_FAILED', 'The language model provider rejected the API key.'), retryable: false };
-    if (status === 429) {
-      const after = retryAfterOf(res);
-      return { error: fail('LLM_RATE_LIMITED', 'The language model provider is rate limiting requests.', after), retryable: true };
+    if (!res.ok) {
+      // Only the status and a validated error.code are kept; the body can echo request content.
+      const providerCode = errorCodeOf(await readBodySafely(res));
+      const info = { httpStatus: status, ...(providerCode !== undefined ? { providerCode } : {}) };
+      if (status === 401 || status === 403) return { error: fail('LLM_AUTH_FAILED', 'The language model provider rejected the API key.', info), retryable: false };
+      if (status === 429) {
+        const after = retryAfterOf(res);
+        return { error: fail('LLM_RATE_LIMITED', 'The language model provider is rate limiting requests.', { ...info, ...(after !== undefined ? { retryAfterSec: after } : {}) }), retryable: true };
+      }
+      if (status >= 500) return { error: fail('LLM_UNAVAILABLE', 'The language model provider is unavailable.', info), retryable: true };
+      return { error: fail('LLM_BAD_RESPONSE', 'The language model returned a response that could not be used.', info), retryable: false, toolUseFailed: status === 400 && providerCode === 'tool_use_failed' };
     }
-    if (status >= 500) return { error: fail('LLM_UNAVAILABLE', 'The language model provider is unavailable.'), retryable: true };
     let text: string;
     try {
       text = await res.text();
     } catch {
       return { error: fail('LLM_UNAVAILABLE', 'The language model provider could not be reached.'), retryable: !r.signal.aborted };
-    }
-    if (status >= 400) {
-      const toolUseFailed = status === 400 && errorCodeOf(text) === 'tool_use_failed';
-      return { error: badResponse(), retryable: false, toolUseFailed };
     }
     return parseSuccess(text);
   }

@@ -195,4 +195,21 @@ describe('openai-compatible provider', () => {
     expect(err.code).toBe('LLM_UNAVAILABLE');
     expect(calls).toHaveLength(1);
   });
+
+  it('records httpStatus and a valid providerCode on errors', async () => {
+    const { provider } = setup([json({ error: { code: 'rate_limit_exceeded', message: 'secret-echo' } }, 429)], { maxRetries: 0 });
+    const err = await errorOf(provider.chat(req()));
+    expect(err.httpStatus).toBe(429);
+    expect(err.providerCode).toBe('rate_limit_exceeded');
+    expect(err.message).not.toContain('secret-echo');
+  });
+
+  it('drops a providerCode that is not a plain identifier', async () => {
+    for (const code of ['Rate Limit', 'UPPER', 'a'.repeat(41), 'has space']) {
+      const { provider } = setup([json({ error: { code } }, 500)], { maxRetries: 0 });
+      const err = await errorOf(provider.chat(req()));
+      expect(err.httpStatus).toBe(500);
+      expect(err.providerCode, code).toBeUndefined();
+    }
+  });
 });
