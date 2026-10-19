@@ -3,6 +3,7 @@ import request from 'supertest';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
+import { LoginRateLimiter } from '../src/auth/rateLimit.js';
 import { loadConfig } from '../src/config.js';
 import { connectWithRetry, type DbHandle } from '../src/db/client.js';
 import { startGateway } from '../src/server.js';
@@ -47,7 +48,7 @@ describe('gateway scaffold', () => {
 
   const start = async (db: DbHandle) => {
     running = await startGateway(
-      { config, logger: createLogger('test', 'silent'), db, clock: () => new Date() },
+      { config, logger: createLogger('test', 'silent'), db, clock: () => new Date(), rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }) },
       { port: 0, host: '127.0.0.1' },
     );
     return `http://127.0.0.1:${running.port}`;

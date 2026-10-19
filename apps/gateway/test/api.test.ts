@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { apiErrorHandler } from '../src/api/errors.js';
 import { parseBody } from '../src/api/validate.js';
+import { LoginRateLimiter } from '../src/auth/rateLimit.js';
 import { loadConfig } from '../src/config.js';
 import { startGateway } from '../src/server.js';
 import { createTestDb } from './helpers/testDb.js';
@@ -70,7 +71,7 @@ describe('request log path redaction', () => {
       PGUSER: 'gateway',
       PGPASSWORD: 'pw',
     });
-    running = await startGateway({ config, logger, db, clock: () => new Date() }, { port: 0, host: '127.0.0.1' });
+    running = await startGateway({ config, logger, db, clock: () => new Date(), rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }) }, { port: 0, host: '127.0.0.1' });
     const base = `http://127.0.0.1:${running.port}`;
     const id = randomUUID();
     await request(base).get('/api/invites/SECRETTOKEN123?x=1');

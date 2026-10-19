@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import type { RequestHandler } from 'express';
 import { startMcpHttpServer, type Logger, type RunningMcpHttpServer } from '@urumi/shared';
 import { createApiRouter } from './api/router.js';
+import type { LoginRateLimiter } from './auth/rateLimit.js';
 import type { Config } from './config.js';
 import type { DbHandle } from './db/client.js';
 
@@ -10,6 +11,7 @@ export interface GatewayDeps {
   logger: Logger;
   db: DbHandle;
   clock: () => Date;
+  rateLimiter: LoginRateLimiter;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
