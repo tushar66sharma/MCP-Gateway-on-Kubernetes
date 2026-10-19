@@ -42,8 +42,23 @@ if ($valuesPath -like '*values-local.yaml') {
 # spec.strategy.rollingUpdate (no field manager owns it), so upgrading an existing install would
 # fail with "may not be specified when strategy type is 'Recreate'". Switch the live strategy first
 # with a merge patch (null removes rollingUpdate). Changing only the strategy restarts no pod.
-$gatewayDeploys = kubectl get deploy -A -l app.kubernetes.io/name=gateway -o json 2>$null
-if ($LASTEXITCODE -eq 0 -and $gatewayDeploys) {
+# The selector matches only this release's gateway, so another product's Deployment on a shared
+# cluster is never touched. A failed lookup (e.g. Forbidden for a namespace-scoped account) skips the
+# step instead of aborting the deploy: see docs/troubleshooting.md for the manual patch.
+$gatewaySelector = 'app.kubernetes.io/name=gateway,app.kubernetes.io/instance=urumi,app.kubernetes.io/part-of=urumi-platform'
+$gatewayDeploys = $null
+$lookupOk = $false
+try {
+  $ErrorActionPreference = 'Continue'
+  $gatewayDeploys = kubectl get deploy -A -l $gatewaySelector -o json 2>$null
+  $lookupOk = ($LASTEXITCODE -eq 0)
+}
+catch { $lookupOk = $false }
+finally { $ErrorActionPreference = 'Stop' }
+if (-not $lookupOk) {
+  Write-Host 'Could not list gateway Deployments to check their rollout strategy; skipping that step. If helm upgrade fails on rollingUpdate, see docs/troubleshooting.md.' -ForegroundColor Yellow
+}
+elseif ($gatewayDeploys) {
   foreach ($d in ($gatewayDeploys | Out-String | ConvertFrom-Json).items) {
     if ($d.spec.strategy.type -ne 'Recreate') {
       $patchFile = [System.IO.Path]::GetTempFileName()
