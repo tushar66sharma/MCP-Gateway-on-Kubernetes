@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Status (end of Phase 2).** Covers the local k3d cluster, the store and the WooCommerce MCP server. Gateway and dashboard problems are added in later phases.
+> **Status (end of Phase 3).** Covers the local k3d cluster, the store, the MCP servers, the gateway and its Postgres database. Dashboard and chat problems are added in Phase 4.
 
 Each entry has a **symptom**, a **diagnosis** command and a **fix**. Entries marked **(observed)** happened while building Phase 1; the others are standard Kubernetes/Helm/WooCommerce behavior that follows from the chart's settings and was not deliberately triggered. Commands run from the repository root in PowerShell; refresh `PATH` first if a tool is "not found". Deployment steps: [deployment.md](deployment.md); how the flows work: [workflows.md](workflows.md).
 
@@ -56,6 +56,15 @@ helm status urumi -n urumi-system
 - [Inspector says `Invalid header format: Bearer`](#inspector-says-invalid-header-format-bearer)
 - [`create_product` says `regular_price must be non-negative with at most 2 decimals`](#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
 - [The MCP check says `Dependencies not installed` or `Cannot find package '@modelcontextprotocol/client'`](#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
+- [The gateway pod is in CrashLoopBackOff: `database not ready after 30 attempts`](#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts)
+- [The gateway pod is in CrashLoopBackOff with an `Invalid environment` message](#the-gateway-pod-is-in-crashloopbackoff-with-an-invalid-environment-message)
+- [`/mcp` answers 401 on the gateway](#mcp-answers-401-on-the-gateway)
+- [`/api` answers 403 `CSRF_REJECTED`](#api-answers-403-csrf_rejected)
+- [Login answers 429 (too many attempts)](#login-answers-429-too-many-attempts)
+- [A server shows `unreachable` in the gateway](#a-server-shows-unreachable-in-the-gateway)
+- [`app.localhost` does not resolve in Node tools](#applocalhost-does-not-resolve-in-node-tools)
+- [Postgres does not start: `PGDATA` permission errors](#postgres-does-not-start-pgdata-permission-errors)
+- [Gateway, Notes or Utilities pod in `ErrImagePull`](#gateway-notes-or-utilities-pod-in-errimagepull)
 - [PowerShell gotchas with kubectl](#powershell-gotchas-with-kubectl)
 
 ---
@@ -559,9 +568,135 @@ npm ci
 
 Run the check again.
 
+## The gateway pod is in CrashLoopBackOff: `database not ready after 30 attempts`
+
+**Symptom.** `kubectl -n gateway get pods` shows `gateway-...` in `CrashLoopBackOff` (or restarting), and `kubectl -n gateway logs deploy/gateway --previous` shows 30 warnings `database not ready` (one every 2 s, each with `attempt`, `attempts` and a `reason` code), followed by `gateway startup failed` with `"step":"database"`. The gateway deliberately exits after about 60 s, so Kubernetes restarts it; it never serves `/mcp` on an unmigrated database. (The exit message itself is `database not ready after 30 attempts`; the log line carries only the error class, so the numbered warnings are what you see.)
+
+**Diagnose.**
+
+```powershell
+kubectl -n gateway get pods                       # is postgres-0 1/1 Running?
+kubectl -n gateway logs postgres-0 --tail=30      # "database system is ready to accept connections"?
+kubectl -n gateway logs deploy/gateway --previous | Select-String "database not ready" | Select-Object -First 3
+```
+
+The `reason` is a driver code, never a password or host: `ECONNREFUSED` (Postgres is not listening yet or is down), `ENOTFOUND` (the Service name does not resolve: `postgres.gateway.svc.cluster.local`), `28P01` (password authentication failed), `3D000` (database does not exist).
+
+**Fix.**
+
+- On a **first install** this is normal for a minute: Postgres is still initialising. The gateway keeps retrying and the pod settles by itself (**expected**; not observed on the reference machine, where Postgres was ready first).
+- `postgres-0` not Running: see [Postgres does not start](#postgres-does-not-start-pgdata-permission-errors).
+- `28P01`: the password in `gateway-secrets` (key `postgres-password`) differs from the one the data directory was created with. This happens if the Secret was regenerated while the volume was kept. Restore the original Secret, or (**destroys the gateway's data**) delete the StatefulSet's PVC `data-postgres-0` and let Postgres initialise again (**expected**, not run).
+
+## The gateway pod is in CrashLoopBackOff with an `Invalid environment` message
+
+**Symptom.** `kubectl -n gateway logs deploy/gateway --previous` prints one line such as `Invalid environment: GATEWAY_ENCRYPTION_KEY (custom), PUBLIC_APP_URL (required)` and the container exits at once. Only the **variable names** and a short reason code in brackets (`required` for a missing variable, otherwise a word such as `custom`, `invalid format` or `too small`) are printed, never values.
+
+**Cause and fix by name** (the full list is in [apps/gateway/README.md](../apps/gateway/README.md#configuration-environment-variables)):
+
+| Name in the message | Meaning |
+|---|---|
+| `GATEWAY_ENCRYPTION_KEY` | Not base64 of exactly 32 bytes. The chart generates it with `randBytes 32`; this appears if a pre-created Secret has a plain string. |
+| `GATEWAY_INTERNAL_TOKEN_SECRET` | Shorter than 32 characters. |
+| `PUBLIC_APP_URL` | Missing or not a URL. |
+| `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | Missing, not an email, or the password is not 10-200 characters. |
+| `SEED_SERVERS.<n>.<field>` | The JSON from the ConfigMap `gateway-config` is invalid; the number is the entry, the field is the problem. |
+| `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | Missing; they come from the chart and the `gateway-secrets` Secret. |
+| `UPSTREAM_CALL_TIMEOUT_MS` and the other `_MS` values | Outside the allowed range. |
+
+`kubectl -n gateway describe pod -l app.kubernetes.io/name=gateway` and `kubectl -n gateway get secret` show whether a Secret key is missing (a missing key is `CreateContainerConfigError`, not a crash loop). Fix the Secret or the Helm value, then `scripts\up.ps1 -Redeploy`. Statement is **tested** (`test/config.test.ts`); a crash loop from this cause was not reproduced on the cluster.
+
+## `/mcp` answers 401 on the gateway
+
+**Symptom.** An MCP client or `curl.exe` gets `401` with `{"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized"},"id":null}` and the header `WWW-Authenticate: Bearer`. The answer is the same for every reason on purpose.
+
+**Causes, most likely first.**
+
+1. **The key is revoked, or its user is disabled.** Check:
+
+   ```powershell
+   "SELECT id, event, outcome, error_message, started_at FROM audit_logs WHERE event = 'auth_rejected' ORDER BY id DESC LIMIT 5;" | kubectl -n gateway exec -i postgres-0 -- psql -U gateway gateway
+   ```
+
+   The `error_message` says `API key revoked`, `user disabled`, `unknown or malformed credential` or `internal token expired` (**live**: `API key revoked` and `unknown or malformed credential` seen). Create a new key ([run guide](run-guide.md#log-in-and-create-an-api-key-powershell-51)).
+2. **The key was pasted wrongly**: a truncated or changed key, extra quotes, or the clipboard held something else. A key is exactly `ugw_` plus 43 letters and digits (47 characters). `unknown or malformed credential`.
+3. **No `Authorization` header** (a client that does not send headers, or a typo in its configuration). Nothing is written to the audit log in this case, only a log line `mcp auth rejected` with reason `missing`.
+4. **The header is not `Authorization: Bearer <key>`** (`Basic`, a missing space, a different header name) is treated as an unknown credential.
+5. **An old key after the gateway database was reset.** The users and keys are gone with it.
+
+**Not the cause:** the API key does not expire by itself. A revoked key gets 401 on its very next request (**live**).
+
+## `/api` answers 403 `CSRF_REJECTED`
+
+**Symptom.** A `POST`, `PUT`, `PATCH` or `DELETE` to `http://app.localhost/api/...` from PowerShell, `curl.exe` or a script answers `403` with `{"error":{"code":"CSRF_REJECTED","message":"Request rejected by CSRF protection",...}}`, even when you are logged in. GET requests work (**live**).
+
+**Cause.** Every mutating `/api` request needs **both** `Content-Type: application/json` **and** `Origin: http://app.localhost` (the origin of `PUBLIC_APP_URL`). That includes `DELETE` with no body. PowerShell's `Invoke-RestMethod` sends neither by default. The check runs before the login check, so you see it even without a session.
+
+**Fix (PowerShell 5.1).**
+
+```powershell
+$h = @{ Origin = 'http://app.localhost' }
+Invoke-RestMethod -Method Delete -Uri "$base/api/keys/$id" -WebSession $s -Headers $h -ContentType 'application/json'
+```
+
+With `curl.exe`: add `-H "Origin: http://app.localhost" -H "Content-Type: application/json"`. If you reach the gateway under another address (a different port, `127.0.0.1`, a port-forward), the `Origin` must equal the configured `PUBLIC_APP_URL` exactly, so use `http://app.localhost` there too (you can still connect to `127.0.0.1:<port>`; only the header matters).
+
+## Login answers 429 (too many attempts)
+
+**Symptom.** `POST /api/auth/login` answers `429` with `{"error":{"code":"RATE_LIMITED","message":"Too many login attempts; try again later","details":{"retryAfterSec":60}}}` and the header `Retry-After: 60`.
+
+**Cause.** More than 10 login attempts in one minute for the same email from the same client address. Every attempt counts, right or wrong. The 11th was refused (**live**). The limit is per email and address, so another email is not affected.
+
+**Fix.** Wait `Retry-After` seconds (60 at most). The counter is in memory, so restarting the gateway pod also clears it (**expected**, not run). Behind Traefik the address comes from `X-Forwarded-For` because the chart sets `TRUST_PROXY=1`; if everyone seems to share one counter, check that variable (`kubectl -n gateway get deploy gateway -o yaml` and look for `TRUST_PROXY`).
+
+## A server shows `unreachable` in the gateway
+
+**Symptom.** `GET /api/servers` (or SQL query 3 in the [run guide](run-guide.md#useful-read-only-queries)) shows `status: unreachable` and a `lastError`, and the server's tools are missing from `tools/list`.
+
+```powershell
+$servers = Invoke-RestMethod -Uri "$base/api/servers" -WebSession $s
+$servers | Select-Object slug, status, lastError, checkedAt | Format-Table -AutoSize
+```
+
+| `lastError` | Cause | Fix |
+|---|---|---|
+| `connection refused` | The upstream pod is down, restarting or listens elsewhere | `kubectl -n mcp get pods`; wait for the next check (15 s) or `POST /api/servers/<id>/refresh` |
+| `DNS lookup failed` | The URL's name does not resolve | Correct the URL (`http://<service>.mcp.svc.cluster.local:<port>/mcp`) and `kubectl -n mcp get svc` |
+| `timeout after 5000ms` | The upstream is up but too slow to list tools | `kubectl -n mcp logs deploy/<name>`; check the pod's CPU |
+| `HTTP 401 from upstream` | The stored credential is wrong or was rotated | `PATCH /api/servers/<id>` with a new `credential`; for the seeded servers compare with `scripts\get-secret.ps1 -Namespace mcp -Name <secret> -Key token` (`key` for utilities) |
+| `HTTP 404 from upstream` | The URL path is wrong (it must end in `/mcp`) | Correct the URL |
+| `HTTP 302 from upstream (redirects are not followed)` | The URL redirects; the gateway never follows redirects | Use the final URL |
+| `blocked by SSRF guard (private)` | The name resolves to a private address and is not on `SSRF_ALLOWED_INTERNAL_HOSTS` | Use a `*.mcp.svc.cluster.local` name or extend the allow-list in the chart |
+| `blocked by SSRF guard (loopback)` / `(link_local)` | The URL points at the pod itself or a metadata address | Use the real Service name; loopback is never allowed on the cluster |
+| `error: ...` | Something else, for example a reset | `kubectl -n gateway logs deploy/gateway` shows the `upstream status` line |
+
+The seeded servers are created once from the Helm values. Changing the Helm seed later does **not** change an existing row; edit it through the API. Full list of texts: [error-handling.md](error-handling.md#1-mcp-the-aggregated-endpoint). `lastError` strings are **tested**; `connection refused` and the disappearing tools were also **live** (scaling `mcp-utilities` to 0).
+
+## `app.localhost` does not resolve in Node tools
+
+**Symptom.** `check-gateway.ps1` stops with `app.localhost does not resolve`, or a Node script fails with `ENOTFOUND app.localhost`, while a browser and `curl.exe` work.
+
+**Cause and fix.** The same as for `store.localhost` ([above](#storelocalhost-does-not-resolve-in-node-tools)): Node uses the operating system resolver. Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1` once (UAC prompt); it adds `app.localhost` along with the other names. As a workaround without the hosts entry: `kubectl -n gateway port-forward svc/gateway 13000:3000`, then `check-gateway.ps1 -Base http://127.0.0.1:13000` (the `-Base` option exists; this port-forward workaround was **not tested**). `/api` calls that need CSRF still want `Origin: http://app.localhost`.
+
+## Postgres does not start: `PGDATA` permission errors
+
+**Symptom.** `postgres-0` is in `CrashLoopBackOff` or `Error`, and `kubectl -n gateway logs postgres-0` contains `initdb: error: directory "/var/lib/postgresql/data" exists but is not empty` mentioning `lost+found`, or `Permission denied` / `could not change permissions of directory`. (**Expected**; not observed on the reference machine, where Postgres started cleanly. The chart is built to avoid it.)
+
+**Cause.** `initdb` refuses a data directory that contains anything (some storage classes put `lost+found` at the volume root), and the postgres user must own the directory. The chart therefore sets `PGDATA=/var/lib/postgresql/data/pgdata` (a subdirectory of the volume) and runs the pod as uid/gid 999 with `fsGroup` 999 so the volume is writable.
+
+**Fix.** Check that those settings are intact: `kubectl -n gateway get statefulset postgres -o yaml` (look for `PGDATA`, `runAsUser: 999`, `fsGroup: 999`). Do not point `PGDATA` at the volume root. If a volume was created by something else with other ownership, and you accept losing the gateway's data, delete the claim and let it initialise again: `kubectl -n gateway delete statefulset postgres`, `kubectl -n gateway delete pvc data-postgres-0`, then `scripts\up.ps1 -Redeploy` (**destroys users, keys and the audit log**; the bootstrap admin is created again with the password in `gateway-bootstrap`).
+
+## Gateway, Notes or Utilities pod in `ErrImagePull`
+
+**Symptom.** `kubectl -n gateway get pods` or `kubectl -n mcp get pods` shows `ErrImagePull`, `ErrImageNeverPull` or `ImagePullBackOff` for `gateway-...`, `mcp-notes-...` or `mcp-utilities-...`, naming an image such as `urumi/gateway:dev`.
+
+**Cause and fix.** The same as for the WooCommerce MCP server ([above](#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)): the cluster has no registry, and the pod asks for a tag the cluster does not hold. `scripts\build-images.ps1` now builds **four** images (`mcp-woocommerce`, `mcp-notes`, `mcp-utilities`, `gateway`), imports each into the cluster and writes the tag to `deploy\.images.local.yaml`; `scripts\up.ps1 -Redeploy` runs it for you. The usual cause is deploying with `deploy.ps1` on a fresh clone, or recreating the cluster, without building. Fix: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`. (**Expected** for the new images; the failure itself was not reproduced, the fix is the one verified for `mcp-woocommerce`.) If `docker build` fails for one of them, make sure Docker Desktop is running and that `npm ci`'s lockfile (`package-lock.json`) is committed.
+
 ## PowerShell gotchas with kubectl
 
 - **Comma-separated names:** `kubectl -n store get secret store-db,store-admin,store-woo-api` fails in PowerShell with `secrets "store-db,store-admin,store-woo-api" not found` **(observed)**, because the argument is passed as one string. Use spaces: `kubectl -n store get secret store-db store-admin store-woo-api`.
 - **Quotes inside `sh -c '...'`:** Windows PowerShell 5.1 strips inner double quotes from native-command arguments; escape them as `\"` (as in the MariaDB check above).
 - **`>` redirection** writes UTF-16 in PowerShell 5.1; use `cmd /c "... > file"` for text dumps.
 - **`-o jsonpath` templates containing quotes** (such as `{"\n"}` for a newline) break in Windows PowerShell 5.1 because the inner double quotes are stripped when the argument is passed to `kubectl`, which then reports `unrecognized character in action` (**observed**); convert with `-o json | ConvertFrom-Json` instead.
+- **`Invoke-RestMethod` and the gateway (verified 2026-10-19).** Mutating calls need `-Headers @{ Origin = 'http://app.localhost' } -ContentType 'application/json'` every time, even `DELETE`. Assign a list response to a variable before piping it (`$keys = Invoke-RestMethod ...; $keys | Select-Object ...`); piping `Invoke-RestMethod` straight into `Select-Object`, `Where-Object` or `Format-Table` printed an empty row for `/api/users`, `/api/keys` and `/api/servers`, and `Where-Object` on the unassigned result found nothing. After a first call that used `-Headers`, a later call on the same `-WebSession` still sent the `Origin` header although it was not passed again, so a test of "missing Origin" must use a fresh session. To read an error body use `$_.ErrorDetails.Message` inside `catch`.
+- **JSON on the `curl.exe` command line.** PowerShell 5.1 strips the double quotes from a JSON string passed as an argument; write the body to a file and send `--data-binary "@file"` (run guide, section 9).
