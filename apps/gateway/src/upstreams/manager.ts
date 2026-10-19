@@ -140,7 +140,10 @@ export class UpstreamManager {
 
   async callTool(gatewayName: string, args: Record<string, unknown>, ctx: CallContext, signal?: AbortSignal): Promise<CallToolResult> {
     const startedAt = this.clock();
+    // Audit columns: once the server is known, server_slug + the upstream tool name (woo, list_orders);
+    // before that, server_slug null + the gateway name exactly as requested (zzz__ping).
     let server: { id: string; slug: string } | null = null;
+    let toolName = gatewayName;
     const finish = async (outcome: AuditEntry['outcome'], result: CallToolResult, errorMessage: string | null): Promise<CallToolResult> => {
       const durationMs = Math.max(0, this.clock().getTime() - startedAt.getTime());
       await this.o.audit.record({
@@ -150,7 +153,7 @@ export class UpstreamManager {
         apiKeyId: ctx.apiKeyId,
         serverId: server?.id ?? null,
         serverSlug: server?.slug ?? null,
-        toolName: gatewayName,
+        toolName,
         startedAt,
         durationMs,
         outcome,
@@ -164,9 +167,10 @@ export class UpstreamManager {
 
     const parsed = parseGatewayToolName(gatewayName);
     const entry = parsed ? this.findBySlug(parsed.slug) : undefined;
-    if (!entry) return fail('denied', `Unknown tool: ${gatewayName}`);
+    if (!parsed || !entry) return fail('denied', `Unknown tool: ${gatewayName}`);
     const { slug } = entry.row;
     server = { id: entry.row.id, slug };
+    toolName = parsed.tool;
     const conn = entry.conn;
     if (!entry.row.enabled || entry.state.status !== 'connected' || !conn) {
       return fail('denied', `Server '${slug}' is disabled or unreachable`);

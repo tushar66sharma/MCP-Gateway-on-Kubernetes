@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { createLogger, type Logger, type UpstreamAuth } from '@urumi/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AuditWriter } from '../../src/audit/writer.js';
 import type { DbHandle } from '../../src/db/client.js';
@@ -10,6 +10,7 @@ import * as schema from '../../src/db/schema.js';
 import { encryptSecret } from '../../src/security/crypto.js';
 import type { SsrfOptions } from '../../src/security/ssrf.js';
 import { UpstreamManager, type CallContext } from '../../src/upstreams/manager.js';
+import { parseGatewayToolName } from '../../src/upstreams/naming.js';
 import { UpstreamRepository, type UpstreamRow } from '../../src/upstreams/repository.js';
 import { closedPort, startFakeUpstream, startRedirectServer, type FakeUpstream } from '../helpers/fakeUpstream.js';
 import { createTestDb } from '../helpers/testDb.js';
@@ -91,8 +92,12 @@ async function addRow(
   });
 }
 
-async function auditRows(env: Env, toolName: string) {
-  return env.h.db.select().from(schema.auditLogs).where(eq(schema.auditLogs.toolName, toolName));
+/** Rows for a gateway tool name: (slug, tool) once the server was identified, else the name as requested. */
+async function auditRows(env: Env, gatewayName: string) {
+  const parsed = parseGatewayToolName(gatewayName);
+  const known = parsed ? and(eq(schema.auditLogs.serverSlug, parsed.slug), eq(schema.auditLogs.toolName, parsed.tool)) : undefined;
+  const asRequested = and(isNull(schema.auditLogs.serverSlug), eq(schema.auditLogs.toolName, gatewayName));
+  return env.h.db.select().from(schema.auditLogs).where(known ? or(known, asRequested) : asRequested);
 }
 
 function text(r: CallToolResult): string {
@@ -202,7 +207,7 @@ describe('UpstreamManager with healthy, slow and dead upstreams', () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toBe('Unknown tool: zzz__ping');
     const [row] = await auditRows(env, 'zzz__ping');
-    expect(row).toMatchObject({ outcome: 'denied', serverId: null, userId: env.ctx.userId });
+    expect(row).toMatchObject({ outcome: 'denied', serverId: null, serverSlug: null, toolName: 'zzz__ping', userId: env.ctx.userId });
   });
 
   it('denies an unparseable name and a tool missing from a known server', async () => {
@@ -218,7 +223,7 @@ describe('UpstreamManager with healthy, slow and dead upstreams', () => {
     await env.manager.callTool('a__echo', { note: 'private-arg-value' }, env.ctx);
     const rows = await auditRows(env, 'a__echo');
     const last = rows.at(-1)!;
-    expect(last).toMatchObject({ outcome: 'success', serverId: rowA.id, serverSlug: 'a', apiKeyId: null, errorMessage: null });
+    expect(last).toMatchObject({ outcome: 'success', serverId: rowA.id, serverSlug: 'a', toolName: 'echo', apiKeyId: null, errorMessage: null });
     expect(last.startedAt.getTime()).toBeGreaterThanOrEqual(before - 5);
     expect(Number.isInteger(last.durationMs)).toBe(true);
     const logs = env.lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => l.msg === 'tool call');

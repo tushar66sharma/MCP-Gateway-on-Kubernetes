@@ -17,8 +17,13 @@ export interface AuditEntry {
 }
 
 const MAX_ERROR_MESSAGE = 500;
+/** An unmatched tool name is stored as the client sent it, so it is capped too. */
+const MAX_TOOL_NAME = 200;
 
-/** Appends audit rows. Never throws: a failed insert is logged (without the entry) and the call goes on. */
+/**
+ * Appends audit rows. Never throws: a failed insert is logged (without the entry) and the call goes on.
+ * errorMessage is capped at 500 characters and toolName at 200.
+ */
 export class AuditWriter {
   constructor(
     private readonly db: Db,
@@ -34,7 +39,7 @@ export class AuditWriter {
         apiKeyId: e.apiKeyId,
         serverId: e.serverId,
         serverSlug: e.serverSlug,
-        toolName: e.toolName,
+        toolName: e.toolName === null ? null : e.toolName.slice(0, MAX_TOOL_NAME),
         startedAt: e.startedAt,
         durationMs: Math.max(0, Math.round(e.durationMs)),
         outcome: e.outcome,
