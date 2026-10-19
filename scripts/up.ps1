@@ -28,8 +28,10 @@ if ($LASTEXITCODE -ne 0) { Stop-WithError 'cluster-up.ps1 failed (see above).' }
 
 # 3. Warn (do not fail) if the hosts entries are missing; browsers still work, Node-based tools need them.
 $hostsFile = "$env:WINDIR\System32\drivers\etc\hosts"
-if (-not (Select-String -Path $hostsFile -Pattern '^\s*127\.0\.0\.1\s+.*\bstore\.localhost\b' -Quiet)) {
-  Write-Host 'WARNING: store.localhost is not in the hosts file. Run: powershell -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1' -ForegroundColor Yellow
+foreach ($h in 'store.localhost', 'app.localhost') {
+  if (-not (Select-String -Path $hostsFile -Pattern ('^\s*127\.0\.0\.1\s+.*\b' + [regex]::Escape($h) + '\b') -Quiet)) {
+    Write-Host "WARNING: $h is not in the hosts file. Run: powershell -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1" -ForegroundColor Yellow
+  }
 }
 
 # 4. Install the release if it does not exist yet (or when -Redeploy); otherwise just wait for the pods.
@@ -88,6 +90,18 @@ if ($action -eq 'deploy') {
       Write-Host 'WARNING: mcp-woocommerce is not ready yet (kubectl -n mcp get pods). The store works without it; see docs/troubleshooting.md.' -ForegroundColor Yellow
     }
   }
+  # The gateway (namespace gateway) exists only when gateway.enabled. Same rule: warn, do not abort.
+  cmd /c "kubectl -n gateway get statefulset postgres >nul 2>&1"
+  if ($LASTEXITCODE -eq 0) {
+    kubectl -n gateway rollout status statefulset/postgres --timeout=180s
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host 'WARNING: postgres is not ready yet (kubectl -n gateway get pods). The store works without it; see docs/troubleshooting.md.' -ForegroundColor Yellow
+    }
+    kubectl -n gateway rollout status deployment/gateway --timeout=180s
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host 'WARNING: the gateway is not ready yet (kubectl -n gateway get pods). The store works without it; see docs/troubleshooting.md.' -ForegroundColor Yellow
+    }
+  }
 }
 
 # 5. Compute the public store URL from the release's values (same rule as the chart's urumi.publicUrl).
@@ -97,6 +111,7 @@ $g = ($valuesJson | ConvertFrom-Json).global
 $port = [int]$g.publicPort
 $isDefaultPort = ($g.publicScheme -eq 'http' -and $port -eq 80) -or ($g.publicScheme -eq 'https' -and $port -eq 443)
 $storeUrl = if ($isDefaultPort) { "$($g.publicScheme)://$($g.storeHost)" } else { "$($g.publicScheme)://$($g.storeHost):$port" }
+$appUrl = if ($isDefaultPort) { "$($g.publicScheme)://$($g.appHost)" } else { "$($g.publicScheme)://$($g.appHost):$port" }
 
 Write-Host ''
 Write-Host '================ Urumi platform is running ================' -ForegroundColor Green
