@@ -190,9 +190,9 @@ Audit row: `tool_call | mcp | (no server) | zzz__ping | denied | 0 ms | Unknown 
 {"jsonrpc":"2.0","error":{"code":-32000,"message":"Method not allowed"},"id":null}
 ```
 
-### 5.5 A timeout (`isError`) - from the tests, **not captured live**
+### 5.5 A timeout (`isError`) - message shape from the tests, **not captured live**
 
-I did not force a 20 s timeout on the cluster. The behaviour is pinned by the manager test `times out a slow upstream with a clear error and a timeout audit row`, which uses a 1000 ms limit; the message format, with the production limit of 20000 ms, is:
+The JSON below is **not** real captured traffic; it is built by hand from the message the gateway code produces. I did not force a 20 s timeout on the cluster. The behaviour is pinned by the manager test `times out a slow upstream with a clear error and a timeout audit row`, which uses a 1000 ms limit and asserts the text `Upstream 'slow' did not respond within 1000ms`; with the production limit of 20000 ms the text is the one shown. The `...` marks fields left out:
 
 ```json
 {"result":{"content":[{"type":"text","text":"Upstream 'woo' did not respond within 20000ms"}],"isError":true, ... },

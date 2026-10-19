@@ -64,7 +64,7 @@ All errors have the shape `{"error":{"code","message","details"?,"requestId"}}`.
 | `404 INVITE_INVALID` | Invite token unknown, expired, used or cancelled | `This invite link is invalid or has expired` |
 | `409 CONFLICT` | Duplicate slug, a user with that email exists, changing your own role or disabling yourself | `A server with this slug already exists` |
 | `413` (code `VALIDATION_FAILED`) | `/api` body over 100 kb | `Request body too large` (**tested**) |
-| `429 RATE_LIMITED` | More than 10 login attempts per minute for the same IP and email | `Too many login attempts; try again later`, header `Retry-After: 60`. The 11th attempt was refused (**live**). |
+| `429 RATE_LIMITED` | More than 10 login attempts per minute for the same IP and email | `Too many login attempts; try again later`, header `Retry-After` (seconds left in the window, 1-60). The 11th attempt was refused, with `Retry-After: 60` (**live**). |
 | `500 INTERNAL` | Anything unexpected, including a database error | `Internal error`, no message or stack; the log line has the request id and the error class only (**tested**) |
 
 Details worth knowing:

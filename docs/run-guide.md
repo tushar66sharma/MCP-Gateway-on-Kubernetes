@@ -226,7 +226,6 @@ In namespace `mcp` (verified 2026-10-19):
 |---|---|---|
 | `store-woo-api` | `consumer-key`, `consumer-secret` | Copy of the store's key; read by the MCP server pod. |
 | `mcp-woocommerce-token` | `token` | The bearer token the MCP server requires. Copy it to your clipboard with `scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token` (add `-Show` to also print it). A copy lives in namespace `gateway` (it is only used there to seed the server registry). |
-
 | `mcp-notes-token` | `token` | The bearer token `mcp-notes` requires (48 characters, generated at install). |
 | `mcp-utilities-key` | `key` | The key `mcp-utilities` requires in the header `X-Utilities-Key` (48 characters, generated at install). |
 
@@ -564,16 +563,14 @@ $env:UGW_KEY = $new.plaintext
 
 A key is `ugw_` followed by 43 letters and digits (47 characters). If you need to paste it elsewhere: `Set-Clipboard $env:UGW_KEY` (the clipboard caveat from section 5 applies). Lost keys cannot be shown again; revoke and make a new one.
 
-List your keys (the list shows a 12-character prefix, never the key or its hash). The second command revokes the key; run it when you are done with the key, **not yet** if you want to try the Inspector, `curl.exe` and invite examples below, which use it (revoke it at the end of this section, or create another key later):
+List your keys (the list shows a 12-character prefix, never the key or its hash). Do **not** revoke the key yet: the Inspector, `curl.exe` and invite examples below use it. The revoke command is in [When you are done: revoke the key](#when-you-are-done-revoke-the-key), after those examples:
 
 ```powershell
 $keys = Invoke-RestMethod -Uri "$base/api/keys" -WebSession $s
 $keys | Select-Object name, prefix, createdAt, lastUsedAt, revokedAt | Format-Table -AutoSize
-
-Invoke-WebRequest -Method Delete -Uri "$base/api/keys/$($new.key.id)" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing | Select-Object -ExpandProperty StatusCode   # 204
 ```
 
-Revocation is immediate: the very next `/mcp` request with that key gets `401` (verified; the gateway has no key cache). When you are done: `Remove-Item Env:UGW_KEY`, and log out with `Invoke-WebRequest -Method Post -Uri "$base/api/auth/logout" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing`.
+Revocation (later, see below) is immediate: the very next `/mcp` request with that key gets `401` (verified; the gateway has no key cache).
 
 If you forget the headers you see, for example (verified):
 
@@ -581,7 +578,7 @@ If you forget the headers you see, for example (verified):
 {"error":{"code":"CSRF_REJECTED","message":"Request rejected by CSRF protection","requestId":"..."}}
 ```
 
-The **11th** login attempt within a minute for the same email from the same address gets `429 RATE_LIMITED` with `Retry-After: 60` (verified). Wait a minute.
+The **11th** login attempt within a minute for the same email from the same address gets `429 RATE_LIMITED` with a `Retry-After` header (seconds left in the one-minute window, 1-60; it was 60 in the verified run). Wait that long.
 
 ### Other API calls worth knowing
 
@@ -667,6 +664,16 @@ $pending | Select-Object email, role, expiresAt, expired | Format-Table -AutoSiz
 - The invitee accepts with `POST /api/invites/<token>/accept` and a body `{"name":"...","password":"..."}` (10-200 characters); that creates the account and logs them in. There is no web page for it until Phase 4. The accept call is covered by automated tests (`apps/gateway/test/api/invites.test.ts`) but was **not run on the cluster**, to avoid leaving a test user behind.
 - The invites list has no creation time (the table has no `created_at`); it is ordered by expiry, newest first.
 - Roles: `member` can use `/mcp`, manage their own keys, see servers and their own audit rows; `admin` can do everything ([security.md](security.md#7-what-a-member-can-and-cannot-do)).
+
+### When you are done: revoke the key
+
+Run this only after the Inspector, `curl.exe` and invite examples above. It revokes the key from the steps above (`204`), clears the environment variable and logs out; afterwards the same key gets `401` from `/mcp` (verified):
+
+```powershell
+Invoke-WebRequest -Method Delete -Uri "$base/api/keys/$($new.key.id)" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing | Select-Object -ExpandProperty StatusCode   # 204
+Remove-Item Env:UGW_KEY
+Invoke-WebRequest -Method Post -Uri "$base/api/auth/logout" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing | Select-Object -ExpandProperty StatusCode   # 204
+```
 
 ### The end-to-end and isolation checks
 
@@ -763,7 +770,7 @@ FROM audit_logs ORDER BY id DESC LIMIT 10;
 SELECT server_slug, outcome, count(*) FROM audit_logs GROUP BY 1, 2 ORDER BY 1, 2;
 
 -- 7. Pending invites (no token hash; the table has no created_at, so order by expiry)
-SELECT id, email, role, expires_at, accepted_at FROM invites ORDER BY expires_at DESC LIMIT 10;
+SELECT id, email, role, expires_at FROM invites WHERE accepted_at IS NULL ORDER BY expires_at DESC LIMIT 10;
 
 -- 8. Live sessions
 SELECT count(*) AS live_sessions FROM sessions WHERE expires_at > now();

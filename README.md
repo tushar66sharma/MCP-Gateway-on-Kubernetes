@@ -63,7 +63,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1   # 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1            # start the cluster, install the store if needed, print the URLs
 ```
 
-`up.ps1` builds the MCP server image and imports it into the cluster before deploying (so Docker must be running), typically takes about 2-3 minutes the first time (observed on the reference machine; it downloads images and WooCommerce), and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
+`up.ps1` builds the four images (mcp-woocommerce, mcp-notes, mcp-utilities, gateway) and imports them into the cluster before deploying (so Docker must be running), typically takes about 2-3 minutes the first time (observed on the reference machine; it downloads images and WooCommerce), and prints the store URLs. The admin area is <http://store.localhost/wp-admin> (user `admin`); copy the generated password to your clipboard with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1

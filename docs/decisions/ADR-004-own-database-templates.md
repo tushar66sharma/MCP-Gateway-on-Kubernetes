@@ -18,7 +18,7 @@ We write our own small templates inside `charts/urumi-platform`:
 
 - **MariaDB:** a `StatefulSet` (1 replica) using the official `mariadb:11.8.9` LTS image, a PVC from `volumeClaimTemplates`, passwords from Secret `store-db`, and probes using the image's `healthcheck.sh`. **Runs as non-root uid/gid 999** (the image's built-in `mysql` user).
 - **WordPress:** a `Deployment` (1 replica, `Recreate`) using the official `wordpress:7.1.3-php8.3-apache` image, with a PVC at `/var/www/html`. **Runs as non-root uid/gid 33 (`www-data`)** with the pod sysctl `net.ipv4.ip_unprivileged_port_start=0` and a `copy-wordpress` initContainer (details below).
-- **Postgres:** a `StatefulSet` with a PVC for the gateway, probed with `pg_isready` **(planned, Phase 3)**.
+- **Postgres:** a `StatefulSet` with a PVC for the gateway, probed with `pg_isready` (built in Phase 3).
 
 Resource requests/limits, security contexts and NetworkPolicies are set directly in these templates, like every other workload. The security contexts follow [spec §8.5](../superpowers/specs/2026-10-18-mcp-gateway-design.md): `runAsNonRoot`, explicit uid/gid/fsGroup, `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`, all capabilities dropped.
 

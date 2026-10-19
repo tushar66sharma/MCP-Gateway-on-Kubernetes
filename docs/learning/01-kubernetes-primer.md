@@ -4,7 +4,7 @@ Interview-prep notes. Every concept has: what it is, one command to look at it, 
 
 > **Status banner (what exists today, end of Phase 1).** Built and verified: the local k3d/k3s cluster `urumi` (with the k3s defaults Traefik, local-path storage, CoreDNS, metrics-server and the NetworkPolicy controller); the `deploy/examples/hello.yaml` example manifest (only present while you apply it yourself); and the **store**, installed by the Helm chart `charts/urumi-platform` as release `urumi`: namespaces `store`/`mcp`/`gateway`, MariaDB (StatefulSet), WordPress + WooCommerce (Deployment), their Services, Secrets and PVCs, the `store.localhost` Ingress and the `store-setup` hook Job. The `mcp` and `gateway` namespaces exist but are empty. Everything else in the "Where we use it" lines (the gateway, dashboard, MCP servers, Postgres, NetworkPolicies) is the **design for later phases** and is marked **(planned)**. Lines without that marker describe something that exists now and was run against the real cluster.
 
-The one-sentence story of the project: *a WooCommerce store (WordPress + MariaDB) is running on a local Kubernetes cluster, installed by a single Helm chart; a team MCP gateway (gateway, dashboard, MCP servers, Postgres) will be added to the same chart in later phases **(planned)**.* Commands for the store: [../deployment.md](../deployment.md); how its workflows run: [../workflows.md](../workflows.md).
+The one-sentence story of the project: *a WooCommerce store (WordPress + MariaDB) is running on a local Kubernetes cluster, installed by a single Helm chart; a team MCP gateway (gateway, MCP servers, Postgres) was added to the same chart in Phase 3 and runs on the cluster; the dashboard and chat agent are **(planned, Phase 4)**.* Commands for the store: [../deployment.md](../deployment.md); how its workflows run: [../workflows.md](../workflows.md).
 
 ## The hello-world request path
 
@@ -56,7 +56,7 @@ A namespace is a named partition of a cluster for grouping and isolating objects
 kubectl get namespaces
 kubectl get all -n kube-system
 ```
-Where we use it: the chart creates three namespaces: `store` (WordPress, MariaDB, the setup Job; in use), and `mcp` (MCP servers) and `gateway` (gateway, dashboard, Postgres), which exist but are empty until Phases 2-3 **(planned)**. Try `kubectl get ns` and `kubectl -n store get all`. The chart's own release record lives in `urumi-system` (`helm list -n urumi-system`). The hello example manifest (`deploy/examples/hello.yaml`), when applied, deploys into `default`.
+Where we use it: the chart creates three namespaces: `store` (WordPress, MariaDB, the setup Job; in use), and `mcp` (the three MCP servers) and `gateway` (gateway and Postgres), both built in Phases 2-3; the dashboard will join `gateway` in Phase 4 **(planned)**. Try `kubectl get ns` and `kubectl -n store get all`. The chart's own release record lives in `urumi-system` (`helm list -n urumi-system`). The hello example manifest (`deploy/examples/hello.yaml`), when applied, deploys into `default`.
 
 ### Pod
 The smallest deployable unit: one or more containers that share a network identity (one IP) and storage volumes and are always scheduled together. Pods are disposable; if one dies it is replaced by a new one with a new IP. You rarely create Pods directly; a controller does.
@@ -66,7 +66,7 @@ kubectl get pods -A -o wide
 kubectl describe pod <name> -n <namespace>
 kubectl logs <name> -n <namespace>
 ```
-Where we use it: the k3s system Pods, and in namespace `store` the Pods `mariadb-0`, `wordpress-<hash>` and (finished) `store-setup-<hash>`: `kubectl -n store get pods -o wide`. WordPress also has an **initContainer** (`copy-wordpress`) that runs to completion before the main container starts: `kubectl -n store describe pod -l app.kubernetes.io/name=wordpress`. The hello example manifest, when applied, runs a `whoami` Pod; the gateway and MCP server Pods are **(planned)**.
+Where we use it: the k3s system Pods, and in namespace `store` the Pods `mariadb-0`, `wordpress-<hash>` and (finished) `store-setup-<hash>`: `kubectl -n store get pods -o wide`. WordPress also has an **initContainer** (`copy-wordpress`) that runs to completion before the main container starts: `kubectl -n store describe pod -l app.kubernetes.io/name=wordpress`. The hello example manifest, when applied, runs a `whoami` Pod; the gateway, Postgres and MCP server Pods exist since Phase 3 (`kubectl -n gateway get pods`, `kubectl -n mcp get pods`).
 
 ### Deployment vs StatefulSet
 A **Deployment** manages interchangeable, stateless Pods through ReplicaSets: it keeps N replicas running, does rolling updates, and supports rollback. A **StatefulSet** is for stateful apps: Pods get stable names (`mariadb-0`), start/stop in order, and each Pod keeps its own PersistentVolumeClaim across restarts. Rule of thumb: if losing the Pod's disk would hurt, use a StatefulSet.
@@ -75,7 +75,7 @@ A **Deployment** manages interchangeable, stateless Pods through ReplicaSets: it
 kubectl get deployments,statefulsets -A
 kubectl rollout history deployment/traefik -n kube-system
 ```
-Where we use it: Traefik is a Deployment. **WordPress is a Deployment** (1 replica, strategy `Recreate`: its volume is ReadWriteOnce, so the old Pod must stop before the new one mounts it) and **MariaDB is a StatefulSet** (`mariadb-0` with its own PVC `data-mariadb-0`): `kubectl -n store get deployments,statefulsets`. The MCP servers, gateway and dashboard will be Deployments and Postgres a StatefulSet **(planned)**.
+Where we use it: Traefik is a Deployment. **WordPress is a Deployment** (1 replica, strategy `Recreate`: its volume is ReadWriteOnce, so the old Pod must stop before the new one mounts it) and **MariaDB is a StatefulSet** (`mariadb-0` with its own PVC `data-mariadb-0`): `kubectl -n store get deployments,statefulsets`. The MCP servers and the gateway are Deployments and Postgres (`postgres-0`) a StatefulSet (built in Phases 2-3); the dashboard will be a Deployment **(planned, Phase 4)**.
 
 ### Service (ClusterIP)
 A Service gives a set of Pods a stable virtual IP and a DNS name (`<service>.<namespace>.svc.cluster.local`), and load-balances across the Ready Pods matched by its label selector. `ClusterIP` (the default) is reachable only inside the cluster. Other types (NodePort, LoadBalancer) expose it outside; we avoid them and use an Ingress instead.
@@ -94,7 +94,7 @@ kubectl get ingressclass
 kubectl get ingress -A
 kubectl -n kube-system get pods -l app.kubernetes.io/name=traefik
 ```
-Where we use it: Ingress `store` in namespace `store` routes host `store.localhost` (every path) to Service `wordpress:80`: `kubectl -n store get ingress store -o yaml`. The hello example manifest, when applied, does the same for `hello.localhost`. `app.localhost` to the gateway dashboard is **(planned)**.
+Where we use it: Ingress `store` in namespace `store` routes host `store.localhost` (every path) to Service `wordpress:80`: `kubectl -n store get ingress store -o yaml`. The hello example manifest, when applied, does the same for `hello.localhost`. `app.localhost` routes `/api` and `/mcp` to the gateway (built in Phase 3, Ingress `gateway`); `/` for the dashboard is **(planned, Phase 4)**.
 
 ### PersistentVolumeClaim and StorageClass (local-path)
 A container's filesystem disappears with the container. A **PersistentVolumeClaim (PVC)** is a Pod's request for durable storage ("5 Gi, read-write"). A **StorageClass** says *how* to create the volume on demand; k3s's default is **local-path**, which provisions a directory on the node's disk (so it survives Pod restarts, but not deletion of the cluster, and it is not replicated). With `WaitForFirstConsumer` the volume is created only when a Pod using the claim is scheduled.
