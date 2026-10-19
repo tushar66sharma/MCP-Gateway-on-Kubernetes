@@ -4,7 +4,7 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\check-gateway.ps1 -Isolation    # also scales mcp-utilities to 0 and back
 # Never prints the admin password, the session cookie or the API key.
 [CmdletBinding()]
-param([switch]$Write, [switch]$Isolation, [string]$Base = '')
+param([switch]$Write, [switch]$Isolation, [string]$Base = '', [string]$DumpTools = '')
 $ErrorActionPreference = 'Stop'
 function Stop-WithError([string]$Message) { Write-Host "ERROR: $Message" -ForegroundColor Red; exit 1 }
 
@@ -35,6 +35,7 @@ try {
   $nodeArgs = @((Join-Path $root 'scripts/dev/gateway-smoke.mjs'), '--base', $Base)
   if ($Write) { $nodeArgs += '--write' }
   if ($Isolation) { $nodeArgs += '--isolation' }
+  if ($DumpTools) { $nodeArgs += @('--dump-tools', $DumpTools) }
   node @nodeArgs
   $code = $LASTEXITCODE
 } finally {

@@ -1,9 +1,10 @@
 // End-to-end smoke test for the gateway: login, personal API key, aggregated /mcp, optional writes,
 // optional upstream isolation, key revocation and the audit log.
 // Usage: GATEWAY_ADMIN_EMAIL=... GATEWAY_ADMIN_PASSWORD=... node scripts/dev/gateway-smoke.mjs \
-//          --base http://app.localhost [--write] [--isolation]
+//          --base http://app.localhost [--write] [--isolation] [--dump-tools <file>]
 // The password, the session cookie and the API key are held in memory only and never printed.
 import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const args = process.argv.slice(2);
@@ -14,6 +15,7 @@ const argValue = (name) => {
 const base = (argValue('--base') ?? '').replace(/\/+$/, '');
 const write = args.includes('--write');
 const isolation = args.includes('--isolation');
+const dumpTools = argValue('--dump-tools');
 const email = process.env.GATEWAY_ADMIN_EMAIL;
 const password = process.env.GATEWAY_ADMIN_PASSWORD;
 if (!base || !email || !password) {
@@ -189,6 +191,15 @@ try {
   assert(names.length === 15, `expected 15 tools, got ${names.length}: ${names.join(', ')}`);
   assert(count('woo__') === 6 && count('notes__') === 5 && count('utils__') === 4, `unexpected split woo=${count('woo__')} notes=${count('notes__')} utils=${count('utils__')}`);
   console.log(`tools (15): woo=${count('woo__')} notes=${count('notes__')} utils=${count('utils__')}`);
+  if (dumpTools) {
+    const listed = await withClient(async (c) => (await c.listTools()).tools);
+    const catalogue = listed
+      .map((t) => ({ name: t.name, description: t.description ?? '', inputSchema: t.inputSchema }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    writeFileSync(dumpTools, `${JSON.stringify(catalogue, null, 2)}
+`, 'utf8');
+    console.log(`tool catalogue: ${catalogue.length} tools written to ${dumpTools}`);
+  }
 
   // 4. Calls.
   await withClient(async (c) => {
