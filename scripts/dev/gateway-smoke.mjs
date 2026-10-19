@@ -118,6 +118,18 @@ async function revokeKey() {
   }
 }
 
+/** Ends the smoke session (each run used to leave a session row behind until it expired). */
+async function logout() {
+  if (!cookie) return;
+  try {
+    const res = await api('POST', '/api/auth/logout');
+    if (res.status === 204) cookie = '';
+    else console.error(`WARNING: logout returned HTTP ${res.status}; the session expires on its own within 12 h.`);
+  } catch (err) {
+    console.error(`WARNING: logout failed (${err instanceof Error ? err.name : 'error'}); the session expires on its own within 12 h.`);
+  }
+}
+
 let interrupted = false;
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {
@@ -125,7 +137,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     interrupted = true;
     console.error(`${sig}: cleaning up`);
     if (utilsScaledDown) restoreUtilities();
-    void revokeKey().finally(() => process.exit(130));
+    void revokeKey()
+      .then(logout)
+      .finally(() => process.exit(130));
   });
 }
 
@@ -258,5 +272,6 @@ try {
 } finally {
   if (utilsScaledDown) restoreUtilities();
   await revokeKey();
+  await logout();
 }
 if (failed || process.exitCode) process.exit(1);

@@ -107,7 +107,11 @@ if ($action -eq 'deploy') {
 # 5. Compute the public store URL from the release's values (same rule as the chart's urumi.publicUrl).
 $valuesJson = helm get values urumi --namespace urumi-system --all --output json
 if ($LASTEXITCODE -ne 0) { Stop-WithError 'Could not read the release values.' }
-$g = ($valuesJson | ConvertFrom-Json).global
+$values = $valuesJson | ConvertFrom-Json
+$g = $values.global
+# Gateway lines come from the same values: the admin email as configured, and nothing when disabled.
+$gatewayEnabled = [bool]$values.gateway.enabled
+$gatewayAdminEmail = [string]$values.gateway.bootstrapAdminEmail
 $port = [int]$g.publicPort
 $isDefaultPort = ($g.publicScheme -eq 'http' -and $port -eq 80) -or ($g.publicScheme -eq 'https' -and $port -eq 443)
 $storeUrl = if ($isDefaultPort) { "$($g.publicScheme)://$($g.storeHost)" } else { "$($g.publicScheme)://$($g.storeHost):$port" }
@@ -120,9 +124,11 @@ Write-Host "  Shop         : $storeUrl/shop/"
 Write-Host "  My account   : $storeUrl/my-account/   (customers: register, log in, see their orders)"
 Write-Host "  WP admin     : $storeUrl/wp-admin/     (user: admin)"
 Write-Host '  MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1'
-Write-Host "  Gateway API  : $appUrl/api"
-Write-Host "  MCP endpoint : $appUrl/mcp   (needs a personal API key)"
-Write-Host '  Gateway admin: admin@example.com - copy the password with: powershell -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password'
+if ($gatewayEnabled) {
+  Write-Host "  Gateway API  : $appUrl/api"
+  Write-Host "  MCP endpoint : $appUrl/mcp   (needs a personal API key)"
+  Write-Host "  Gateway admin: $gatewayAdminEmail - copy the password with: powershell -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password"
+}
 Write-Host ''
 Write-Host '  Admin password - run this to copy it to the clipboard (it is never printed here):'
 Write-Host '    powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1'

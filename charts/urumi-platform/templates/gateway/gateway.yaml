@@ -33,6 +33,11 @@ metadata:
     {{- include "urumi.labels" (dict "root" $ "name" $name "component" "gateway") | nindent 4 }}
 spec:
   replicas: 1
+  # One pod at a time: a rollout stops the old pod before the new one starts (a few seconds of
+  # downtime) instead of overlapping two replicas, whose in-memory server state, login limiter and
+  # startup migration/seed would race.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "urumi.selectorLabels" (dict "root" $ "name" $name) | nindent 6 }}
@@ -44,6 +49,8 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/gateway/configmap.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false
+      # preStop 5 s + the gateway's 25 s drain of in-flight requests, with room for the last steps.
+      terminationGracePeriodSeconds: 35
       securityContext:
         {{- include "urumi.podSecurityContext" (dict "uid" 1000 "gid" 1000) | nindent 8 }}
       containers:
@@ -56,6 +63,11 @@ spec:
           ports:
             - name: http
               containerPort: {{ $g.port }}
+          # Gives the endpoint removal time to reach Traefik before SIGTERM stops new connections.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           env:
             - name: PORT
               value: {{ $g.port | quote }}
