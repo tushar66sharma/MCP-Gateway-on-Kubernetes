@@ -1,5 +1,5 @@
-import { promises as dns } from 'node:dns';
-import { isIP } from 'node:net';
+import { promises as dns, type LookupAddress } from 'node:dns';
+import { isIP, type LookupFunction } from 'node:net';
 
 export type SsrfReason =
   | 'invalid_url'
@@ -9,8 +9,7 @@ export type SsrfReason =
   | 'loopback'
   | 'link_local'
   | 'unspecified'
-  | 'private'
-  | 'not_allowlisted';
+  | 'private';
 
 export class SsrfError extends Error {
   readonly reason: SsrfReason;
@@ -87,6 +86,8 @@ function classifyV4(ip: string): AddrClass {
   return 'public';
 }
 
+const v4FromHextets = (hi: number, lo: number): string => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+
 function classify(addr: string): AddrClass | null {
   const kind = isIP(addr);
   if (kind === 4) return classifyV4(addr);
@@ -94,12 +95,18 @@ function classify(addr: string): AddrClass | null {
   const h = parseV6(addr);
   if (!h) return null;
   const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0, g = 0, last = 0] = h;
-  // IPv4-mapped ::ffff:a.b.c.d (also the URL-normalized ::ffff:7f00:1 form)
-  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) {
-    return classifyV4(`${g >> 8}.${g & 255}.${last >> 8}.${last & 255}`);
-  }
   if (h.every((x) => x === 0)) return 'unspecified';
   if (h.slice(0, 7).every((x) => x === 0) && last === 1) return 'loopback';
+  // IPv6 forms that embed an IPv4 address in the low 32 bits are judged by the IPv4 rules:
+  const zero64 = a === 0 && b === 0 && c === 0 && d === 0;
+  if (
+    (zero64 && e === 0 && f === 0) || // IPv4-compatible ::/96 (:: and ::1 handled above)
+    (zero64 && e === 0 && f === 0xffff) || // IPv4-mapped ::ffff:0:0/96 (also the URL-normalized ::ffff:7f00:1 form)
+    (zero64 && e === 0xffff && f === 0) || // IPv4-translated ::ffff:0:0:0/96 (RFC 2765)
+    (a === 0x64 && b === 0xff9b && c === 0 && d === 0 && e === 0 && f === 0) // NAT64 64:ff9b::/96 (RFC 6052)
+  ) {
+    return classifyV4(v4FromHextets(g, last));
+  }
   if ((a & 0xffc0) === 0xfe80) return 'link_local';
   if ((a & 0xfe00) === 0xfc00) return 'private';
   return 'public';
@@ -116,6 +123,31 @@ function hostAllowed(host: string, allowed: string[]): boolean {
     }
     return h === e;
   });
+}
+
+const ARTICLE: Record<Exclude<AddrClass, 'public'>, string> = {
+  unspecified: 'an unspecified',
+  link_local: 'a link-local',
+  loopback: 'a loopback',
+  private: 'a private',
+};
+
+/**
+ * The one place addresses are judged, shared by the URL check and the connect-time lookup.
+ * Throws SsrfError on the first blocked address; `host` is the name as written in the URL.
+ */
+function assertAddressesAllowed(host: string, addrs: string[], o: SsrfOptions): void {
+  if (addrs.length === 0) throw new SsrfError('dns_failed', `could not resolve ${host}`);
+  const internalOk = hostAllowed(host, o.allowedInternalHosts);
+  for (const addr of addrs) {
+    const c = classify(addr);
+    if (c === null) throw new SsrfError('dns_failed', `${host} resolved to an unrecognised address`);
+    if (c === 'public') continue;
+    if (c === 'loopback' && o.allowLoopback) continue;
+    if (c === 'private' && internalOk) continue;
+    const suffix = c === 'private' ? ' and is not allowlisted' : '';
+    throw new SsrfError(c, `${host} resolves to ${ARTICLE[c]} address${suffix}`);
+  }
 }
 
 export async function assertSafeUpstreamUrl(url: string, o: SsrfOptions): Promise<URL> {
@@ -141,21 +173,42 @@ export async function assertSafeUpstreamUrl(url: string, o: SsrfOptions): Promis
     } catch {
       throw new SsrfError('dns_failed', `could not resolve ${host}`);
     }
-    if (addrs.length === 0) throw new SsrfError('dns_failed', `could not resolve ${host}`);
   }
-  const internalOk = hostAllowed(host, o.allowedInternalHosts);
-  for (const addr of addrs) {
-    const c = classify(addr);
-    if (c === null) throw new SsrfError('dns_failed', `${host} resolved to an unrecognised address`);
-    if (c === 'unspecified' || c === 'link_local') {
-      throw new SsrfError(c, `${host} resolves to a ${c.replace('_', '-')} address`);
-    }
-    if (c === 'loopback' && !o.allowLoopback) {
-      throw new SsrfError('loopback', `${host} resolves to a loopback address`);
-    }
-    if (c === 'private' && !internalOk) {
-      throw new SsrfError('private', `${host} resolves to a private address and is not allowlisted`);
-    }
-  }
+  assertAddressesAllowed(host, addrs, o);
   return parsed;
+}
+
+/**
+ * A `dns.lookup`-compatible resolver for the HTTP client's connect step. It closes the DNS-rebinding
+ * window left by assertSafeUpstreamUrl: the name is resolved again when the socket opens, and every
+ * address of that answer is judged by the same rules before the socket may use it.
+ * A failed resolution is passed through unchanged (it keeps its ENOTFOUND / EAI_AGAIN code).
+ */
+export function createSafeLookup(o: SsrfOptions): LookupFunction {
+  const resolve = o.lookup ?? defaultLookup;
+  return (hostname, options, callback) => {
+    resolve(hostname).then(
+      (addrs) => {
+        try {
+          assertAddressesAllowed(hostname, addrs, o);
+        } catch (err) {
+          callback(err as SsrfError, options.all ? [] : '');
+          return;
+        }
+        const wanted = options.family === 4 || options.family === 'IPv4' ? 4 : options.family === 6 || options.family === 'IPv6' ? 6 : 0;
+        const list: LookupAddress[] = addrs.map((address) => ({ address, family: isIP(address) })).filter((a) => wanted === 0 || a.family === wanted);
+        const first = list[0];
+        if (!first) {
+          callback(new SsrfError('dns_failed', `could not resolve ${hostname}`), options.all ? [] : '');
+          return;
+        }
+        if (options.all) callback(null, list);
+        else callback(null, first.address, first.family);
+      },
+      (err: unknown) => {
+        const e = err instanceof Error ? (err as NodeJS.ErrnoException) : new SsrfError('dns_failed', `could not resolve ${hostname}`);
+        callback(e, options.all ? [] : '');
+      },
+    );
+  };
 }
