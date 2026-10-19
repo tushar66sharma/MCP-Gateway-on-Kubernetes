@@ -65,6 +65,7 @@ helm status urumi -n urumi-system
 - [`app.localhost` does not resolve in Node tools](#applocalhost-does-not-resolve-in-node-tools)
 - [Postgres does not start: `PGDATA` permission errors](#postgres-does-not-start-pgdata-permission-errors)
 - [Gateway, Notes or Utilities pod in `ErrImagePull`](#gateway-notes-or-utilities-pod-in-errimagepull)
+- [Upgrade fails: `spec.strategy.rollingUpdate: Forbidden`](#upgrade-fails-specstrategyrollingupdate-forbidden)
 - [PowerShell gotchas with kubectl](#powershell-gotchas-with-kubectl)
 
 ---
@@ -692,6 +693,19 @@ The seeded servers are created once from the Helm values. Changing the Helm seed
 **Symptom.** `kubectl -n gateway get pods` or `kubectl -n mcp get pods` shows `ErrImagePull`, `ErrImageNeverPull` or `ImagePullBackOff` for `gateway-...`, `mcp-notes-...` or `mcp-utilities-...`, naming an image such as `urumi/gateway:dev`.
 
 **Cause and fix.** The same as for the WooCommerce MCP server ([above](#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)): the cluster has no registry, and the pod asks for a tag the cluster does not hold. `scripts\build-images.ps1` now builds **four** images (`mcp-woocommerce`, `mcp-notes`, `mcp-utilities`, `gateway`), imports each into the cluster and writes the tag to `deploy\.images.local.yaml`; `scripts\up.ps1 -Redeploy` runs it for you. The usual cause is deploying with `deploy.ps1` on a fresh clone, or recreating the cluster, without building. Fix: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`. (**Expected** for the new images; the failure itself was not reproduced, the fix is the one verified for `mcp-woocommerce`.) If `docker build` fails for one of them, make sure Docker Desktop is running and that `npm ci`'s lockfile (`package-lock.json`) is committed.
+
+## Upgrade fails: `spec.strategy.rollingUpdate: Forbidden`
+
+**Symptom.** `helm upgrade` stops with `Deployment.apps "gateway" is invalid: spec.strategy.rollingUpdate: Forbidden: may not be specified when strategy type is 'Recreate'`, and the release shows `failed`.
+
+**Cause.** The gateway Deployment now uses the `Recreate` strategy. An install made before that change still carries the `rollingUpdate` block that Kubernetes filled in by default, and Helm's server-side apply cannot remove a field that no field manager owns (an explicit `rollingUpdate: null` in the template does not help either; checked with a server-side dry run).
+
+**Fix.** `scripts\deploy.ps1` (and so `up.ps1 -Redeploy`) switches the live Deployment to `Recreate` before running Helm, once; this restarts nothing. If you run `helm` yourself, do the same first, then upgrade again (PowerShell 5.1 mangles JSON quotes in native arguments, so the patch goes through a file):
+
+```powershell
+Set-Content -Path "$env:TEMP\recreate.json" -Value '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}' -Encoding ascii
+kubectl -n gateway patch deployment gateway --type merge --patch-file "$env:TEMP\recreate.json"
+```
 
 ## PowerShell gotchas with kubectl
 
