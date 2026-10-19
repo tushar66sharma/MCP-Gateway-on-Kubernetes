@@ -1,0 +1,39 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway
+  namespace: {{ .Values.namespaces.gateway }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "gateway" "component" "gateway") | nindent 4 }}
+  {{- if and .Values.global.tls.enabled .Values.global.tls.clusterIssuer }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.global.tls.clusterIssuer }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.global.ingressClassName }}
+  {{- if .Values.global.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.global.appHost | quote }}]
+      secretName: {{ printf "%s-app" .Values.global.tls.secretNamePrefix }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.global.appHost | quote }}
+      http:
+        paths:
+          # The dashboard (Phase 4) will own "/"; only the API and the MCP endpoint are routed now.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http
+{{- end }}

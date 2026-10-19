@@ -1,0 +1,20 @@
+{
+  "name": "@urumi/mcp-utilities",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "@urumi/shared": "*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1"
+  }
+}

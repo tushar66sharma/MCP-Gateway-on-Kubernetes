@@ -34,6 +34,70 @@
         "mcp": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
         "gateway": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" }
       }
+    },
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "existing": {
+          "type": "object",
+          "properties": {
+            "storeDb": { "type": "string" },
+            "storeAdmin": { "type": "string" },
+            "storeWooApi": { "type": "string" },
+            "mcpWoocommerceToken": { "type": "string" },
+            "mcpNotesToken": { "type": "string" },
+            "mcpUtilitiesKey": { "type": "string" },
+            "gatewaySecrets": { "type": "string" },
+            "gatewayBootstrap": { "type": "string" }
+          }
+        }
+      }
+    },
+    "mcpNotes": {
+      "type": "object",
+      "required": ["enabled", "port"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "object", "properties": { "repository": { "type": "string", "minLength": 1 }, "tag": { "type": ["string", "integer"] } } },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "logLevel": { "type": "string" },
+        "resources": { "type": "object" }
+      }
+    },
+    "mcpUtilities": {
+      "type": "object",
+      "required": ["enabled", "port"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "object", "properties": { "repository": { "type": "string", "minLength": 1 }, "tag": { "type": ["string", "integer"] } } },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "logLevel": { "type": "string" },
+        "resources": { "type": "object" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "required": ["image", "storage"],
+      "properties": {
+        "image": { "type": "string", "minLength": 1 },
+        "storage": { "type": "string", "minLength": 1 },
+        "resources": { "type": "object" }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "required": ["enabled", "port", "bootstrapAdminEmail"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "object", "properties": { "repository": { "type": "string", "minLength": 1 }, "tag": { "type": ["string", "integer"] } } },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "logLevel": { "type": "string" },
+        "bootstrapAdminEmail": { "type": "string", "pattern": "^[^@\\s]+@[^@\\s]+$" },
+        "healthIntervalMs": { "type": "integer", "minimum": 1000 },
+        "healthTimeoutMs": { "type": "integer", "minimum": 500 },
+        "callTimeoutMs": { "type": "integer", "minimum": 11000, "maximum": 120000 },
+        "resources": { "type": "object" }
+      }
     }
   }
 }

@@ -1,31 +1,65 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { hostHeaderValidation } from '@modelcontextprotocol/express';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import express from 'express';
+import express, { type RequestHandler } from 'express';
 import type { Logger } from './logger.js';
 import { upstreamAuthMiddleware, type UpstreamAuth } from './upstreamAuth.js';
 
 export type SdkMcpServer = McpServer;
+
+/** Store = `res.locals` of the in-flight /mcp request, so tool handlers can read what the auth middleware set. */
+export const mcpRequestLocals = new AsyncLocalStorage<Record<string, unknown>>();
+
+const REQUEST_ID = /^[A-Za-z0-9._-]{8,64}$/;
 
 export interface McpHttpServerOptions {
   name: string;
   version: string;
   port: number;
   host?: string;
-  auth: UpstreamAuth;
+  /** A function is used as-is (gateway); an object goes through upstreamAuthMiddleware. */
+  auth: UpstreamAuth | RequestHandler;
   logger: Logger;
   /** Host-header (DNS-rebinding) check, applied to /mcp ONLY. Ports in entries are ignored. */
   allowedHosts: string[];
-  registerTools: (server: SdkMcpServer) => void;
+  /** Exactly one of registerTools / buildServer. */
+  registerTools?: (server: SdkMcpServer) => void;
+  /** Gateway: build the McpServer yourself (custom handlers on `mcp.server`). */
+  buildServer?: () => SdkMcpServer;
+  /** Mounted after the probes, before /mcp. Not host-checked. */
+  extraRoutes?: (app: express.Express) => void;
+  /** Sanitises the path written in the request log line. */
+  logPath?: (path: string) => string;
   readinessCheck?: () => Promise<boolean>;
+}
+
+export interface CloseOptions {
+  /**
+   * Graceful mode: stop accepting connections, let in-flight requests finish for up to this many ms
+   * (keep-alive connections are told `Connection: close`), then cut whatever is left. Without it,
+   * close() cuts every connection at once (the default every server used so far).
+   */
+  graceMs?: number;
+}
+
+export interface CloseResult {
+  /** Requests still running when the grace period ended (0 when everything drained, or without graceMs). */
+  cutRequests: number;
 }
 
 export interface RunningMcpHttpServer {
   port: number;
-  close(): Promise<void>;
+  /** Requests currently being handled. */
+  inFlight(): number;
+  close(o?: CloseOptions): Promise<CloseResult>;
 }
+
+/** Logged in place of the path when the logPath sanitiser throws, so a bad path never kills the process. */
+export const UNLOGGABLE_PATH = '[unloggable path]';
 
 /**
  * The SDK compares `new URL(...).hostname`, which is always lowercase and has no port: so lowercase,
@@ -51,12 +85,16 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
   const readiness = opts.readinessCheck ?? (async () => true);
   // Validate configuration before building anything (both throw with value-free messages).
   const allowedHosts = normalizeHosts(opts.allowedHosts);
-  const auth = upstreamAuthMiddleware(opts.auth);
+  if ((opts.registerTools === undefined) === (opts.buildServer === undefined)) {
+    throw new Error('exactly one of registerTools or buildServer is required');
+  }
+  const auth = typeof opts.auth === 'function' ? opts.auth : upstreamAuthMiddleware(opts.auth);
 
   const mcpHandler = createMcpHandler(
     () => {
+      if (opts.buildServer) return opts.buildServer();
       const server = new McpServer({ name: opts.name, version: opts.version });
-      opts.registerTools(server);
+      opts.registerTools?.(server);
       return server;
     },
     { onerror: (err) => logger.error({ err: err.message }, 'mcp error') },
@@ -66,11 +104,41 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
   const app = express();
   app.disable('x-powered-by');
 
+  // In-flight requests, for a graceful close; while draining, responses ask the client to reconnect.
+  let inFlight = 0;
+  let draining = false;
+  let onIdle: (() => void) | null = null;
+
   app.use((req, res, next) => {
+    inFlight += 1;
+    let counted = true;
+    const done = () => {
+      if (!counted) return;
+      counted = false;
+      inFlight -= 1;
+      if (inFlight === 0) onIdle?.();
+    };
+    res.on('finish', done);
+    res.on('close', done);
+    if (draining) res.setHeader('Connection', 'close');
+    const incoming = req.header('x-request-id');
+    const requestId = incoming !== undefined && REQUEST_ID.test(incoming) ? incoming : randomUUID();
+    res.locals.requestId = requestId;
+    res.setHeader('X-Request-Id', requestId);
+    // Captured now: Express strips the mount prefix from req.path inside mounted routers.
+    const fullPath = req.originalUrl.split('?')[0] ?? req.path;
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-      logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
+      // This runs in an event listener: a throwing sanitiser would be an uncaught exception and
+      // kill the process, so it falls back to a fixed placeholder (never the raw path).
+      let path: string;
+      try {
+        path = opts.logPath ? opts.logPath(fullPath) : fullPath;
+      } catch {
+        path = UNLOGGABLE_PATH;
+      }
+      logger.info({ requestId, method: req.method, path, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
     });
     next();
   });
@@ -90,13 +158,15 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
     );
   });
 
+  opts.extraRoutes?.(app);
+
   app.post(
     '/mcp',
     hostHeaderValidation(allowedHosts),
     auth,
     express.json({ limit: '1mb' }),
     (req, res) => {
-      nodeHandler(req, res, req.body).catch((err: unknown) => {
+      mcpRequestLocals.run(res.locals, () => nodeHandler(req, res, req.body)).catch((err: unknown) => {
         logger.error({ err: err instanceof Error ? err.message : 'unknown' }, 'mcp handler failed');
         if (!res.headersSent) {
           res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
@@ -131,12 +201,40 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
 
   return {
     port,
-    close: async () => {
-      await mcpHandler.close();
-      await new Promise<void>((resolve, reject) => {
+    inFlight: () => inFlight,
+    close: async (o: CloseOptions = {}) => {
+      if (o.graceMs === undefined || o.graceMs <= 0) {
+        // Default (unchanged): cut everything at once.
+        await mcpHandler.close();
+        await new Promise<void>((resolve, reject) => {
+          httpServer.close((err) => (err ? reject(err) : resolve()));
+          httpServer.closeAllConnections();
+        });
+        return { cutRequests: 0 };
+      }
+      // Graceful: stop accepting (close() refuses new connections and drops idle keep-alive ones),
+      // wait for in-flight requests up to graceMs, then cut whatever is left.
+      draining = true;
+      const closed = new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
-        httpServer.closeAllConnections();
       });
+      closed.catch(() => {}); // awaited below; avoids an unhandled rejection while waiting
+      if (inFlight > 0) {
+        const graceMs = o.graceMs;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, graceMs);
+          onIdle = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+        });
+        onIdle = null;
+      }
+      const cutRequests = inFlight;
+      httpServer.closeAllConnections();
+      await closed;
+      await mcpHandler.close();
+      return { cutRequests };
     },
   };
 }

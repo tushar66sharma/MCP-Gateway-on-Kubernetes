@@ -2,7 +2,7 @@
 
 An Architecture Decision Record (ADR) is a short document that captures one significant technical decision: the situation that forced a choice, what was chosen, what else was considered, and what the choice costs. ADRs are kept in version control so that, months later, anyone can see not just *what* the system does but *why* it was built that way. The source of truth for the overall design is [the design spec](../superpowers/specs/2026-10-18-mcp-gateway-design.md); each ADR zooms in on one choice from it.
 
-ADRs here are written as decisions ("we use...", "we will..."). Whether a decision has been implemented is tracked by the implementation plan, not by the ADR; each ADR's Consequences section says what is still to be verified.
+ADRs here are written as decisions ("we use...", "we will..."). Whether a decision has been implemented is tracked by the implementation plan; once a phase has built a decision, its ADR says so in the Status (for example "Implemented in Phase 3") and gains an "As built" section with what was actually built and verified. Each ADR's Consequences section says what is still to be verified.
 
 ## Template
 
@@ -54,12 +54,12 @@ Small clarifications that do not change the decision (typos, a confirmed spike r
 | 003 | One Helm chart owning three namespaces, `resource-policy: keep` | Accepted | [ADR-003](ADR-003-single-helm-chart-three-namespaces.md) |
 | 004 | Own MariaDB/Postgres templates instead of Bitnami charts | Accepted | [ADR-004](ADR-004-own-database-templates.md) |
 | 005 | WooCommerce MCP to store via REST v3 + OAuth1 | Accepted (Phase 1 spike passed) | [ADR-005](ADR-005-woocommerce-rest-oauth1.md) |
-| 006 | Tool naming `<slug>__<tool>`, immutable slugs, 64-char rule | Accepted | [ADR-006](ADR-006-tool-naming-scheme.md) |
+| 006 | Tool naming `<slug>__<tool>`, immutable slugs, 64-char rule | Accepted, implemented in Phase 3 | [ADR-006](ADR-006-tool-naming-scheme.md) |
 | 007 | MCP SDK v2 with `createMcpHandler` (modern + stateless legacy fallback) | Accepted (Phase 2 spike) | [ADR-007](ADR-007-mcp-sdk-version.md) |
-| 008 | API keys: random + SHA-256, shown once | Accepted | [ADR-008](ADR-008-api-key-hashing.md) |
-| 009 | Upstream credentials AES-256-GCM at rest | Accepted | [ADR-009](ADR-009-upstream-credential-encryption.md) |
-| 010 | Chat agent loops back through the real `/mcp` | Accepted | [ADR-010](ADR-010-chat-agent-loopback.md) |
+| 008 | API keys: random + SHA-256, shown once | Accepted, implemented in Phase 3 | [ADR-008](ADR-008-api-key-hashing.md) |
+| 009 | Upstream credentials AES-256-GCM at rest | Accepted, implemented in Phase 3 | [ADR-009](ADR-009-upstream-credential-encryption.md) |
+| 010 | Chat agent loops back through the real `/mcp` | Accepted; token and `/mcp` acceptance implemented in Phase 3, agent in Phase 4 | [ADR-010](ADR-010-chat-agent-loopback.md) |
 | 011 | LLM: one OpenAI-compatible adapter, Groq + OpenRouter | Accepted (default model Proposed, Phase 4 spike) | [ADR-011](ADR-011-llm-provider-abstraction.md) |
 | 012 | Deployment target is k3s on a VPS, not Vercel/Render | Accepted | [ADR-012](ADR-012-deployment-target-k3s-vps.md) |
-| 013 | Invite links instead of email/temporary passwords | Accepted | [ADR-013](ADR-013-invite-links.md) |
-| 014 | Cached health-checked tool catalog | Accepted | [ADR-014](ADR-014-cached-tool-catalog.md) |
+| 013 | Invite links instead of email/temporary passwords | Accepted, implemented in Phase 3 | [ADR-013](ADR-013-invite-links.md) |
+| 014 | Cached health-checked tool catalog | Accepted, implemented in Phase 3 | [ADR-014](ADR-014-cached-tool-catalog.md) |

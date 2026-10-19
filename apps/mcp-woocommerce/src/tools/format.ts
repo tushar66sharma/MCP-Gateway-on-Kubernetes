@@ -1,16 +1,10 @@
 import { WooApiError } from '../woo/errors.js';
-import type { ToolResult } from './types.js';
+import { ok, type ToolResult } from '@urumi/shared';
 
 /** Upper bound for WooCommerce ids. Explicit, so zod does not emit `maximum: 9007199254740991` to the model. */
 export const MAX_ID = 2_147_483_647;
 
-export function ok(summary: string, data: Record<string, unknown>): ToolResult {
-  return {
-    // Compact JSON: every character here is sent to the model (token budget, Groq 8K TPM).
-    content: [{ type: 'text', text: `${summary}\n${JSON.stringify(data)}` }],
-    structuredContent: data,
-  };
-}
+export { ok };
 
 /** Tool-level failure: the model sees the text. Never includes stack traces. */
 export function fail(err: unknown): ToolResult {

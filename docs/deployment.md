@@ -1,6 +1,6 @@
 # Deployment guide
 
-> **Status (end of Phase 2).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. Phase 2 added the **WooCommerce MCP server** to the chart (namespace `mcp`, internal only) and the image build step that `up.ps1` now runs before every deploy. The gateway and dashboard are not part of the chart yet **(planned, Phases 3-4)**. The **production (k3s VPS)** section is **(planned, Phase 5)**.
+> **Status (end of Phase 3).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. Phase 2 added the **WooCommerce MCP server** to the chart (namespace `mcp`, internal only) and the image build step that `up.ps1` now runs before every deploy. Phase 3 added the **gateway**, its **Postgres** database, the **Notes** and **Utilities** MCP servers and the `app.localhost` Ingress (`/api` and `/mcp`); `scripts\up.ps1 -Redeploy` deployed them and the checks passed (2026-10-19). The dashboard is not part of the chart yet **(planned, Phase 4)**. The **production (k3s VPS)** section is **(planned, Phase 5)**.
 
 Cost: the local deployment uses no paid service and no cloud account; everything runs on your machine in Docker. (The reason production is a VPS and not Vercel/Render is in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md).)
 
@@ -10,7 +10,7 @@ Related documents: how the pieces fit together [architecture.md](architecture.md
 
 ### What you are building
 
-A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d) with one Helm release called `urumi` in the namespace `urumi-system`. The release creates the namespaces `store`, `mcp` and `gateway`; today `store` contains MariaDB, WordPress with WooCommerce, an Ingress for `store.localhost`, three generated Secrets, and a one-off Job that configures the shop, and `mcp` contains the WooCommerce MCP server (one Deployment, a ClusterIP Service, two Secrets, **no Ingress**). `gateway` is still empty.
+A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d) with one Helm release called `urumi` in the namespace `urumi-system`. The release creates the namespaces `store`, `mcp` and `gateway`; today `store` contains MariaDB, WordPress with WooCommerce, an Ingress for `store.localhost`, three generated Secrets, and a one-off Job that configures the shop, and `mcp` contains the three MCP servers (WooCommerce, Notes, Utilities: each one Deployment and a ClusterIP Service, plus the Secrets, **no Ingress**), and `gateway` contains Postgres (StatefulSet with a volume), the gateway (Deployment, Service, ConfigMap, Secrets) and the Ingress `gateway` for `app.localhost` (`/api` and `/mcp`).
 
 ### Prerequisites
 
@@ -48,9 +48,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1
 
 **Why:** browsers and `curl` resolve `*.localhost` to your own machine automatically, but Node-based tools use the operating system resolver and need a line in the Windows hosts file. This script adds `127.0.0.1 store.localhost app.localhost hello.localhost` (once; it is safe to repeat). **Expected:** a UAC prompt (accept it), then `hosts entries present.` If you will only use a browser (or the scripts in this repository, which do not need it: `scripts\check-woo-api.ps1` connects to 127.0.0.1 through a port-forward and uses `store.localhost` only as a string to sign) you can skip this step.
 
-### Step 3a. Build our program images (new in Phase 2)
+### Step 3a. Build our program images (new in Phase 2; four images since Phase 3)
 
-The MCP server runs from an image that is built from this repository and loaded straight into the cluster (there is no registry locally). `up.ps1` does this automatically. If you deploy with `deploy.ps1` yourself, run this first, **before** step 3:
+The three MCP servers and the gateway run from images (`urumi/mcp-woocommerce`, `urumi/mcp-notes`, `urumi/mcp-utilities`, `urumi/gateway`, all with the same tag) that are built from this repository and loaded straight into the cluster (there is no registry locally). `up.ps1` does this automatically. If you deploy with `deploy.ps1` yourself, run this first, **before** step 3:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1
@@ -217,14 +217,20 @@ kubectl annotate namespace store meta.helm.sh/release-name=urumi meta.helm.sh/re
 kubectl -n store create secret generic store-admin --from-literal=password=<your-password>
 ```
 
-(Do the same for `mcp`: the `storeWooApi` and `mcpWoocommerceToken` Secrets also live there, see the `storeWooApi` and `mcpWoocommerceToken` rows in the table below.) Then name the Secrets in the values file under `secrets.existing`:
+(Do the same for `mcp` and `gateway`: the `storeWooApi`, `mcpWoocommerceToken`, `mcpNotesToken` and `mcpUtilitiesKey` Secrets also live in `mcp`, and the gateway Secrets and the copies of the three upstream credentials live in `gateway`, see the `storeWooApi` and `mcpWoocommerceToken` rows in the table below.) Then name the Secrets in the values file under `secrets.existing`:
 
 | Values key | Secret keys required | Notes |
 |---|---|---|
 | `storeDb` | `root-password`, `password` | MariaDB root and application passwords. They must match the data already on the volume. |
 | `storeAdmin` | `password` | WordPress admin password. The key must be named exactly `password`. |
 | `storeWooApi` | `consumer-key`, `consumer-secret` | The consumer secret must be at most **43 characters** (WooCommerce stores it in a `char(43)` column). The chart's own generated secret is `cs_` plus 40 characters = 43. **The same Secret must also exist in namespace `mcp`** (the MCP server reads it there; with `storeWooApi` set the chart renders no copy). |
-| `mcpWoocommerceToken` | `token` | The bearer token of the MCP server, in namespace `mcp` (at least 16 characters; the generated one is 48). Phase 3 will need a copy in namespace `gateway`. |
+| `mcpWoocommerceToken` | `token` | The bearer token of the MCP server, in namespace `mcp` (at least 16 characters; the generated one is 48). **A byte-identical copy must also exist in namespace `gateway`** (used to seed the registry). |
+| `mcpNotesToken` | `token` | The bearer token of `mcp-notes`, in `mcp`, with a copy in `gateway`. |
+| `mcpUtilitiesKey` | `key` | The key of `mcp-utilities` (header `X-Utilities-Key`), in `mcp`, with a copy in `gateway`. |
+| `gatewaySecrets` | `postgres-password`, `encryption-key`, `internal-token-secret` | Namespace `gateway`. `encryption-key` must be base64 of exactly 32 bytes (the gateway refuses to start otherwise); `internal-token-secret` at least 32 characters. Losing the encryption key makes stored upstream credentials unreadable. |
+| `gatewayBootstrap` | `email`, `password` | Namespace `gateway`. The first admin account, used only when the gateway database has no users. |
+
+The chart renders the generated copies identically in both namespaces (checked with `helm template`). The pre-created variant for the gateway was **not tested** on a cluster (there is no production cluster yet).
 
 `deploy/values-prod.yaml` already names these Secrets and points to this procedure. It also has two placeholders for our own images, `global.imageRegistry` and `global.imageTag` (both `CHANGE-ME`): production pulls `<registry>/urumi/mcp-woocommerce:<tag>` from a real registry instead of importing it. Pushing images to a registry is **(planned, Phase 5)**; the local import workflow is the only one exercised.
 
@@ -249,7 +255,10 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 | WordPress logs | `kubectl -n store logs deploy/wordpress -c wordpress` |
 | MariaDB logs | `kubectl -n store logs mariadb-0` |
 | Setup Job log | `kubectl -n store logs job/store-setup` |
-| MCP server status and logs | `kubectl -n mcp get pods,svc` and `kubectl -n mcp logs deploy/mcp-woocommerce` |
+| MCP server status and logs | `kubectl -n mcp get pods,svc` and `kubectl -n mcp logs deploy/mcp-woocommerce` (also `mcp-notes`, `mcp-utilities`) |
+| Gateway and Postgres status | `kubectl -n gateway get pods,svc,ingress` |
+| Gateway and Postgres logs | `kubectl -n gateway logs deploy/gateway` and `kubectl -n gateway logs postgres-0` |
+| Gateway end-to-end check | `scripts\check-gateway.ps1` (add `-Write`, `-Isolation`); see the [run guide](run-guide.md#9-the-gateway-phase-3) |
 | Release state | `helm status urumi -n urumi-system`, `helm history urumi -n urumi-system` |
 | What values are in use? | `helm get values urumi -n urumi-system` |
 

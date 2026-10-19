@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PERIODS, resolvePeriod } from '../woo/period.js';
+import { PERIODS, resolvePeriod } from '@urumi/shared';
 import { compact, fail, ok, toOrderSummary } from './format.js';
 import { defineTool } from './types.js';
 

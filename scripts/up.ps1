@@ -28,8 +28,10 @@ if ($LASTEXITCODE -ne 0) { Stop-WithError 'cluster-up.ps1 failed (see above).' }
 
 # 3. Warn (do not fail) if the hosts entries are missing; browsers still work, Node-based tools need them.
 $hostsFile = "$env:WINDIR\System32\drivers\etc\hosts"
-if (-not (Select-String -Path $hostsFile -Pattern '^\s*127\.0\.0\.1\s+.*\bstore\.localhost\b' -Quiet)) {
-  Write-Host 'WARNING: store.localhost is not in the hosts file. Run: powershell -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1' -ForegroundColor Yellow
+foreach ($h in 'store.localhost', 'app.localhost') {
+  if (-not (Select-String -Path $hostsFile -Pattern ('^\s*127\.0\.0\.1\s+.*\b' + [regex]::Escape($h) + '\b') -Quiet)) {
+    Write-Host "WARNING: $h is not in the hosts file. Run: powershell -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1" -ForegroundColor Yellow
+  }
 }
 
 # 4. Install the release if it does not exist yet (or when -Redeploy); otherwise just wait for the pods.
@@ -88,15 +90,32 @@ if ($action -eq 'deploy') {
       Write-Host 'WARNING: mcp-woocommerce is not ready yet (kubectl -n mcp get pods). The store works without it; see docs/troubleshooting.md.' -ForegroundColor Yellow
     }
   }
+  # The gateway (namespace gateway) exists only when gateway.enabled. Same rule: warn, do not abort.
+  cmd /c "kubectl -n gateway get statefulset postgres >nul 2>&1"
+  if ($LASTEXITCODE -eq 0) {
+    kubectl -n gateway rollout status statefulset/postgres --timeout=180s
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host 'WARNING: postgres is not ready yet (kubectl -n gateway get pods). The store works without it; see docs/troubleshooting.md.' -ForegroundColor Yellow
+    }
+    kubectl -n gateway rollout status deployment/gateway --timeout=180s
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host 'WARNING: the gateway is not ready yet (kubectl -n gateway get pods). The store works without it; see docs/troubleshooting.md.' -ForegroundColor Yellow
+    }
+  }
 }
 
 # 5. Compute the public store URL from the release's values (same rule as the chart's urumi.publicUrl).
 $valuesJson = helm get values urumi --namespace urumi-system --all --output json
 if ($LASTEXITCODE -ne 0) { Stop-WithError 'Could not read the release values.' }
-$g = ($valuesJson | ConvertFrom-Json).global
+$values = $valuesJson | ConvertFrom-Json
+$g = $values.global
+# Gateway lines come from the same values: the admin email as configured, and nothing when disabled.
+$gatewayEnabled = [bool]$values.gateway.enabled
+$gatewayAdminEmail = [string]$values.gateway.bootstrapAdminEmail
 $port = [int]$g.publicPort
 $isDefaultPort = ($g.publicScheme -eq 'http' -and $port -eq 80) -or ($g.publicScheme -eq 'https' -and $port -eq 443)
 $storeUrl = if ($isDefaultPort) { "$($g.publicScheme)://$($g.storeHost)" } else { "$($g.publicScheme)://$($g.storeHost):$port" }
+$appUrl = if ($isDefaultPort) { "$($g.publicScheme)://$($g.appHost)" } else { "$($g.publicScheme)://$($g.appHost):$port" }
 
 Write-Host ''
 Write-Host '================ Urumi platform is running ================' -ForegroundColor Green
@@ -105,6 +124,11 @@ Write-Host "  Shop         : $storeUrl/shop/"
 Write-Host "  My account   : $storeUrl/my-account/   (customers: register, log in, see their orders)"
 Write-Host "  WP admin     : $storeUrl/wp-admin/     (user: admin)"
 Write-Host '  MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1'
+if ($gatewayEnabled) {
+  Write-Host "  Gateway API  : $appUrl/api"
+  Write-Host "  MCP endpoint : $appUrl/mcp   (needs a personal API key)"
+  Write-Host "  Gateway admin: $gatewayAdminEmail - copy the password with: powershell -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password"
+}
 Write-Host ''
 Write-Host '  Admin password - run this to copy it to the clipboard (it is never printed here):'
 Write-Host '    powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1'

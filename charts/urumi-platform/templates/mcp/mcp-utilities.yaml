@@ -1,0 +1,5 @@
+{{- if .Values.mcpUtilities.enabled }}
+{{- $keySecret := default "mcp-utilities-key" .Values.secrets.existing.mcpUtilitiesKey -}}
+{{- $env := list (dict "name" "UTILITIES_KEY" "valueFrom" (dict "secretKeyRef" (dict "name" $keySecret "key" "key"))) (dict "name" "DEFAULT_TIMEZONE" "value" .Values.storeSetup.timezone) -}}
+{{ include "urumi.simpleMcpServer" (dict "root" $ "name" "mcp-utilities" "port" .Values.mcpUtilities.port "values" .Values.mcpUtilities "env" $env "component" "mcp-server") }}
+{{- end }}

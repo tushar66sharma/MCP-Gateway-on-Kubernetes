@@ -258,6 +258,15 @@ erDiagram
     text error_message }
 ```
 
+**As built (Phase 3).**
+
+- `credential_enc` is `bytea` in Postgres. The Drizzle column type normalises both drivers' return values to a Node `Buffer`: node-postgres returns a `Buffer`, PGlite (see §11) a `Uint8Array`.
+- The Drizzle schema is `apps/gateway/src/db/schema.ts`; the migration `apps/gateway/drizzle/0000_init.sql` is generated, committed, and applied at every start (up to 30 attempts, 2 s apart, before the gateway listens).
+- Foreign key actions: `audit_logs.server_id` and `audit_logs.user_id` are `ON DELETE SET NULL` (history survives a deleted server; `server_slug` is denormalised); `sessions.user_id` is `ON DELETE CASCADE`; `api_keys.user_id` and `api_keys.created_by` are `RESTRICT`. `audit_logs.api_key_id` has no foreign key.
+- `upstream_servers` also has `created_at`; `invites` has **no** `created_at` (as listed above), so invites are listed by `expires_at`.
+- `audit_logs.tool_name` stores the **upstream** tool name (`list_orders`) with `server_slug` (`woo`) beside it; a call that matched no server stores the name as sent with a null slug.
+- The `Db` type is `PgDatabase<PgQueryResultHKT, typeof schema>`, which both the node-postgres and PGlite drivers satisfy; a union of the two driver types does not type-check.
+
 ### 6.2 Dashboard REST API (`/api`, JSON, session cookie)
 
 | Method & path | Role | Purpose |
@@ -275,6 +284,14 @@ erDiagram
 | `GET /healthz`, `GET /readyz` | public (in cluster) | Probes; `readyz` checks Postgres |
 
 **Error shape:** `{"error": {"code": "VALIDATION_FAILED", "message": "…", "details": {…}, "requestId": "…"}}`. Every request gets an `X-Request-Id` that appears in the logs.
+
+**As built (Phase 3).**
+
+- **`ServerView`** (returned by `GET /api/servers`, `GET /api/servers/:id` and the create, edit and refresh calls; never contains the credential): `id, slug, name, url, authType, authHeaderName, hasCredential, enabled, status, lastError, checkedAt, toolCount, tools[{name, description}], skippedTools[]`. `skippedTools` lists upstream tools left out because their prefixed name does not match `^[a-zA-Z0-9_-]{1,64}$` (§6.4).
+- **CSRF:** every `POST`, `PUT`, `PATCH` and `DELETE` needs `Content-Type: application/json` **and** `Origin` equal to the origin of `PUBLIC_APP_URL`, including `DELETE` without a body and the public invite routes; otherwise `403 CSRF_REJECTED`.
+- Codes in use: `VALIDATION_FAILED` 400, `SSRF_REJECTED` 400, `UNAUTHENTICATED` 401, `INVALID_CREDENTIALS` 401, `FORBIDDEN` 403, `CSRF_REJECTED` 403, `NOT_FOUND` 404, `INVITE_INVALID` 404, `CONFLICT` 409, `RATE_LIMITED` 429 (with `Retry-After`), `INTERNAL` 500.
+- `POST /api/chat` is not built (Phase 4). `slug` cannot be changed by `PATCH`. An admin cannot change their own role or disable themselves (409).
+- `GET /api/audit` accepts `userId, serverSlug, toolName, outcome, from, to, limit (1-100, default 50), cursor`; `nextCursor` is the last returned id.
 
 ### 6.3 Upstream manager
 
@@ -458,10 +475,10 @@ PVCs use the cluster's default StorageClass (`local-path` on k3s/k3d) unless `gl
 | `store-db` (store) | MariaDB root and app passwords | Helm-generated |
 | `store-admin` (store) | WordPress admin password | Helm-generated |
 | `store-woo-api` (store **and** mcp) | WooCommerce consumer key/secret | Helm-generated; canonical namespace `store`. Built: the `store` copy in Phase 1 and the `mcp` copy in Phase 2, both rendered by the one helper `urumi.storeWooApiData` so they match. Not rendered in `mcp` when `secrets.existing.storeWooApi` is set (the operator supplies both, and restarts the MCP pod after rotating) |
-| `mcp-woocommerce-token`, `mcp-notes-token`, `mcp-utilities-key` (mcp **and** gateway) | Upstream credentials | Helm-generated. `mcp-woocommerce-token` (key `token`, 48 characters, canonical namespace `mcp`) is built in Phase 2; the `gateway` copy comes in Phase 3, rendered with the same canonical namespace |
-| `gateway-secrets` (gateway) | Postgres password, `GATEWAY_ENCRYPTION_KEY`, `GATEWAY_INTERNAL_TOKEN_SECRET` | Helm-generated |
-| `gateway-bootstrap` (gateway) | Bootstrap admin email + password | Helm-generated / values |
-| `llm-api-keys` (gateway) | `GROQ_API_KEY`, `OPENROUTER_API_KEY` | **Never in values.** Created by `scripts/create-secrets.ps1` from a git-ignored `.env`; the chart references it as `existingSecret` |
+| `mcp-woocommerce-token`, `mcp-notes-token`, `mcp-utilities-key` (mcp **and** gateway) | Upstream credentials | Helm-generated, canonical namespace `mcp`, 48 characters, annotated `helm.sh/resource-policy: keep`. Keys: `token` for `mcp-woocommerce-token` and `mcp-notes-token`, `key` for `mcp-utilities-key` (sent in the header `X-Utilities-Key`). **Built:** `mcp-woocommerce-token` in Phase 2; the `gateway` copies and the two new Secrets in Phase 3, rendered with the same canonical namespace so both copies are byte-identical (checked with `helm template`) |
+| `gateway-secrets` (gateway) | Postgres password, `GATEWAY_ENCRYPTION_KEY`, `GATEWAY_INTERNAL_TOKEN_SECRET` | Helm-generated. **Built (Phase 3)** with the keys `postgres-password` (32 characters), `encryption-key` (32 random bytes, base64: Sprig `randBytes`, validated at start) and `internal-token-secret` (48 characters); annotated `keep`. Pre-created via `secrets.existing.gatewaySecrets` |
+| `gateway-bootstrap` (gateway) | Bootstrap admin email + password | **Built (Phase 3).** Owned by Helm: keys `email` (from the value `gateway.bootstrapAdminEmail`, default `admin@example.com`) and `password` (generated, 20 characters). Read by the gateway as `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`; the admin is created only when the `users` table is empty |
+| `llm-api-keys` (gateway) | `GROQ_API_KEY`, `OPENROUTER_API_KEY` | **Never in values.** Created by `scripts/create-secrets.ps1` from a git-ignored `.env`; the chart references it as `existingSecret`. **Not built in Phase 3:** the Phase 3 gateway has no LLM configuration; Phase 4 adds an optional (`optional: true`) reference so missing keys cannot crash the pod |
 
 Upstream-credential Secrets in the `gateway` namespace are used **only to seed** the server registry. After seeding, the source of truth is the encrypted column, so credential edits in the dashboard persist.
 
@@ -559,7 +576,7 @@ Total requests come to about 0.5 CPU and 1.1 GiB, which fits a k3d cluster under
   - Gateway: tool-name scheme, key generation and hashing, AES-GCM round trip, SSRF validator (including metadata IPs and rebinding), audit writer, LLM adapter (mocked fetch: success, tool calls, 429 retry, fallback), agent loop with a fake provider.
   - Upstreams: utilities date math and calculator.
 - **Integration (Vitest):**
-  - The gateway against three in-process fake MCP servers (healthy, slow, dead) proves aggregated listing, routing, collision prefixes, timeout, and isolation. Uses a Postgres test container or a throwaway DB in k3d.
+  - The gateway against three in-process fake MCP servers (healthy, slow, dead) proves aggregated listing, routing, collision prefixes, timeout, and isolation. **As built (Phase 3):** it uses **PGlite** (`@electric-sql/pglite`, a WebAssembly Postgres that runs inside the Node test process) with the real migrations, **not** a Postgres container; no Docker is needed to run `npm test`. The node-postgres driver path is covered by a local smoke against Postgres 17.11 and by the cluster checks (`scripts/check-gateway.ps1`), not by the Vitest suites. The fake upstreams are real MCP servers on loopback ports (healthy, slow, dead, restarted, redirecting), built with `packages/shared`; the test harness allows loopback addresses (`SSRF_ALLOW_LOOPBACK`, for tests and development only; Helm never sets it). The counts are in [testing.md](../../testing.md).
   - The WooCommerce MCP server against a mocked WooCommerce REST API (OAuth signature checked).
 - **Frontend:** a Vitest component test for key flows, and a Playwright smoke test (login → servers → generate key → audit) at 1440px and 390px viewports.
 - **Cluster:**

@@ -33,7 +33,7 @@ The 2026-07-28 version of the spec is **stateless**:
 
 Why this matters for us: a stateless server needs no session affinity and no shared session store, so the gateway in Phase 3 can run several replicas and Kubernetes can restart pods freely. Our code creates a brand-new `McpServer` per HTTP request (`createMcpHandler` calls the factory each time, see `packages/shared/src/mcpHttpServer.ts`).
 
-**Older clients still work.** The SDK's default stateless legacy fallback also answers 2025-era clients that do send `initialize`. That is why MCP Inspector's default mode (`--protocol-era legacy`) works against the same endpoint. Evidence and the full compatibility matrix: [ADR-007](../decisions/ADR-007-mcp-sdk-version.md). Claude Code and Cursor are **not yet tested**; Phase 3 verifies them against the gateway.
+**Older clients still work.** The SDK's default stateless legacy fallback also answers 2025-era clients that do send `initialize`. That is why MCP Inspector's default mode (`--protocol-era legacy`) works against the same endpoint. Evidence and the full compatibility matrix: [ADR-007](../decisions/ADR-007-mcp-sdk-version.md). Claude Code and Cursor were **not tested against the gateway in Phase 3**: the Claude Code command is for you to try ([run guide](../run-guide.md#connect-claude-code-for-you-to-try)), and Cursor is not tested.
 
 ### Headers the client sends (captured)
 

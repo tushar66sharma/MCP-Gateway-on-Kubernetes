@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PERIODS, resolvePeriod } from '../src/woo/period.js';
+import { PERIODS, resolvePeriod } from '../src/period.js';
 
 const now = new Date('2026-10-18T20:00:00Z');
 

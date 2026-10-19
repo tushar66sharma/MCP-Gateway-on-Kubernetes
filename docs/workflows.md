@@ -1,10 +1,10 @@
 # Workflows
 
-> **Status (end of Phase 2).** The **store** workflows (installing the store, a shopper checking out, signed REST access to WooCommerce) and the **MCP tool call to the store** (workflow 6) exist today. The gateway and dashboard workflows are **(planned)** for Phases 3-5 and are added here as they are built. Workflow 5 (customer account and order history) is verified by `scripts/dev/customer-order-smoke.ps1`. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
+> **Status (end of Phase 3).** Workflows 7-11 are the **gateway** workflows (registering an upstream, a tool call through the gateway, the API key lifecycle, inviting a teammate, an upstream going down and coming back); each says which steps were run on the cluster and which are covered by automated tests only. The dashboard and chat workflows are **(planned, Phase 4)**; NetworkPolicies and production values are **(planned, Phase 5)**; none is described here as available. The **store** workflows (installing the store, a shopper checking out, signed REST access to WooCommerce) and the **MCP tool call to the store** (workflow 6) exist today. Planned workflows are added here as they are built. Workflow 5 (customer account and order history) is verified by `scripts/dev/customer-order-smoke.ps1`. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
 
 How to read the failure sections: every workflow answers the same questions: what can fail, how it is detected, what is retried, what the timeouts are, how duplicates and half-finished work are handled, what the user sees, and where the logs are. Statements marked **(observed)** were seen during Phase 1; statements marked **(expected)** follow from the Kubernetes/Helm/WooCommerce documented behavior and the chart's settings but were not deliberately triggered.
 
-Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install) | [5. Customer account and order history](#5-customer-account-and-order-history) | [6. MCP tool call to the store](#6-mcp-tool-call-to-the-store)
+Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install) | [5. Customer account and order history](#5-customer-account-and-order-history) | [6. MCP tool call to the store](#6-mcp-tool-call-to-the-store) | [7. Register an upstream](#7-register-an-upstream-and-how-it-appears-in-toolslist) | [8. MCP tool call through the gateway](#8-mcp-tool-call-through-the-gateway) | [9. API key lifecycle](#9-api-key-lifecycle-create-use-revoke) | [10. Invite a teammate](#10-invite-a-teammate) | [11. Upstream goes down and comes back](#11-upstream-goes-down-and-comes-back)
 
 ---
 
@@ -323,7 +323,7 @@ sequenceDiagram
 
 ## 6. MCP tool call to the store
 
-**What it does.** An MCP client asks the WooCommerce MCP server to run a tool (for example `list_orders` with `period=today`). The server checks the caller, validates the input, calls the store's REST API with a signed request, and returns a short, model-friendly result. Today the only callers are you (MCP Inspector, `scripts\check-mcp-woocommerce.ps1`) through a port-forward; in Phase 3 the gateway calls it on behalf of users. Real captured request and response JSON is in [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md). Run it yourself: [run guide, section 8](run-guide.md#8-woocommerce-mcp-server-phase-2).
+**What it does.** An MCP client asks the WooCommerce MCP server to run a tool (for example `list_orders` with `period=today`). The server checks the caller, validates the input, calls the store's REST API with a signed request, and returns a short, model-friendly result. Today the only callers are you (MCP Inspector, `scripts\check-mcp-woocommerce.ps1`) through a port-forward; since Phase 3 the gateway calls it on behalf of users ([workflow 8](#8-mcp-tool-call-through-the-gateway)). Real captured request and response JSON is in [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md). Run it yourself: [run guide, section 8](run-guide.md#8-woocommerce-mcp-server-phase-2).
 
 **Actors.**
 
@@ -391,3 +391,298 @@ sequenceDiagram
 | Missing or invalid environment variable at start | `loadConfig` | Kubernetes restarts the container | Pod in `CrashLoopBackOff`; the log line lists variable names, never values | [Troubleshooting](troubleshooting.md#mcp-woocommerce-crashloopbackoff-with-an-environment-variable-message). |
 
 **Logs.** `kubectl -n mcp logs deploy/mcp-woocommerce` (one `request` line per call: method, path, status, duration; no token, no key, no signed URL). The store side: `kubectl -n store logs deploy/wordpress -c wordpress`.
+
+---
+
+## 7. Register an upstream and how it appears in `tools/list`
+
+**What it does.** An admin adds an MCP server (a name, a URL, optionally a credential). The gateway checks the URL is safe, stores the credential encrypted, connects, reads the server's tools, and from then on lists them with a `<slug>__` prefix. The three built-in servers (`woo`, `notes`, `utils`) are added the same way at the gateway's first start, from the Helm value `SEED_SERVERS`.
+
+**Actors.** The admin (PowerShell today, the dashboard in Phase 4), the `/api` router, the SSRF guard, the crypto module, Postgres, the upstream manager, the upstream MCP server, and later any MCP client.
+
+**Evidence.** The seeded path (`upsert` and the first check) ran on the cluster: all three servers `connected` with 6, 5 and 4 tools. The SSRF refusals were run live (metadata address, loopback, private address, `file:`, URL with a password), and a duplicate slug (`409`) and a bad slug (`400`). A **new** server was *not* created on the cluster, to keep the registry as it is; that path is covered by `apps/gateway/test/api/servers.test.ts` and `test/upstreams/manager.test.ts`.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Admin
+    participant API as gateway /api
+    participant S as SSRF guard
+    participant DB as Postgres
+    participant M as upstream manager
+    participant U as upstream MCP server
+    participant C as MCP client
+
+    A->>API: POST /api/servers with Origin and JSON
+    API->>API: CSRF guard, session, admin role, zod validation
+    API->>S: assertSafeUpstreamUrl(url)
+    alt URL refused
+        S-->>API: SsrfError with a reason
+        API-->>A: 400 SSRF_REJECTED
+    end
+    API->>DB: slug already used?
+    alt duplicate slug
+        API-->>A: 409 CONFLICT
+    end
+    API->>API: new row id, AES-256-GCM encrypt credential with the id as AAD
+    API->>DB: INSERT upstream_servers
+    API->>M: upsert(row)
+    M->>S: assertSafeUpstreamUrl again (DNS may have changed)
+    M->>U: connect, then tools/list (credential attached, 5 s limit, redirects not followed)
+    alt connect or list fails
+        M->>DB: last_status unreachable, last_error
+    else tools received
+        M->>M: name each tool slug__tool, skip invalid names, prefix descriptions
+        M->>DB: last_status connected, tool_count, last_checked_at
+    end
+    API-->>A: 201 ServerView (never the credential)
+    C->>API: POST /mcp tools/list
+    API->>M: listTools() from memory
+    API-->>C: tools of every enabled and connected server
+```
+
+**Reading the diagram.** Two checks protect the registry. The SSRF guard runs before anything is stored, so a forbidden URL never reaches the database; it runs again inside every health check and once more when the socket opens ([security.md](security.md#5-ssrf-guard)). The credential is encrypted with the new row's id as associated data, which is why the id is created before the insert. Registering succeeds (`201`) even when the server is unreachable: the response is then a `ServerView` with `status: unreachable` and the reason in `lastError`. The tool list is only ever read from memory, so adding a slow server does not slow any client's listing.
+
+**Naming at this step.** Each upstream tool becomes `<slug>__<tool>`. A tool whose prefixed name would not match `^[a-zA-Z0-9_-]{1,64}$` is skipped alone and shown in the view's `skippedTools`. Descriptions get `[<Server name>] ` in front. The slug cannot change later, because a rename would break every client that uses the old tool names ([ADR-006](decisions/ADR-006-tool-naming-scheme.md)).
+
+### Failure and recovery
+
+| What can fail | Detected by | Retried? | What the admin sees | Fix |
+|---|---|---|---|---|
+| Missing `Origin` or `Content-Type: application/json` | CSRF guard | no | `403 CSRF_REJECTED` | Send both headers ([run guide](run-guide.md#log-in-and-create-an-api-key-powershell-51)) |
+| Not logged in / not an admin | session and role checks | no | `401 UNAUTHENTICATED` / `403 FORBIDDEN` | Log in as an admin |
+| Bad slug, name, URL, auth fields | zod | no | `400 VALIDATION_FAILED` with `details.issues` | Fix the field named in the issue |
+| URL to a metadata, loopback or non-allowlisted private address, a `file:` URL, credentials in the URL | SSRF guard | no | `400 SSRF_REJECTED` with `details.reason` (live) | Use the Service DNS name, for example `http://mcp-notes.mcp.svc.cluster.local:3002/mcp` |
+| Slug already exists | unique check and constraint | no | `409 CONFLICT` (live) | Pick another slug |
+| Credential with CR/LF or non-ASCII characters | zod and the connection | no | `400 VALIDATION_FAILED`; the value is never echoed | Re-enter a plain header value |
+| Upstream down, wrong URL, wrong credential, redirect | the first check | next health check in 15 s | `201`, `status: unreachable`, `lastError` such as `connection refused` or `HTTP 401 from upstream` | Fix the URL or credential with `PATCH`, then `POST /api/servers/:id/refresh` |
+| Upstream tool name too long or with a dot | naming | no | The server is `connected`; the tool is missing and listed in `skippedTools` (tested) | Rename the tool in the upstream |
+
+Logs: `kubectl -n gateway logs deploy/gateway` shows `upstream status` lines when a server changes state and a `upstream tools skipped` warning for skipped tools.
+
+---
+
+## 8. MCP tool call through the gateway
+
+**What it does.** An MCP client with a personal API key calls `woo__list_orders` (or any aggregated tool) at `POST http://app.localhost/mcp`. The gateway authenticates the key against the database, finds the owning server, calls it with its own credential, records an audit row and returns the upstream's answer unchanged. This is spec §6.5 as built. Captured JSON for every step is in [learning/03-gateway.md](learning/03-gateway.md#5-captured-traffic).
+
+**Actors.** The MCP client; Traefik; the gateway (Host check, `/mcp` auth, the manager); Postgres; the upstream server; for `woo__*` calls, WordPress and MariaDB behind it ([workflow 6](#6-mcp-tool-call-to-the-store)).
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as MCP client
+    participant G as gateway
+    participant DB as Postgres
+    participant U as upstream (woo, notes or utils)
+
+    C->>G: POST /mcp, Authorization Bearer ugw_key, tools/call woo__list_orders
+    G->>G: Host header in MCP_ALLOWED_HOSTS?
+    G->>DB: look up SHA-256 of the key, join its user
+    alt no header
+        G-->>C: 401 -32001 (no audit row)
+    else unknown, revoked, or user disabled
+        G->>DB: INSERT audit auth_rejected
+        G-->>C: 401 -32001
+    end
+    G->>DB: UPDATE api_keys last_used_at
+    G->>G: split name at the first __ : slug woo, tool list_orders
+    alt unknown slug or tool
+        G->>DB: INSERT audit tool_call denied
+        G-->>C: result isError "Unknown tool: ..."
+    else server disabled or unreachable
+        G->>DB: INSERT audit tool_call denied
+        G-->>C: result isError "Server 'woo' is disabled or unreachable"
+    end
+    G->>U: tools/call list_orders with the upstream credential, deadline 20 s, never retried
+    alt answered
+        U-->>G: result (may carry isError)
+        G->>DB: INSERT audit tool_call success or error, duration
+        G-->>C: the result, unchanged
+    else deadline passed
+        G->>DB: INSERT audit tool_call timeout
+        G-->>C: result isError "did not respond within 20000ms" (server stays connected)
+    else connection-level failure
+        G->>G: mark server unreachable now, drop its tools
+        G->>DB: INSERT audit tool_call error
+        G-->>C: result isError "Upstream is unreachable: reason"
+    end
+```
+
+**Reading the diagram.** Authentication comes first and is checked against the database on every request, so revocation is immediate. Everything after it is routing by name: the first `__` ends the slug, so `utils__date_range` goes to `utils` as `date_range`. The gateway never validates arguments itself: the upstream's own schema does that, and its complaint comes back as an ordinary `isError` result. The client's key is never sent upstream; the upstream sees only its own credential. The audit row is written after the call (so it has the outcome and the duration) and holds the **upstream** tool name beside the server slug; arguments and results are never stored or logged. A call is never retried, because a retry could repeat a write such as `create_product`.
+
+**Verified live (2026-10-19).** `utils__calculate` (`2+3*4 = 14`), `woo__list_orders` with `period=today`, `notes__create_note` and `notes__search_notes` through the real endpoint; `notes__delete_note` for a missing note gave an `isError` result and an audit row with outcome `error`; an unknown tool gave `denied`; no header, an unknown key and a revoked key gave `401`. The timeout and connection-failure branches are covered by tests only (`manager.test.ts`).
+
+### Failure and recovery
+
+The complete list, with exact texts, is [error-handling.md](error-handling.md#1-mcp-the-aggregated-endpoint). In short:
+
+| What can fail | What the client sees | What to do |
+|---|---|---|
+| Missing, unknown or revoked key; disabled user | `401`, `-32001 Unauthorized` | Use a valid key (run guide); an admin can issue a new one |
+| `GET /mcp` | `405` | Use `POST` |
+| Unknown tool, or server disabled | `isError` result, audit `denied` | `tools/list` again; check the server in `GET /api/servers` |
+| Upstream error or bad arguments | The upstream's own `isError` text | Fix the arguments |
+| Upstream too slow | `isError` `Upstream '<slug>' did not respond within 20000ms` | Look before calling a write again; the call may have completed |
+| Upstream unreachable | `isError` `Upstream '<slug>' is unreachable: <reason>`; its tools leave the list | [Workflow 11](#11-upstream-goes-down-and-comes-back) |
+
+Logs: one `tool call` line per call (tool, server, outcome, duration, user) and the audit table ([run guide, section 10](run-guide.md#10-viewing-the-gateway-database-postgres)).
+
+---
+
+## 9. API key lifecycle (create, use, revoke)
+
+**What it does.** A logged-in user creates a personal key, uses it from an MCP client, and revokes it. Keys are per person, so every audit row says who acted.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User (PowerShell or dashboard later)
+    participant API as gateway /api
+    participant DB as Postgres
+    participant C as MCP client
+
+    U->>API: POST /api/auth/login (email, password)
+    API->>DB: user by email, argon2id verify, session row (hash of cookie)
+    API-->>U: Set-Cookie ugw_session (HttpOnly, 12 h)
+    U->>API: POST /api/keys {name} with Origin, JSON and the cookie
+    API->>API: generate ugw_ + 43 base62 characters
+    API->>DB: INSERT prefix (12 chars) and SHA-256 hash only
+    API-->>U: 201 {key, plaintext} (the only time the plaintext exists)
+    U->>C: paste the key into the client configuration
+    C->>API: POST /mcp with Bearer key
+    API->>DB: hash lookup, last_used_at updated
+    API-->>C: tool results
+    U->>API: DELETE /api/keys/:id with Origin and JSON (no body)
+    API->>DB: revoked_at = now
+    API-->>U: 204
+    C->>API: POST /mcp with the same key
+    API->>DB: revoked_at is set
+    API->>DB: INSERT audit auth_rejected, API key revoked
+    API-->>C: 401
+```
+
+**Reading the diagram.** The plaintext key exists only in the create response; the database holds a hash and a display prefix, so a lost key cannot be recovered, only replaced. There is no cache between the request and the database, so the 401 after the revoke is immediate (verified live). Disabling a user (`PATCH /api/users/:id {"disabled":true}`) deletes their sessions and revokes every key in one transaction; re-enabling the user does **not** bring the keys back (tested). An admin can also issue and revoke keys for another user (`/api/users/:id/keys`). Another user's key id answers `404`, as if it did not exist.
+
+**Verified live.** Login, create, list (the list shows the prefix, never the hash), use through the Inspector and `curl.exe`, revoke (`204`) and the following `401`, with the audit row `API key revoked`. A `DELETE` without `Content-Type` was refused with `403 CSRF_REJECTED`.
+
+### Failure and recovery
+
+| What can fail | What happens | Fix |
+|---|---|---|
+| `403 CSRF_REJECTED` on create or revoke | The two headers are required on every mutating call, even `DELETE` | Add `Origin` and `Content-Type: application/json` |
+| `401 UNAUTHENTICATED` | No cookie, expired session (12 h), or user disabled | Log in again |
+| `429 RATE_LIMITED` on login | 10 attempts per minute per IP and email | Wait for `Retry-After` (60 s) |
+| Key lost | It cannot be shown again | Revoke it and create a new one |
+| Key leaked | Anyone holding it can call every tool as you until it is revoked | Revoke it now; check `audit_logs` for its use |
+| `401` from `/mcp` with a key that used to work | Revoked, or the user was disabled | [Troubleshooting](troubleshooting.md#mcp-answers-401-on-the-gateway) |
+
+---
+
+## 10. Invite a teammate
+
+**What it does.** There is no email service, so an admin creates an invite and delivers the link themselves. The invitee opens the link, chooses a name and a password, and has an account. Decision: [ADR-013](decisions/ADR-013-invite-links.md).
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Admin
+    participant API as gateway /api
+    participant DB as Postgres
+    participant T as Teammate
+
+    A->>API: POST /api/invites {email, role} with Origin, JSON, admin cookie
+    API->>DB: a user with this email exists? (email trimmed and lowercased)
+    alt exists
+        API-->>A: 409 CONFLICT
+    end
+    API->>API: token = 32 random bytes, base64url
+    API->>DB: INSERT email, role, SHA-256(token), expires_at = now + 72 h
+    API-->>A: 201 {invite, link http://app.localhost/invite/token} (the only time the link exists)
+    A->>T: sends the link over a channel they trust
+    T->>API: GET /api/invites/token (public)
+    API->>DB: unused and not expired?
+    API-->>T: email, role, expiry (or 404 INVITE_INVALID)
+    T->>API: POST /api/invites/token/accept {name, password} with Origin and JSON
+    API->>API: cheap lookup first, then argon2id hash of the password
+    API->>DB: one atomic step: claim the invite and create the user
+    API->>DB: INSERT session
+    API-->>T: 201 {user} and Set-Cookie
+    Note over A,API: before the link is used the admin can DELETE /api/invites/id and it answers 404 from then on
+```
+
+**Reading the diagram.** The link is a bearer secret: until it is used or expires (72 h), whoever holds it can claim the account. Only the SHA-256 of the token is stored and the request log writes `/api/invites/:token` instead of the token. The accept step claims the invite and creates the user in one atomic operation, so two people racing on one link cannot both succeed. A second use, an expired link and a cancelled link all give the same `404 INVITE_INVALID`.
+
+**Verified live (2026-10-19).** Create (`201`, link shape `http://app.localhost/invite/<43 characters>`), list (the pending invite with `expired: False`), preview of the link (email, role, expiry), cancel (`204`) and the cancelled link answering `404 INVITE_INVALID`. The *accept* step was **not run on the cluster** (it would leave a test user behind); it is covered by `apps/gateway/test/api/invites.test.ts`, including single use, expiry and the conflict case. There is no web page for the link until Phase 4: the teammate can use `POST /api/invites/<token>/accept` directly, as in the [run guide](run-guide.md#invite-a-teammate).
+
+### Failure and recovery
+
+| What can fail | What happens | Fix |
+|---|---|---|
+| Email already has an account (any letter case) | `409 CONFLICT` at creation (tested) | Nothing to invite; reset is not built |
+| The link was lost | It cannot be shown again | Cancel it and create a new one |
+| The link expired (72 h), was used, or was cancelled | `404 INVITE_INVALID` | Create a new invite |
+| Password shorter than 10 characters | `400 VALIDATION_FAILED` and the invite stays usable | Choose a longer password |
+| Two people use one link at once | One wins, the other gets `404 INVITE_INVALID` (the claim is a conditional update inside a transaction; there is no automated concurrency test) | Create another invite |
+| The link is intercepted before use | The interceptor can claim the account | Send links over a trusted channel; the admin can see the pending invite and cancel it |
+
+---
+
+## 11. Upstream goes down and comes back
+
+**What it does.** When an MCP server stops answering, the gateway notices within seconds, removes its tools from the list, keeps everything else working, and restores the tools by itself when the server returns. This is the isolation the cached catalog ([ADR-014](decisions/ADR-014-cached-tool-catalog.md)) is for.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant K as Kubernetes
+    participant U as mcp-utilities
+    participant M as upstream manager
+    participant DB as Postgres
+    participant C as MCP client
+
+    Note over M,U: every 15 s per enabled server: tools/list with a 5 s limit
+    K->>U: pod stops (replicas 0)
+    M->>U: health check
+    U--xM: connection refused
+    M->>M: drop the client and the tools, state unreachable, lastError connection refused
+    M->>DB: last_status unreachable, tool_count 0
+    C->>M: tools/list (memory only)
+    M-->>C: 11 tools, no utils__ tools
+    C->>M: tools/call woo__ping
+    M-->>C: ok (other servers are not affected)
+    K->>U: pod starts (replicas 1)
+    M->>M: next check builds a fresh client
+    M->>U: connect, tools/list
+    U-->>M: 4 tools
+    M->>DB: last_status connected, tool_count 4
+    C->>M: tools/list
+    M-->>C: 15 tools again
+```
+
+**Reading the diagram.** `tools/list` never touches an upstream, so the dead server costs the other servers and the clients nothing. The tools disappear when the *next health check* (or a failing call) notices, so the list can be wrong for up to about one interval plus the timeout (20 s). After any failure the gateway throws away its client and builds a **fresh** one on the next check, so a restarted pod is never met by a stale socket. A call that finds the server dead returns `isError: "Upstream '<slug>' is unreachable: <reason>"` and marks it unreachable at once, without waiting for the tick.
+
+**Verified live (2026-10-19)**, `check-gateway.ps1 -Write -Isolation`: with `mcp-utilities` at 0 replicas the four `utils__` tools were gone after **12.2 s** (and after 4.1 s in a later run), 11 tools remained, `woo__ping` kept answering; after scaling back to 1 the `utils__` tools returned after **16.4 s** (both runs) and the list had 15 tools. The same check also confirms the revoked key gets 401 and the audit log lists the calls. The replica count is restored even on error (the Ctrl+C handler was not exercised).
+
+### Failure and recovery
+
+| `lastError` / symptom | Meaning | Fix |
+|---|---|---|
+| `connection refused` | Pod down, restarting, or wrong port | `kubectl -n mcp get pods`; wait for the next check or `POST /api/servers/:id/refresh` |
+| `DNS lookup failed` | The Service name does not exist | Check the URL and `kubectl -n mcp get svc` |
+| `timeout after 5000ms` | The pod is up but not answering | `kubectl -n mcp logs deploy/<name>` |
+| `HTTP 401 from upstream` | The stored credential no longer matches the upstream | Update it with `PATCH /api/servers/:id` (`credential`); see [troubleshooting](troubleshooting.md#a-server-shows-unreachable-in-the-gateway) |
+| `HTTP 302 from upstream (redirects are not followed)` | The URL redirects; the gateway never follows redirects | Use the final URL |
+| `blocked by SSRF guard (<reason>)` | The name now resolves to a forbidden address | Check what the name resolves to; the allow-list is `SSRF_ALLOWED_INTERNAL_HOSTS` |
+| Tools never return after the pod is back | A check is still running or the server is `disabled` | Wait 20 s; `GET /api/servers`; check `enabled` |
+| The gateway itself is down | `/mcp` and `/api` fail; Kubernetes restarts the pod | [Troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts) |

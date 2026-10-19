@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. **Implemented in Phase 3** (2026-10-19).
 
 ## Date
 
@@ -34,7 +34,15 @@ The gateway exposes tools from several upstream MCP servers through one `/mcp` e
 - The slug length cap (at most 16 characters) leaves room for the tool name within 64 characters, but a very long upstream tool name can still be skipped.
 - Because slugs are immutable, fixing a bad slug means deleting and re-registering the server.
 - The prefix costs a few tokens per tool in the model's context, relevant to the free-tier token limits (ADR-011).
-- Needs unit tests for the scheme; implemented in a later phase.
+- Unit-tested and exercised live (see "As built").
+
+## As built (Phase 3)
+
+- `apps/gateway/src/upstreams/naming.ts`: `SLUG_RE`, `TOOL_NAME_RE`, `toGatewayToolName` (returns null when the result breaks the 64-character rule) and `parseGatewayToolName` (splits on the **first** `__`; the tool part may itself contain `__`).
+- A tool whose prefixed name is invalid is skipped **on its own**. The manager logs a warning and lists its upstream name in `skippedTools`, which the API returns on every `ServerView` (`GET /api/servers`). The server's other tools are still served. Pinned by the manager test "skips only the tool whose prefixed name is invalid".
+- Slugs are immutable in the API: a `PATCH` containing `slug` is refused with `400 VALIDATION_FAILED` ("slug cannot be changed"). A slug that does not match `^[a-z][a-z0-9-]{1,15}$` is refused at creation; a duplicate is `409 CONFLICT`.
+- The description prefix is `[<Server name>] `; with no upstream description the prefix stands alone. The input schema and the other tool metadata are passed through unchanged.
+- Verified live (2026-10-19): the three `ping` tools coexist as `notes__ping`, `utils__ping` and `woo__ping`, and the 15 aggregated names match the pattern ([learning/03-gateway.md](../learning/03-gateway.md#51-toolslist-trimmed-from-15-tools-to-three)). The "warning on the server's detail page" is the `skippedTools` field today; the page itself is Phase 4.
 
 ## Revisit if
 

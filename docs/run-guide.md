@@ -29,11 +29,12 @@ All commands are run from the repository root in **Windows PowerShell 5.1**. The
 6. [Using the store](#6-using-the-store)
 7. [Viewing the store database (MariaDB)](#7-viewing-the-store-database-mariadb)
 8. [WooCommerce MCP server (Phase 2)](#8-woocommerce-mcp-server-phase-2)
-9. [The gateway database (Postgres)](#9-the-gateway-database-postgres-planned--phase-3)
-10. [Each part of the project](#10-each-part-of-the-project)
-11. [Health checks and logs](#11-health-checks-and-logs)
-12. [Resetting](#12-resetting)
-13. [Troubleshooting pointers](#13-troubleshooting-pointers)
+9. [The gateway (Phase 3)](#9-the-gateway-phase-3)
+10. [Viewing the gateway database (Postgres)](#10-viewing-the-gateway-database-postgres)
+11. [Each part of the project](#11-each-part-of-the-project)
+12. [Health checks and logs](#12-health-checks-and-logs)
+13. [Resetting](#13-resetting)
+14. [Troubleshooting pointers](#14-troubleshooting-pointers)
 
 ---
 
@@ -50,16 +51,19 @@ flowchart TB
             P1["pod wordpress"]
             P2["pod mariadb-0"]
             P3["pod store-setup (Job, finished)"]
-            P5["pod mcp-woocommerce (namespace mcp, internal only)"]
+            P5["pods mcp-woocommerce, mcp-notes, mcp-utilities (namespace mcp, internal only)"]
+            P6["pods gateway and postgres-0 (namespace gateway)"]
             P4["Traefik, CoreDNS, ... (kube-system)"]
         end
     end
     W --> D --> K3D
     LB --> P4 --> P1 --> P2
     P5 -. "REST calls inside the cluster" .-> P1
+    LB --> P4 --> P6
+    P6 -. "MCP calls inside the cluster" .-> P5
 ```
 
-Reading it from the outside in: your browser talks to port 80 on Windows. Docker Desktop forwards that to the `k3d-urumi-serverlb` container, which hands it to Traefik (the ingress controller) inside the node, which routes `store.localhost` to the WordPress pod. WordPress stores everything in MariaDB. The MCP server pod (section 8) has no route in from outside; it only calls WordPress from inside the cluster, which the dotted arrow shows.
+Reading it from the outside in: your browser talks to port 80 on Windows. Docker Desktop forwards that to the `k3d-urumi-serverlb` container, which hands it to Traefik (the ingress controller) inside the node, which routes `store.localhost` to the WordPress pod. WordPress stores everything in MariaDB. The MCP server pods (section 8) have no route in from outside; the WooCommerce one only calls WordPress from inside the cluster, which the dotted arrow shows. `app.localhost` goes the same way to the gateway pod (section 9), which calls the MCP servers and its own Postgres from inside the cluster.
 
 **Why Docker Desktop shows only 3 containers (verified 2026-10-18).** They are:
 
@@ -119,6 +123,9 @@ It also reads the Helm release state, because `helm status` succeeds even for a 
   My account   : http://store.localhost/my-account/   (customers: register, log in, see their orders)
   WP admin     : http://store.localhost/wp-admin/     (user: admin)
   MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1
+  Gateway API  : http://app.localhost/api
+  MCP endpoint : http://app.localhost/mcp   (needs a personal API key)
+  Gateway admin: admin@example.com - copy the password with: powershell -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password
 
   Admin password - run this to copy it to the clipboard (it is never printed here):
     powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
@@ -127,6 +134,8 @@ It also reads the Helm release state, because `helm status` succeeds even for a 
   Full guide: docs/run-guide.md
 ===========================================================
 ```
+
+The three `Gateway` lines appear only when the gateway is enabled (`gateway.enabled`), and the admin email is the release's `gateway.bootstrapAdminEmail`, both read from the installed release's values.
 
 Options:
 
@@ -139,7 +148,7 @@ Full form for the options: `powershell -NoProfile -ExecutionPolicy Bypass -File 
 
 ### Build the program images (`build-images.ps1`)
 
-Our own programs (today only the MCP server) run from container images that you build on your laptop; there is no registry. `up.ps1` runs this for you whenever it deploys. Run it yourself only if you want to rebuild without a full redeploy:
+Our own programs (the three MCP servers and the gateway) run from container images that you build on your laptop; there is no registry. `up.ps1` runs this for you whenever it deploys. Run it yourself only if you want to rebuild without a full redeploy:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1
@@ -183,9 +192,10 @@ With the default settings (host port 80, **verified**):
 | My account | <http://store.localhost/my-account/> | Customers register and log in here |
 | My orders | <http://store.localhost/my-account/orders/> | A logged-in customer's order history |
 | WordPress admin | <http://store.localhost/wp-admin/> | User `admin`, password: see [section 5](#5-passwords-and-secrets) |
-| Dashboard | **(planned — Phase 4)** | Not built yet |
+| Gateway REST API | <http://app.localhost/api> | Verified 2026-10-19; see [section 9](#9-the-gateway-phase-3) |
+| Gateway MCP endpoint | <http://app.localhost/mcp> | Needs a personal API key (section 9); verified |
+| Dashboard | **(planned — Phase 4)** | Not built yet; `http://app.localhost/` has nothing behind it |
 | WooCommerce MCP server | **internal only** | No URL on your machine. Reach it with a port-forward, see [section 8](#8-woocommerce-mcp-server-phase-2) |
-| Gateway `/mcp` endpoint | **(planned — Phase 3/4)** | Not built yet |
 
 If you moved the store to port 8081 (see [deployment.md](deployment.md)), add `:8081` to every URL; `up.ps1` should print the right ones (expected; the 8081 case was not re-tested for this script).
 
@@ -217,7 +227,17 @@ In namespace `mcp` (verified 2026-10-19):
 | Secret | Keys | Used by |
 |---|---|---|
 | `store-woo-api` | `consumer-key`, `consumer-secret` | Copy of the store's key; read by the MCP server pod. |
-| `mcp-woocommerce-token` | `token` | The bearer token the MCP server requires. Copy it to your clipboard with `scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token` (add `-Show` to also print it). Phase 3 will copy it into namespace `gateway`. |
+| `mcp-woocommerce-token` | `token` | The bearer token the MCP server requires. Copy it to your clipboard with `scripts\get-secret.ps1 -Namespace mcp -Name mcp-woocommerce-token -Key token` (add `-Show` to also print it). A copy lives in namespace `gateway` (it is only used there to seed the server registry). |
+| `mcp-notes-token` | `token` | The bearer token `mcp-notes` requires (48 characters, generated at install). |
+| `mcp-utilities-key` | `key` | The key `mcp-utilities` requires in the header `X-Utilities-Key` (48 characters, generated at install). |
+
+In namespace `gateway` (verified 2026-10-19 by the pods running and the checks passing; values are never shown):
+
+| Secret | Keys | Used by |
+|---|---|---|
+| `gateway-bootstrap` | `email`, `password` | The first admin account, created on first start. Copy the password with `scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password`. |
+| `gateway-secrets` | `postgres-password`, `encryption-key`, `internal-token-secret` | Postgres; the AES key for stored upstream credentials (32 random bytes, base64); the signing secret of the internal chat token. `postgres-password` is for the database (section 10). Do not lose `encryption-key`: stored credentials cannot be read without it. |
+| `mcp-woocommerce-token`, `mcp-notes-token`, `mcp-utilities-key` | as in `mcp` | Byte-identical copies of the `mcp` Secrets, used only to **seed** the server registry on first start. After that the encrypted copy in the database is the source of truth, so editing a credential in the gateway does not touch these Secrets. Each built-in server is seeded once: a deleted one is not re-created ([re-add it](#delete-and-re-add-a-built-in-server)). |
 
 `get-secret.ps1` works for any Secret value: `-Namespace`, `-Name` and `-Key` are required, the value goes to the clipboard, and it is printed only with `-Show`. The same clipboard caveat as above applies.
 
@@ -375,7 +395,7 @@ HPOS ("high-performance order storage") is **off** (`woocommerce_custom_orders_t
 
 ### Why it is internal-only
 
-It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. In Phase 3 the **gateway** will be the single public door: it checks who the caller is, then calls this server with the token. NetworkPolicies that restrict which pods may reach it arrive in Phase 5 (**not built yet**; today any pod in the cluster can reach the Service, but still needs the token).
+It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server; since Phase 3 the list also shows the `gateway` Ingress, which routes only `/api` and `/mcp` on `app.localhost` to the gateway). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. The **gateway** ([section 9](#9-the-gateway-phase-3)) is the single public door: it checks who the caller is, then calls this server with the token. NetworkPolicies that restrict which pods may reach it arrive in Phase 5 (**not built yet**; today any pod in the cluster can reach the Service, but still needs the token).
 
 ### How it starts
 
@@ -469,38 +489,386 @@ Verified 2026-10-19 with SQL against the live database (section 7): one key row,
 
 ### What is not possible yet
 
-- **No external access.** Nothing outside the cluster can call this server. Claude Code, Cursor and the dashboard connect through the **gateway** (Phase 3), which is not built.
-- **No per-user identity.** There is one shared bearer token for the server; user accounts, API keys and the audit log arrive with the gateway.
+- **No direct external access.** Nothing outside the cluster can call this server. Clients connect through the **gateway** ([section 9](#9-the-gateway-phase-3)); the dashboard that will sit in front of it is Phase 4.
+- **No per-user identity at the server itself.** It has one shared bearer token; per-user keys and the audit log are the gateway's job (built in Phase 3).
 - **No NetworkPolicies** yet (Phase 5).
 
-## 9. The gateway database (Postgres) (planned — Phase 3)
+## 9. The gateway (Phase 3)
 
-Not built yet; there are no commands to run. The gateway will have its **own** Postgres database holding gateway users, hashed API keys, the MCP-server registry and the audit log. It is separate from MariaDB on purpose:
+### What it is, and what is not built yet
 
-- **Ownership:** MariaDB belongs to WooCommerce, which owns its schema and upgrades. The gateway's data must not live in, or depend on, another application's tables.
-- **Security:** gateway API-key hashes and the audit log are more sensitive than shop data; a separate database means separate credentials and a smaller blast radius if the store is compromised.
-- **Independence:** each side can be upgraded, backed up, restored or replaced without touching the other.
-- **Failure isolation:** a broken or overloaded store database does not take the gateway down, and the other way around.
+The gateway is **one MCP endpoint** in front of the three MCP servers (WooCommerce, Notes, Utilities, 15 tools in total), with its own users, personal API keys, invite links, server registry and audit log in its own Postgres database. The idea and real captured traffic are in [learning/03-gateway.md](learning/03-gateway.md); the design is in [system-design.md](system-design.md).
 
-Exact steps arrive in Phase 3.
+| What | URL | Notes |
+|---|---|---|
+| Gateway REST API | <http://app.localhost/api> | Session cookie; used from PowerShell below (verified 2026-10-19) |
+| MCP endpoint | <http://app.localhost/mcp> | Needs a personal API key; `GET` answers 405 (verified) |
+| Health | `GET /healthz`, `GET /readyz` | Reachable inside the cluster; the Ingress routes only `/api` and `/mcp` |
+| Dashboard (web page) | **(planned — Phase 4)** | **Not built.** `http://app.localhost/` has nothing behind it yet |
+| Chat agent | **(planned — Phase 4)** | **Not built.** There is no `POST /api/chat` |
 
-## 10. Each part of the project
+Everything you do today, you do with PowerShell, MCP Inspector or an MCP client. `app.localhost` resolves to your machine in browsers and `curl.exe`; Node tools need the hosts entry from `scripts\setup-hosts.ps1` (section 2, step 7).
+
+### Is it running?
+
+```powershell
+kubectl -n gateway get pods,svc,ingress      # postgres-0 and gateway-... are 1/1 Running; the Ingress host is app.localhost
+kubectl -n mcp get pods                      # mcp-notes, mcp-utilities and mcp-woocommerce are 1/1 Running
+kubectl -n gateway logs deploy/gateway       # JSON log lines; the first ones show "gateway started" with "connectedTools":15
+```
+
+Verified 2026-10-19: `postgres-0` and the gateway pod `1/1 Running` with 0 restarts, Service `gateway` (ClusterIP, 3000/TCP), headless Service `postgres` (5432/TCP), Ingress `gateway` on `app.localhost` port 80, and three pods in `mcp`. The log shows seed slugs, counts and ports; it never contains a key, password or token.
+
+### The admin account and its password
+
+The first admin is created automatically the first time the gateway starts with an empty database. Its email is `admin@example.com` (Helm value `gateway.bootstrapAdminEmail`) and its password is generated and stored in the Secret `gateway-bootstrap`. Copy the password to the clipboard (it is not printed):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password
+```
+
+Add `-Show` to also print it. The same clipboard caveat as in section 5 applies. The dashboard login page will use this account in Phase 4.
+
+### Log in and create an API key (PowerShell 5.1)
+
+Rules that make this work (each one was hit while testing; see [error-handling.md](error-handling.md#2-api-the-rest-api)):
+
+- **Every `POST`, `PATCH`, `PUT` and `DELETE` needs both `Content-Type: application/json` and `Origin: http://app.localhost`.** That includes `DELETE` with no body. Without them the answer is `403 CSRF_REJECTED`. In PowerShell: `-Headers @{ Origin = 'http://app.localhost' } -ContentType 'application/json'` on every mutating call.
+- Pass `-WebSession $s` on every call after the login so the session cookie is sent.
+- **Assign list responses to a variable before piping them** (`$keys = Invoke-RestMethod ...` then `$keys | Select-Object ...`). In Windows PowerShell 5.1 piping `Invoke-RestMethod` straight into `Select-Object`, `Where-Object` or `Format-Table` can show an empty row instead of the items (seen with `/api/keys`, `/api/servers` and `/api/users`).
+
+Paste these blocks in one PowerShell window, in order (all verified 2026-10-19 on PowerShell 5.1.26100). The first block reads the admin credentials from the Secret into variables and prints only `True` and a length:
+
+```powershell
+$base = 'http://app.localhost'
+$h = @{ Origin = 'http://app.localhost' }
+$email = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n gateway get secret gateway-bootstrap -o 'jsonpath={.data.email}')))
+$pw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n gateway get secret gateway-bootstrap -o 'jsonpath={.data.password}')))
+"credentials loaded: $([bool]$email -and [bool]$pw), password length $($pw.Length)"
+```
+
+Log in. The cookie is kept in `$s`; the password variable is cleared:
+
+```powershell
+$login = Invoke-RestMethod -Method Post -Uri "$base/api/auth/login" -Headers $h -ContentType 'application/json' -Body (@{ email = $email; password = $pw } | ConvertTo-Json) -SessionVariable s
+$pw = $null
+"logged in as $($login.user.email), role $($login.user.role)"
+```
+
+Create a personal key. **The plaintext is shown only in this response; it is never stored.** Keep it in an environment variable of this window and print only its length:
+
+```powershell
+$new = Invoke-RestMethod -Method Post -Uri "$base/api/keys" -WebSession $s -Headers $h -ContentType 'application/json' -Body (@{ name = 'my laptop' } | ConvertTo-Json)
+$env:UGW_KEY = $new.plaintext
+"key id $($new.key.id), key length $($env:UGW_KEY.Length), starts with ugw_: $($env:UGW_KEY.StartsWith('ugw_'))"
+```
+
+A key is `ugw_` followed by 43 letters and digits (47 characters). If you need to paste it elsewhere: `Set-Clipboard $env:UGW_KEY` (the clipboard caveat from section 5 applies). Lost keys cannot be shown again; revoke and make a new one.
+
+List your keys (the list shows a 12-character prefix, never the key or its hash). Do **not** revoke the key yet: the Inspector, `curl.exe` and invite examples below use it. The revoke command is in [When you are done: revoke the key](#when-you-are-done-revoke-the-key), after those examples:
+
+```powershell
+$keys = Invoke-RestMethod -Uri "$base/api/keys" -WebSession $s
+$keys | Select-Object name, prefix, createdAt, lastUsedAt, revokedAt | Format-Table -AutoSize
+```
+
+Revocation (later, see below) is immediate: the very next `/mcp` request with that key gets `401` (verified; the gateway has no key cache).
+
+If you forget the headers you see, for example (verified):
+
+```text
+{"error":{"code":"CSRF_REJECTED","message":"Request rejected by CSRF protection","requestId":"..."}}
+```
+
+The **11th** login attempt within a minute for the same email from the same address gets `429 RATE_LIMITED` with a `Retry-After` header (seconds left in the one-minute window, 1-60; it was 60 in the verified run). Wait that long.
+
+### Other API calls worth knowing
+
+```powershell
+$servers = Invoke-RestMethod -Uri "$base/api/servers" -WebSession $s
+$servers | Select-Object slug, status, toolCount, hasCredential, lastError | Format-Table -AutoSize    # 3 servers, connected, 5 / 4 / 6 tools
+(Invoke-RestMethod -Uri "$base/api/audit?limit=5" -WebSession $s).items | Select-Object id, event, serverSlug, toolName, outcome | Format-Table -AutoSize
+(Invoke-RestMethod -Uri "$base/api/audit?serverSlug=utils&limit=2" -WebSession $s).items | Format-Table -AutoSize   # filters: userId, serverSlug, toolName, outcome, from, to, limit, cursor
+$me = Invoke-RestMethod -Uri "$base/api/auth/me" -WebSession $s; $me.user | Format-List
+```
+
+Admin-only changes (register, edit, disable, delete servers; users; invites) use the same pattern with the CSRF headers. The full list of endpoints is in [system-design.md](system-design.md#the-rest-api-api). A server URL that points at a forbidden address is refused with `400 SSRF_REJECTED` and nothing is stored (verified with the metadata address, loopback, a private address, `file:` and a URL with a password). Changing a server's URL to another scheme, host or port needs the credential again in the same `PATCH` (`credential`), or `clearCredential: true`; otherwise the answer is `400 VALIDATION_FAILED`.
+
+#### Delete and re-add a built-in server
+
+The three built-in servers (`woo`, `notes`, `utils`) are seeded from the Helm values only once, ever. **A deleted built-in server stays deleted**, also across gateway restarts and `helm upgrade`; re-add it with `POST /api/servers`. To take a server out only for a while, disable it instead (`PATCH` with `{"enabled": false}`).
+
+Delete (after the login above):
+
+```powershell
+$servers = Invoke-RestMethod -Uri "$base/api/servers" -WebSession $s
+$utils = $servers | Where-Object { $_.slug -eq 'utils' }
+Invoke-WebRequest -Method Delete -Uri "$base/api/servers/$($utils.id)" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing | Select-Object -ExpandProperty StatusCode   # 204
+```
+
+Re-add it with the same URL, auth type and header name, and the credential read from its Secret into a variable (never printed):
+
+```powershell
+$cred = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((kubectl -n gateway get secret mcp-utilities-key -o 'jsonpath={.data.key}')))
+$body = @{ slug = 'utils'; name = 'Utilities'; url = 'http://mcp-utilities.mcp.svc.cluster.local:3003/mcp'; authType = 'header'; authHeaderName = 'X-Utilities-Key'; credential = $cred } | ConvertTo-Json
+$cred = $null
+$added = Invoke-RestMethod -Method Post -Uri "$base/api/servers" -WebSession $s -Headers $h -ContentType 'application/json' -Body $body
+$body = $null
+"$($added.slug): $($added.status), $($added.toolCount) tools, hasCredential $($added.hasCredential)"
+```
+
+The seeds of the other two: `woo` is `bearer` at `http://mcp-woocommerce.mcp.svc.cluster.local:3001/mcp` (Secret `mcp-woocommerce-token`, key `token`), `notes` is `bearer` at `http://mcp-notes.mcp.svc.cluster.local:3002/mcp` (Secret `mcp-notes-token`, key `token`). Which slugs have been seeded: query 9 below.
+
+### Call the gateway with MCP Inspector (command line)
+
+Verified 2026-10-19 in Windows PowerShell 5.1 with a key from the steps above in `$env:UGW_KEY` (needs Node; the first run downloads the Inspector through `npx`):
+
+```powershell
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer $env:UGW_KEY" --method tools/list
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer $env:UGW_KEY" --method tools/call --tool-name utils__calculate --tool-arg expression=6*7
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer $env:UGW_KEY" --method tools/call --tool-name woo__list_orders --tool-arg period=today
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer $env:UGW_KEY" --method tools/call --tool-name notes__create_note --tool-arg title=Hello --tool-arg content=World
+```
+
+The first lists 15 tools named `notes__...`, `utils__...` and `woo__...`; the second returns `6*7 = 42`; the third returns the orders of today (the result's `_meta` says `mcp-woocommerce`, because the gateway passes the upstream's answer through unchanged). The `notes__create_note` line saved a note (`Saved note 5` in the verified run; the note lives in memory only, remove it with `notes__delete_note` and its id). The same notes about the libuv assertion at the end and about the token being visible on the process command line apply as in section 8. The Inspector's web page (`npx -y @modelcontextprotocol/inspector@2.11.0`, transport **Streamable HTTP**, URL `http://app.localhost/mcp`, header `Authorization: Bearer <your key>`) should work the same way (**not tested**).
+
+### Call the gateway with curl (raw HTTP)
+
+Verified 2026-10-19 with `curl.exe` (not the PowerShell alias `curl`). PowerShell 5.1 strips the double quotes out of a JSON string passed on the command line, so write the body to a file and send the file:
+
+```powershell
+'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"utils__calculate","arguments":{"expression":"6*7"}}}' | Set-Content -Encoding ascii "$env:TEMP\mcp-body.json"
+curl.exe -s -X POST http://app.localhost/mcp -H "Authorization: Bearer $env:UGW_KEY" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "Mcp-Method: tools/call" -H "Mcp-Name: utils__calculate" --data-binary "@$env:TEMP\mcp-body.json"
+Remove-Item "$env:TEMP\mcp-body.json"
+```
+
+Without an `MCP-Protocol-Version` header the answer arrives as one server-sent event (`event: message` then `data: {...}`); with `MCP-Protocol-Version: 2026-07-28` and a `_meta` block it is plain JSON, as in the captured examples in [learning/03-gateway.md](learning/03-gateway.md#5-captured-traffic). Without the `Authorization` header you get `401`.
+
+### Connect Claude Code (for you to try)
+
+**For you to try; I did not run it**, because `claude mcp add` changes your Claude Code configuration. The syntax is the one in the Claude Code documentation for remote HTTP servers (checked against the docs on 2026-10-19), with your own key in place of the placeholder:
+
+```powershell
+claude mcp add --transport http urumi-gateway http://app.localhost/mcp --header "Authorization: Bearer <your key>"
+claude mcp list
+```
+
+Inside Claude Code, `/mcp` shows the server and its tools. Expected (not tested): the 15 tools appear as `notes__...`, `utils__...`, `woo__...`, and asking "what are today's orders?" calls `woo__list_orders`. The command saves the key in your Claude Code configuration in plain text. If it fails to connect, `claude mcp remove urumi-gateway`, then check the key with the Inspector line above. `app.localhost` must resolve from the Claude Code process (it should, like in a browser; if not, run `scripts\setup-hosts.ps1`).
+
+### Connect Cursor (not tested)
+
+**Not tested.** Cursor reads `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (all projects). The expected form for a remote server (written from memory of Cursor's format, not checked against its current documentation) is:
+
+```json
+{
+  "mcpServers": {
+    "urumi-gateway": {
+      "url": "http://app.localhost/mcp",
+      "headers": { "Authorization": "Bearer <your key>" }
+    }
+  }
+}
+```
+
+Do not commit that file with a real key in it.
+
+### Invite a teammate
+
+An admin creates an invite; the response contains the link **once** (the gateway keeps only a hash of the token; the link is also not logged). Verified 2026-10-19 (the link is shown here with the token hidden):
+
+```powershell
+$inv = Invoke-RestMethod -Method Post -Uri "$base/api/invites" -WebSession $s -Headers $h -ContentType 'application/json' -Body (@{ email = 'teammate@example.com'; role = 'member' } | ConvertTo-Json)
+"invite id $($inv.invite.id), expires $($inv.invite.expiresAt)"
+"link shape: $($inv.link -replace '/invite/.*','/invite/<token>')"      # http://app.localhost/invite/<token>
+Set-Clipboard $inv.link                                                  # send it to your teammate yourself; it cannot be shown again
+$pending = Invoke-RestMethod -Uri "$base/api/invites" -WebSession $s
+$pending | Select-Object email, role, expiresAt, expired | Format-Table -AutoSize
+```
+
+- The link is valid for **72 hours** and works **once**. Until it is used it is a password for that account: send it over a channel you trust.
+- Anyone can preview a link without logging in: `Invoke-RestMethod -Uri ($inv.link.Replace('/invite/','/api/invites/'))` returns the email, role and expiry (verified).
+- Cancel a link: `Invoke-WebRequest -Method Delete -Uri "$base/api/invites/$($inv.invite.id)" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing` (204; the link then answers `404 INVITE_INVALID`, verified).
+- The invitee accepts with `POST /api/invites/<token>/accept` and a body `{"name":"...","password":"..."}` (10-200 characters); that creates the account and logs them in. There is no web page for it until Phase 4. The accept call is covered by automated tests (`apps/gateway/test/api/invites.test.ts`) but was **not run on the cluster**, to avoid leaving a test user behind.
+- The invites list has no creation time (the table has no `created_at`); it is ordered by expiry, newest first.
+- Roles: `member` can use `/mcp`, manage their own keys, see servers and their own audit rows; `admin` can do everything ([security.md](security.md#7-what-a-member-can-and-cannot-do)).
+
+### When you are done: revoke the key
+
+Run this only after the Inspector, `curl.exe` and invite examples above. It revokes the key from the steps above (`204`), clears the environment variable and logs out; afterwards the same key gets `401` from `/mcp` (verified):
+
+```powershell
+Invoke-WebRequest -Method Delete -Uri "$base/api/keys/$($new.key.id)" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing | Select-Object -ExpandProperty StatusCode   # 204
+Remove-Item Env:UGW_KEY
+Invoke-WebRequest -Method Post -Uri "$base/api/auth/logout" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing | Select-Object -ExpandProperty StatusCode   # 204
+```
+
+### The end-to-end and isolation checks
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1                       # read-only calls
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1 -Write                # also creates and searches a note
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1 -Write -Isolation     # also scales mcp-utilities to 0 and back
+```
+
+It needs Node and `npm ci` (section 2) and `app.localhost` resolving for Node. It reads the admin credentials from the Secret, logs in, makes a temporary key named `gateway-smoke <time>`, lists the tools, calls all three upstreams, revokes the key, checks the revoked key gets 401, reads the audit log, and logs out (also when it fails or is interrupted), so a run leaves no session behind. It never prints the password, the cookie or the key. Real output of the `-Write` run on 2026-10-19:
+
+```text
+login: ok (role=admin)
+api key: created (not printed)
+tools (15): woo=6 notes=5 utils=4
+utils__ping: ok
+notes__ping: ok
+woo__ping: ok
+woo__list_orders today: 1 order(s)
+utils__calculate 2+3*4: 14
+notes__create_note: id=4
+notes__search_notes: 4 found
+revoked key: /mcp answers 401 (-32001)
+audit: 20 row(s), 19 by the admin; servers=[notes,utils,woo]
+  ...
+Gateway smoke test passed.
+Gateway works end to end (login, API key, 15 aggregated tools, audit log).
+```
+
+The `-Isolation` run scales the `mcp-utilities` Deployment to 0 replicas, waits until its four `utils__` tools disappear from the list, checks that `woo__ping` still works, scales it back to 1 and waits until all 15 tools return. Verified 2026-10-19: the `utils__` tools were gone after 12.2 s in one run and 4.1 s in another (11 tools left), and back after 16.4 s both times. The script restores the replica count even on error. If you press Ctrl+C at the wrong moment and `mcp-utilities` stays at 0, run `kubectl -n mcp scale deploy/mcp-utilities --replicas=1` (a later `-Isolation` run also heals it; the Ctrl+C handler itself was not exercised).
+
+Notes are kept in memory by `mcp-notes`: a `-Write` run leaves a test note behind, and a restart of that pod empties them.
+
+### Logs and health
+
+```powershell
+kubectl -n gateway logs deploy/gateway --tail=20     # one "request" line per HTTP call, one "tool call" line per tool call, "upstream status" lines when a server changes state
+kubectl -n gateway logs postgres-0 --tail=20
+kubectl -n gateway get pods
+```
+
+Invite links appear in the log only as `/api/invites/:token`. Everything about failures is in [error-handling.md](error-handling.md); common problems are in [troubleshooting.md](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts).
+
+## 10. Viewing the gateway database (Postgres)
+
+The gateway keeps its data in its **own** Postgres 17 database, separate from the store's MariaDB (separate ownership, credentials, upgrades and failure domain). It lives in namespace `gateway`, pod `postgres-0`, database `gateway`, user `gateway`, on a persistent volume (verified: deleting the pod kept the data).
+
+**Read-only browsing is fine. Do not edit these tables by hand**: the gateway enforces its own rules (single-use invites, revoking keys when a user is disabled, encrypting credentials). Use the API.
+
+Two things you will never need and should never print: `api_keys.key_hash` (not usable as a key; it only lets the gateway recognise a key) and `upstream_servers.credential_enc` (the encrypted upstream credential, useless without the encryption key). The queries below select neither. `users.password_hash` is an argon2id hash; leave it out too.
+
+### (a) Quick SQL in the terminal
+
+The pod's `psql` already trusts local connections, so no password is needed:
+
+```powershell
+kubectl -n gateway exec -it postgres-0 -- psql -U gateway gateway
+```
+
+Type `\q` to leave. `\dt` lists the tables, `\d users` describes one, `\x` toggles a vertical display. `kubectl exec -it` needs a real terminal: it prints `Unable to use a TTY - input is not a terminal or the right kind of file` from tools that have none, such as a VS Code "Run" button or an automated runner. The interactive form itself was **not run** here for that reason; the same `psql` with SQL piped in was verified (below).
+
+A single query without opening the client. Pipe the SQL in, which sidesteps PowerShell quoting (verified 2026-10-19 in PowerShell 5.1):
+
+```powershell
+"SELECT slug, last_status, tool_count FROM upstream_servers ORDER BY slug;" | kubectl -n gateway exec -i postgres-0 -- psql -U gateway gateway
+```
+
+For several lines use a here-string (`@'` ... `'@`, with `'@` at the start of its own line). `psql -c "..."` also worked in a test with a simple query and single quotes inside, but double quotes inside the SQL would be stripped by PowerShell 5.1, so prefer the pipe.
+
+### Useful read-only queries
+
+All run against the live database on 2026-10-19 and worked. Pipe one at a time as above, or paste them inside the interactive client.
+
+```sql
+-- 1. Users (no password hash)
+SELECT id, email, name, role, disabled_at, created_at FROM users ORDER BY created_at;
+
+-- 2. API keys: who owns them, the 12-character prefix, last use, revocation (no key_hash)
+SELECT k.id, u.email AS owner, k.name, k.prefix, k.last_used_at, k.revoked_at
+FROM api_keys k JOIN users u ON u.id = k.user_id
+ORDER BY k.created_at DESC LIMIT 10;
+
+-- 3. Servers: status, last error, tool count (no credential)
+SELECT slug, name, enabled, last_status, last_error, tool_count, last_checked_at FROM upstream_servers ORDER BY slug;
+
+-- 4. Does each server have a stored credential? (a yes/no and the encrypted size, never the bytes)
+SELECT slug, auth_type, auth_header_name, credential_enc IS NOT NULL AS has_credential, length(credential_enc) AS enc_bytes FROM upstream_servers;
+
+-- 5. The latest audit rows
+SELECT id, event, source, server_slug, tool_name, outcome, duration_ms, left(error_message, 40) AS error, started_at
+FROM audit_logs ORDER BY id DESC LIMIT 10;
+
+-- 6. Audit summary by server and outcome
+SELECT server_slug, outcome, count(*) FROM audit_logs GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- 7. Pending invites (no token hash; the table has no created_at, so order by expiry)
+SELECT id, email, role, expires_at FROM invites WHERE accepted_at IS NULL ORDER BY expires_at DESC LIMIT 10;
+
+-- 8. Live sessions
+SELECT count(*) AS live_sessions FROM sessions WHERE expires_at > now();
+
+-- 9. Built-in servers seeded so far (a slug here is never seeded again, even after a DELETE)
+SELECT slug, seeded_at FROM seeded_slugs ORDER BY slug;
+```
+
+What they showed (no secrets): query 3 listed `notes connected 5`, `utils connected 4`, `woo connected 6`; query 4 showed all three with `has_credential t` and `enc_bytes 76`; query 5 showed rows such as `tool_call | mcp | utils | calculate | success`, `tool_call | mcp | notes | delete_note | error | ... | Note 999 not found.` and `auth_rejected | mcp | | | unauthorized | ... | API key revoked`; query 6 grouped them by server and outcome; query 1 showed the one admin.
+
+### (b) A graphical SQL client (optional; not tested with a GUI)
+
+Terminal 1 (leave it running; it forwards local port 15432 to Postgres):
+
+```powershell
+kubectl -n gateway port-forward svc/postgres 15432:5432
+```
+
+Install a client (`winget install --id DBeaver.DBeaver.Community -e`, or any PostgreSQL client) and use these settings:
+
+| Field | Value |
+|---|---|
+| Host | `127.0.0.1` |
+| Port | `15432` |
+| Database | `gateway` |
+| User | `gateway` |
+| Password | copied to your clipboard by the command below |
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-secrets -Key postgres-password
+```
+
+Press Ctrl+C in terminal 1 to close the tunnel. The tunnel itself was verified on 2026-10-19 by opening it and running `select count(*) from users` through it from a Node `pg` client (result 1); no GUI client was installed or run, so the client steps are **not tested**.
+
+### Which data lives in which table
+
+| Data | Table | Notes |
+|---|---|---|
+| People | `users` | `role` is `admin` or `member`; `disabled_at` set means disabled |
+| Personal API keys | `api_keys` | Prefix and hash only; `revoked_at` set means revoked |
+| Browser sessions | `sessions` | Hash of the cookie, expiry (12 h) |
+| Invites | `invites` | Token hash, expiry (72 h), `accepted_at` |
+| MCP servers | `upstream_servers` | URL, auth type, encrypted credential, last health result |
+| Every tool call and every rejected recognisable credential | `audit_logs` | `tool_name` is the upstream's name, `server_slug` says which server; `auth_rejected` rows are written for a well-formed `ugw_` key that is unknown, revoked or of a disabled user, and for an expired internal token; a missing header, another scheme or a malformed value writes nothing |
+| Built-in servers already seeded | `seeded_slugs` | One row per seed slug; a slug here is never seeded again, so a deleted built-in server stays deleted |
+
+Table definitions and relationships: [system-design.md](system-design.md#2-data-model).
+
+## 11. Each part of the project
 
 | Part | Status | How to run | How to check | Logs |
 |---|---|---|---|---|
 | **Store** (WordPress + WooCommerce + MariaDB) | Available (Phase 1) | `scripts\up.ps1`; stop with `scripts\stop.ps1` (full command form: see the convention at the top) | `kubectl -n store get pods`; `scripts\check-woo-api.ps1`; `scripts\dev\customer-order-smoke.ps1` | `kubectl -n store logs deploy/wordpress -c wordpress`; `kubectl -n store logs mariadb-0`; `kubectl -n store logs job/store-setup` |
 | **WooCommerce MCP server** | Available (Phase 2), internal only | `scripts\up.ps1` builds and deploys it; rebuild with `scripts\build-images.ps1` then `up.ps1 -Redeploy` | `kubectl -n mcp get pods`; `scripts\check-mcp-woocommerce.ps1` (add `-Write` to also create a draft product); explore with MCP Inspector, see [section 8](#8-woocommerce-mcp-server-phase-2) | `kubectl -n mcp logs deploy/mcp-woocommerce` |
-| **Gateway + Postgres** | (planned — Phase 3) | — | — | — |
+| **Notes MCP server** (`mcp-notes`) | Available (Phase 3), internal only; reached through the gateway as `notes__...` | `scripts\up.ps1` builds and deploys it | `kubectl -n mcp get pods`; `scripts\check-gateway.ps1 -Write` | `kubectl -n mcp logs deploy/mcp-notes` |
+| **Utilities MCP server** (`mcp-utilities`) | Available (Phase 3), internal only; reached through the gateway as `utils__...` | `scripts\up.ps1` builds and deploys it | `kubectl -n mcp get pods`; `scripts\check-gateway.ps1 -Isolation` | `kubectl -n mcp logs deploy/mcp-utilities` |
+| **Gateway** | Available (Phase 3): `http://app.localhost/api` and `/mcp`; no web page yet | `scripts\up.ps1` (add `-Redeploy` after code changes); create a key as in [section 9](#9-the-gateway-phase-3) | `kubectl -n gateway get pods`; `scripts\check-gateway.ps1` (add `-Write`, `-Isolation`) | `kubectl -n gateway logs deploy/gateway` |
+| **Postgres** (the gateway's database) | Available (Phase 3), internal only | `scripts\up.ps1` | `kubectl -n gateway get pods`; look inside with [section 10](#10-viewing-the-gateway-database-postgres) | `kubectl -n gateway logs postgres-0` |
 | **Dashboard + chat agent** | (planned — Phase 4) | — | — | — |
 
-## 11. Health checks and logs
+## 12. Health checks and logs
 
 ```powershell
 kubectl -n store get pods                                    # wordpress and mariadb-0 should be 1/1 Running; store-setup is Completed
 kubectl -n store logs deploy/wordpress -c wordpress          # Apache access log and PHP errors
 kubectl -n store logs job/store-setup                        # install log; the last line is SETUP COMPLETE
-kubectl -n mcp get pods                                      # mcp-woocommerce should be 1/1 Running
+kubectl -n mcp get pods                                      # mcp-woocommerce, mcp-notes and mcp-utilities should be 1/1 Running
 kubectl -n mcp logs deploy/mcp-woocommerce                   # MCP server log (never contains the token or keys)
+kubectl -n gateway get pods                                  # postgres-0 and gateway-... should be 1/1 Running
+kubectl -n gateway logs deploy/gateway                       # gateway log (never contains keys, passwords or credentials)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1 -Write               # gateway end-to-end check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1             # MCP server end-to-end check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-woo-api.ps1                       # WooCommerce REST key check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1            # register, order, see it in My Account
@@ -509,7 +877,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-s
 
 The smoke test leaves a demo customer and order in the store (users like `smoke+<timestamp>@example.com`). It never prints the password it generates.
 
-## 12. Resetting
+## 13. Resetting
 
 | Goal | Command | Effect |
 |---|---|---|
@@ -517,7 +885,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 | Wipe all store data | 1. `helm uninstall urumi --namespace urumi-system`<br>2. `kubectl delete ns store mcp gateway --wait=true --timeout=300s`<br>3. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` | **Destroys all data**: products, orders, users and passwords. Do the uninstall first: if the Helm release stays installed while its namespace is gone, `up.ps1` now notices the missing `store` namespace and redeploys (expected; this exact combination was not re-run after the up.ps1 change), but the clean sequence below is the one verified in Phase 1. After all three steps `up.ps1` builds a brand-new store with new passwords (same sequence as [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept), verified in Phase 1). |
 | Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch. |
 
-## 13. Troubleshooting pointers
+## 14. Troubleshooting pointers
 
 - `up.ps1` says Docker is not running: [troubleshooting](troubleshooting.md#upps1-says-docker-is-not-running)
 - `up.ps1` warns that `store.localhost` is not in the hosts file: [troubleshooting](troubleshooting.md#upps1-warns-that-storelocalhost-is-not-in-the-hosts-file)
@@ -531,4 +899,9 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 - The MCP server answers 401: [troubleshooting](troubleshooting.md#the-mcp-server-answers-401-unauthorized); 403 Invalid Host: [troubleshooting](troubleshooting.md#the-mcp-server-answers-403-invalid-host); a tool says WooCommerce 401 Invalid signature: [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature); a tool times out: [troubleshooting](troubleshooting.md#an-mcp-tool-times-out); port 13001 busy: [troubleshooting](troubleshooting.md#the-port-forward-port-13001-is-already-in-use); Inspector oddities: [libuv assertion](troubleshooting.md#inspector-prints-a-libuv-assertion-at-the-end-windows); a price is refused: [troubleshooting](troubleshooting.md#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
 - `check-mcp-woocommerce.ps1` says `Dependencies not installed`, or Node says `Cannot find package '@modelcontextprotocol/client'`: [troubleshooting](troubleshooting.md#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
 - The store-setup Job fails with `missing urumi_managed_key_owner marker`: [troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
+- Gateway pod in `CrashLoopBackOff` with `database not ready after 30 attempts`: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts); with an environment message: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-with-an-invalid-environment-message)
+- `/mcp` answers 401: [troubleshooting](troubleshooting.md#mcp-answers-401-on-the-gateway); `/api` answers 403 `CSRF_REJECTED`: [troubleshooting](troubleshooting.md#api-answers-403-csrf_rejected); login answers 429: [troubleshooting](troubleshooting.md#login-answers-429-too-many-attempts)
+- A server shows `unreachable`: [troubleshooting](troubleshooting.md#a-server-shows-unreachable-in-the-gateway)
+- Postgres will not start (`PGDATA` permissions): [troubleshooting](troubleshooting.md#postgres-does-not-start-pgdata-permission-errors)
+- The new images are in `ErrImagePull`: [troubleshooting](troubleshooting.md#gateway-notes-or-utilities-pod-in-errimagepull)
 - Port 80 in use, pods not ready, setup Job failed and the rest: the full list at the top of [troubleshooting.md](troubleshooting.md).

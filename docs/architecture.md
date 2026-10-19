@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status (end of Phase 2).** The local k3d cluster, the Helm chart, the **store** (WordPress + WooCommerce, MariaDB, the `store-setup` hook Job, the Ingress and the Secrets) and the **WooCommerce MCP server** (namespace `mcp`, internal only) are **built and verified**. The `gateway` namespace exists but is empty. Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today), the [Phase 1 store details](#the-store-built-in-phase-1) and the [Phase 2 MCP server details](#the-woocommerce-mcp-server-built-in-phase-2).
+> **Status (end of Phase 3).** The local k3d cluster, the Helm chart, the **store**, the three **MCP servers** (WooCommerce, Notes, Utilities; namespace `mcp`, internal only), the **gateway** and its **Postgres** database (namespace `gateway`; `/api` and `/mcp` on `app.localhost`) are **built and verified**. The **dashboard**, the **chat agent**, the LLM integration and the NetworkPolicies are **not built** (Phases 4-5). Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today), the [Phase 1 store details](#the-store-built-in-phase-1), the [Phase 2 MCP server details](#the-woocommerce-mcp-server-built-in-phase-2) and the [Phase 3 gateway details](#the-gateway-built-in-phase-3).
 
 ## Purpose
 
@@ -57,25 +57,26 @@ flowchart LR
 | Component | Tech | Responsibility | Status |
 |---|---|---|---|
 | `apps/dashboard` | React 19 + Vite + TypeScript + Tailwind + Radix UI + TanStack Query + React Router | UI for servers, team, keys, audit log, chat. Talks only to `/api` on the same origin. | **(planned)** — Phase 4 |
-| `apps/gateway` | Node 24 + Express 5 + TypeScript + MCP TS SDK + Drizzle ORM + pg + pino + zod | Dashboard REST API, auth, API keys, upstream registry and health, aggregated `/mcp`, audit log, chat agent. | **(planned)** — Phase 3 (core), Phase 4 (chat agent) |
+| `apps/gateway` | Node 24 + Express 5 + TypeScript + MCP TS SDK + Drizzle ORM + pg + pino + zod | Dashboard REST API, auth, API keys, upstream registry and health, aggregated `/mcp`, audit log, chat agent. | **Core built in Phase 3** (REST API, auth, keys, invites, registry, health, `/mcp`, audit; verified in the cluster); the chat agent is **(planned)** — Phase 4 |
 | `apps/mcp-woocommerce` | Node 24 + MCP TS SDK + zod | MCP tools over the WooCommerce REST API v3. | **Built in Phase 2** (internal only; verified in the cluster) |
-| `apps/mcp-notes` | Node 24 + MCP TS SDK | Upstream #2: simple in-memory notes; bearer-token protected. | **(planned)** — Phase 3 |
-| `apps/mcp-utilities` | Node 24 + MCP TS SDK | Upstream #3: date ranges, current time, calculator; custom-header protected. | **(planned)** — Phase 3 |
+| `apps/mcp-notes` | Node 24 + MCP TS SDK | Upstream #2: simple in-memory notes; bearer-token protected. | **Built in Phase 3** (internal only; verified through the gateway) |
+| `apps/mcp-utilities` | Node 24 + MCP TS SDK | Upstream #3: date ranges, current time, calculator; custom-header protected. | **Built in Phase 3** (internal only; verified through the gateway) |
 | `packages/shared` | TypeScript | Logger, env config loader, MCP HTTP server bootstrap, health endpoints, auth middleware for upstreams. | **Built in Phase 2** |
 | Store (WordPress + WooCommerce, MariaDB, `store-setup` Job) | Deployment + StatefulSet + Job | The WooCommerce store the MCP server operates on. | **Built in Phase 1** (verified: install, upgrade, uninstall/reinstall, fresh install) |
-| `charts/urumi-platform` | Helm 4 (chart `apiVersion: v2`, also installable with Helm 3.x) | Every Kubernetes resource. | **Store (Phase 1) and MCP server (Phase 2) built**; grows in Phases 3-5 |
+| Postgres (StatefulSet `postgres-0`) | postgres 17.11 | The gateway's own database. | **Built in Phase 3** |
+| `charts/urumi-platform` | Helm 4 (chart `apiVersion: v2`, also installable with Helm 3.x) | Every Kubernetes resource. | **Store (Phase 1), MCP server (Phase 2), gateway, Postgres and two more MCP servers (Phase 3) built**; grows in Phases 4-5 |
 
 The repo is an **npm workspaces monorepo**: one `package.json` at the root, one lockfile, shared TypeScript config ([ADR-001](decisions/ADR-001-typescript-monorepo.md)).
 
 ## Namespaces and exposure
 
-One Helm release owns three namespaces ([ADR-003](decisions/ADR-003-single-helm-chart-three-namespaces.md)). Only the services behind Traefik are reachable from outside the cluster; everything else is internal. The `store` row and the `mcp-woocommerce` part of the `mcp` row are built; `mcp-notes`, `mcp-utilities` and the `gateway` row are **(planned)** (the `gateway` namespace exists but is empty), as are the NetworkPolicies.
+One Helm release owns three namespaces ([ADR-003](decisions/ADR-003-single-helm-chart-three-namespaces.md)). Only the services behind Traefik are reachable from outside the cluster; everything else is internal. The `store` row, the `mcp` row and the `gateway` row (except `dashboard`) are built; the `dashboard` and the NetworkPolicies are **(planned)**.
 
 | Namespace | Workloads | Public via Ingress | Internal only |
 |---|---|---|---|
 | `store` | WordPress + WooCommerce (Deployment, PVC), MariaDB (StatefulSet, PVC), `store-setup` Job | WordPress at `store.localhost` | MariaDB, the setup Job |
-| `mcp` | `mcp-woocommerce` (built), `mcp-notes`, `mcp-utilities` (planned) | Nothing (no Ingress; verified for `mcp-woocommerce`) | All three. Reachable only from gateway pods once NetworkPolicies exist (Phase 5, not built); today any pod in the cluster can reach `mcp-woocommerce`, but needs its bearer token |
-| `gateway` | `dashboard`, `gateway`, Postgres (StatefulSet, PVC) | `dashboard` at `app.localhost/`; `gateway` at `app.localhost/api` and `app.localhost/mcp` | Postgres |
+| `mcp` | `mcp-woocommerce`, `mcp-notes`, `mcp-utilities` (all built) | Nothing (no Ingress; verified: the only Ingresses are `store` and `gateway`) | All three. Reachable only from gateway pods once NetworkPolicies exist (Phase 5, not built); today any pod in the cluster can reach `mcp-woocommerce`, but needs its bearer token |
+| `gateway` | `gateway` and Postgres (StatefulSet, PVC) built; `dashboard` **(planned)** | `gateway` at `app.localhost/api` and `app.localhost/mcp` (built); `dashboard` at `app.localhost/` **(planned, Phase 4)** | Postgres |
 
 Hostnames shown are the local defaults; production uses real DNS names (see [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md)).
 
@@ -173,6 +174,52 @@ flowchart LR
 - **Images are built locally and imported into k3d**, tagged with the git short SHA (plus `-dirty-<timestamp>` for an unclean tree). See the [run guide](run-guide.md#build-the-program-images-build-imagesps1).
 - **No retries** of WooCommerce calls (nonce reuse, non-idempotent writes): [workflow 6](workflows.md#6-mcp-tool-call-to-the-store).
 
+## The gateway (built in Phase 3)
+
+```mermaid
+flowchart LR
+  CL["MCP client<br/>Inspector, Claude Code (not tested), Cursor (not tested)"]
+  PS["Admin with PowerShell<br/>(dashboard is Phase 4)"]
+  subgraph ns_gw["namespace gateway"]
+    ING["Ingress gateway<br/>app.localhost /api and /mcp"]
+    SVC_GW["Service gateway :3000"]
+    GW["Deployment gateway<br/>uid 1000, read-only root FS, 1 replica"]
+    PG[("StatefulSet postgres-0<br/>uid 999, PVC")]
+    S1{{Secret gateway-secrets}}
+    S2{{Secret gateway-bootstrap}}
+    S3{{Secret copies of the three upstream credentials<br/>used only to seed}}
+  end
+  subgraph ns_mcp3["namespace mcp"]
+    WOO["mcp-woocommerce :3001"]
+    NOTES["mcp-notes :3002"]
+    UT["mcp-utilities :3003"]
+  end
+  CL -- "POST /mcp, Bearer ugw_ key" --> ING
+  PS -- "/api, session cookie" --> ING
+  ING --> SVC_GW --> GW
+  GW -- "SQL" --> PG
+  S1 -.-> GW
+  S2 -.-> GW
+  S3 -.-> GW
+  GW -- "MCP, upstream credential" --> WOO
+  GW -- "MCP, upstream credential" --> NOTES
+  GW -- "MCP, upstream credential" --> UT
+```
+
+**Reading the diagram.** The gateway is the only door from outside to the MCP servers. A client sends its personal key to `/mcp`; the gateway checks it in Postgres, routes the call to the server that owns the tool, and calls that server with the server's own credential. The gateway Pod is Ready as soon as Postgres answers; it does not wait for the upstreams. Secrets reach the Pod as environment variables (dotted lines). The three upstream credentials in the `gateway` namespace are used once, to seed the registry; afterwards the encrypted column in the database is the source of truth.
+
+### Gateway design points
+
+- **Client and server at once.** The gateway is an MCP server to your tools and an MCP client to the upstreams; the two credentials never meet ([security.md](security.md#1-two-credentials-that-never-meet)).
+- **Cached catalog** ([ADR-014](decisions/ADR-014-cached-tool-catalog.md)): `tools/list` reads memory; a 15 s health loop keeps it true; a dead upstream only loses its own tools.
+- **Own database** ([ADR-004](decisions/ADR-004-own-database-templates.md), run guide section 10): users, hashed keys, invites, sessions, the registry and the audit log in Postgres, migrated at every start (up to 30 attempts while Postgres starts).
+- **Probes:** `/healthz` (process) and `/readyz` (Postgres answers). Upstreams do not affect readiness.
+- **Behind Traefik** with `TRUST_PROXY=1`, so the login rate limit sees real client addresses.
+- **No LLM configuration in Phase 3.** The chat agent and its keys arrive in Phase 4.
+- **One replica.** Health state and server edits are per replica ([system-design.md](system-design.md#8-trade-offs-and-limits)).
+
+Full detail: [system-design.md](system-design.md) (components, data model, interfaces, state machine), [security.md](security.md), [error-handling.md](error-handling.md), and the workflows [7-11](workflows.md#7-register-an-upstream-and-how-it-appears-in-toolslist).
+
 ## What exists today
 
-The local k3d cluster `urumi` with its scripts; the Helm chart `charts/urumi-platform` with the **store** (MariaDB, WordPress + WooCommerce, the `store-setup` hook Job, the `store.localhost` Ingress, Secrets), verified by install, upgrade, uninstall/reinstall and a destructive fresh install (see [deployment.md](deployment.md) and [workflows.md](workflows.md)); the OAuth1 check `scripts/check-woo-api.ps1`; the **WooCommerce MCP server** (`apps/mcp-woocommerce`, `packages/shared`, the image build via `scripts/build-images.ps1`, the `mcp` templates in the chart, `scripts/check-mcp-woocommerce.ps1`), verified in the cluster; and the learning and decision documents ([setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md), [MCP protocol notes](learning/02-mcp-protocol.md)). The gateway, dashboard, the notes and utilities MCP servers, Postgres, the LLM integration and NetworkPolicies in the first diagram are **not built yet** (Phases 3-5).
+The local k3d cluster `urumi` with its scripts; the Helm chart `charts/urumi-platform` with the **store** (MariaDB, WordPress + WooCommerce, the `store-setup` hook Job, the `store.localhost` Ingress, Secrets), verified by install, upgrade, uninstall/reinstall and a destructive fresh install (see [deployment.md](deployment.md) and [workflows.md](workflows.md)); the OAuth1 check `scripts/check-woo-api.ps1`; the **WooCommerce MCP server** (`apps/mcp-woocommerce`, `packages/shared`, the image build via `scripts/build-images.ps1`, the `mcp` templates in the chart, `scripts/check-mcp-woocommerce.ps1`), verified in the cluster; and the learning and decision documents ([setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md), [MCP protocol notes](learning/02-mcp-protocol.md)). Since Phase 3 also: the **gateway** (`apps/gateway`: REST API, sessions, API keys, invites, server registry with health checks, aggregated `/mcp`, audit log), its **Postgres** database, the **notes** and **utilities** MCP servers, the `gateway` templates in the chart, `scripts/check-gateway.ps1`, and the documents [system-design.md](system-design.md), [error-handling.md](error-handling.md), [security.md](security.md) (partial), [testing.md](testing.md) and [learning/03-gateway.md](learning/03-gateway.md). The dashboard, the chat agent, the LLM integration and NetworkPolicies in the first diagram are **not built yet** (Phases 4-5).

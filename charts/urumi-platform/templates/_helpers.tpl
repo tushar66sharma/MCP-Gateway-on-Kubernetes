@@ -39,7 +39,8 @@ The port is appended only when it is not the default for the scheme.
 
 {{/*
 Stable generated secret value (plaintext; pipe to b64enc).
-Args: dict root, namespace (CANONICAL namespace for this secret), secret, key, length, prefix (optional).
+Args: dict root, namespace (CANONICAL namespace for this secret), secret, key, length, prefix (optional),
+random (optional; "bytes" = randBytes, already base64, e.g. for a 32-byte key).
 Resolution order:
   1. memoised value from earlier in this render, so copies of one secret in several
      namespaces get the SAME value (each copy passes the same canonical namespace);
@@ -63,7 +64,11 @@ shows fresh random values; real installs and upgrades reuse stored ones.
 {{- if and $existing (hasKey $existing "data") (hasKey $existing.data .key) -}}
 {{- $value = index $existing.data .key | b64dec -}}
 {{- else -}}
+{{- if eq (default "" .random) "bytes" -}}
+{{- $value = randBytes (int .length) -}}
+{{- else -}}
 {{- $value = printf "%s%s" (default "" .prefix) (randAlphaNum (int .length)) -}}
+{{- end -}}
 {{- end -}}
 {{- $_ := set $memo $memoKey $value -}}
 {{- $value -}}
@@ -121,4 +126,93 @@ capabilities:
 {{- define "urumi.storeWooApiData" -}}
 consumer-key: {{ include "urumi.generatedValue" (dict "root" . "namespace" .Values.namespaces.store "secret" "store-woo-api" "key" "consumer-key" "length" 40 "prefix" "ck_") | b64enc | quote }}
 consumer-secret: {{ include "urumi.generatedValue" (dict "root" . "namespace" .Values.namespaces.store "secret" "store-woo-api" "key" "consumer-secret" "length" 40 "prefix" "cs_") | b64enc | quote }}
+{{- end }}
+
+
+{{/*
+A simple bearer/header-key MCP server: Service + Deployment, same standards as mcp-woocommerce.
+Args: dict root, name, port, values (the server's values block), env (list of env entries, as a
+YAML-ready list of dicts), component.
+*/}}
+{{- define "urumi.simpleMcpServer" -}}
+{{- $root := .root -}}
+{{- $name := .name -}}
+{{- $m := .values -}}
+{{- $ns := $root.Values.namespaces.mcp -}}
+{{- /* The Host check compares the hostname only (ADR-007), so ports are not listed. */ -}}
+{{- $hosts := list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.cluster.local" $name $ns) "127.0.0.1" "localhost" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $root "name" $name "component" .component) | nindent 4 }}
+spec:
+  selector:
+    {{- include "urumi.selectorLabels" (dict "root" $root "name" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $root "name" $name "component" .component) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (dict "root" $root "name" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.podLabels" (dict "root" $root "name" $name "component" .component) | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "urumi.podSecurityContext" (dict "uid" 1000 "gid" 1000) | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "urumi.image" (dict "root" $root "repository" $m.image.repository "tag" $m.image.tag) | quote }}
+          imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "urumi.containerSecurityContext" $root | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: {{ .port }}
+          env:
+            - name: PORT
+              value: {{ .port | quote }}
+            - name: LOG_LEVEL
+              value: {{ $m.logLevel | quote }}
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ join "," $hosts | quote }}
+            {{- toYaml .env | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            {{- toYaml $m.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- end }}
