@@ -120,6 +120,9 @@ Write-Host "  Shop         : $storeUrl/shop/"
 Write-Host "  My account   : $storeUrl/my-account/   (customers: register, log in, see their orders)"
 Write-Host "  WP admin     : $storeUrl/wp-admin/     (user: admin)"
 Write-Host '  MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1'
+Write-Host "  Gateway API  : $appUrl/api"
+Write-Host "  MCP endpoint : $appUrl/mcp   (needs a personal API key)"
+Write-Host '  Gateway admin: admin@example.com - copy the password with: powershell -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password'
 Write-Host ''
 Write-Host '  Admin password - run this to copy it to the clipboard (it is never printed here):'
 Write-Host '    powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1'
