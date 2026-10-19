@@ -1,24 +1,39 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { hostHeaderValidation } from '@modelcontextprotocol/express';
 import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import express from 'express';
+import express, { type RequestHandler } from 'express';
 import type { Logger } from './logger.js';
 import { upstreamAuthMiddleware, type UpstreamAuth } from './upstreamAuth.js';
 
 export type SdkMcpServer = McpServer;
+
+/** Store = `res.locals` of the in-flight /mcp request, so tool handlers can read what the auth middleware set. */
+export const mcpRequestLocals = new AsyncLocalStorage<Record<string, unknown>>();
+
+const REQUEST_ID = /^[A-Za-z0-9._-]{8,64}$/;
 
 export interface McpHttpServerOptions {
   name: string;
   version: string;
   port: number;
   host?: string;
-  auth: UpstreamAuth;
+  /** A function is used as-is (gateway); an object goes through upstreamAuthMiddleware. */
+  auth: UpstreamAuth | RequestHandler;
   logger: Logger;
   /** Host-header (DNS-rebinding) check, applied to /mcp ONLY. Ports in entries are ignored. */
   allowedHosts: string[];
-  registerTools: (server: SdkMcpServer) => void;
+  /** Exactly one of registerTools / buildServer. */
+  registerTools?: (server: SdkMcpServer) => void;
+  /** Gateway: build the McpServer yourself (custom handlers on `mcp.server`). */
+  buildServer?: () => SdkMcpServer;
+  /** Mounted after the probes, before /mcp. Not host-checked. */
+  extraRoutes?: (app: express.Express) => void;
+  /** Sanitises the path written in the request log line. */
+  logPath?: (path: string) => string;
   readinessCheck?: () => Promise<boolean>;
 }
 
@@ -51,12 +66,16 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
   const readiness = opts.readinessCheck ?? (async () => true);
   // Validate configuration before building anything (both throw with value-free messages).
   const allowedHosts = normalizeHosts(opts.allowedHosts);
-  const auth = upstreamAuthMiddleware(opts.auth);
+  if ((opts.registerTools === undefined) === (opts.buildServer === undefined)) {
+    throw new Error('exactly one of registerTools or buildServer is required');
+  }
+  const auth = typeof opts.auth === 'function' ? opts.auth : upstreamAuthMiddleware(opts.auth);
 
   const mcpHandler = createMcpHandler(
     () => {
+      if (opts.buildServer) return opts.buildServer();
       const server = new McpServer({ name: opts.name, version: opts.version });
-      opts.registerTools(server);
+      opts.registerTools?.(server);
       return server;
     },
     { onerror: (err) => logger.error({ err: err.message }, 'mcp error') },
@@ -67,10 +86,14 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
   app.disable('x-powered-by');
 
   app.use((req, res, next) => {
+    const incoming = req.header('x-request-id');
+    const requestId = incoming !== undefined && REQUEST_ID.test(incoming) ? incoming : randomUUID();
+    res.locals.requestId = requestId;
+    res.setHeader('X-Request-Id', requestId);
     const start = process.hrtime.bigint();
     res.on('finish', () => {
       const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
-      logger.info({ method: req.method, path: req.path, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
+      logger.info({ requestId, method: req.method, path: opts.logPath ? opts.logPath(req.path) : req.path, status: res.statusCode, durationMs: Math.round(durationMs) }, 'request');
     });
     next();
   });
@@ -90,13 +113,15 @@ export async function startMcpHttpServer(opts: McpHttpServerOptions): Promise<Ru
     );
   });
 
+  opts.extraRoutes?.(app);
+
   app.post(
     '/mcp',
     hostHeaderValidation(allowedHosts),
     auth,
     express.json({ limit: '1mb' }),
     (req, res) => {
-      nodeHandler(req, res, req.body).catch((err: unknown) => {
+      mcpRequestLocals.run(res.locals, () => nodeHandler(req, res, req.body)).catch((err: unknown) => {
         logger.error({ err: err instanceof Error ? err.message : 'unknown' }, 'mcp handler failed');
         if (!res.headersSent) {
           res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
