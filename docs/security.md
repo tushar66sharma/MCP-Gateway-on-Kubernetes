@@ -1,6 +1,6 @@
 # Security
 
-> **Status: partial (end of Phase 3).** This file covers what the gateway does today: credentials, authentication, sessions, CSRF, the SSRF guard, logging, roles, and the known residual risks. **NetworkPolicies are Phase 5** and the full **threat model** is Phase 6 (`threat-model.md`); neither exists yet, and nothing here relies on them. The security chapter of the spec is [§9](superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: partial (end of Phase 4).** This file covers what the gateway does today: credentials, authentication, sessions, CSRF, the SSRF guard, logging, roles, and the known residual risks; and since Phase 4 the dashboard's browser headers, the chat agent acting as the user, untrusted tool output and prompt injection, the LLM keys and chat privacy, and the one-time key dialog (sections 10-14). **NetworkPolicies are Phase 5** and the full **threat model** is Phase 6 (`threat-model.md`); neither exists yet, and nothing here relies on them. The security chapter of the spec is [§9](superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 Evidence labels: **live** = run against the k3d cluster on 2026-10-19; **tested** = pinned by an automated test ([testing.md](testing.md)); **expected** = follows from the code, not run.
 
@@ -41,12 +41,14 @@ Verified on the live database (2026-10-19): `credential_enc` is 76 bytes for eac
 - **Login hardening:** one answer for unknown email, wrong password and disabled user; a dummy argon2 verification when the email is unknown so the timing is the same (**tested**); emails are trimmed and lowercased; **10 attempts per minute per IP and email** (the 11th gets 429 with `Retry-After: 60`, **live**).
 - **No race with "disable user".** A session insert (login) and an API-key insert re-read the user row with `SELECT … FOR UPDATE` in their own transaction and refuse a disabled user. A disable that commits first is seen (login answers 401, an admin-issued key 409); a disable that comes second waits for the lock and then deletes that session or revokes that key. Either way nothing live is left to revive on re-enable (**tested**, including both operations run concurrently).
 - **`TRUST_PROXY=1`.** With `trust proxy = 1`, Express takes `req.ip` from the **rightmost** `X-Forwarded-For` entry, which is the address Traefik saw the request come from (anything a client put further left is ignored). The chart sets `TRUST_PROXY=1` (exactly one proxy). Without it every user would share the ingress address, so a few failed logins from anyone would lock out everyone using the same email. Too high a value would let a client choose its own bucket by sending the header. Only the rate-limit key uses `req.ip` (**tested**: with 1, attempts from different forwarded addresses are separate; with 0 they are not). **Caveat (expected, not tested):** on k3d/k3s, the ServiceLB (klipper) in front of Traefik uses `externalTrafficPolicy: Cluster`, which SNATs traffic to a node address, so Traefik may see the same address for every client and the limiter then works per email only. Checking the real `req.ip` and setting `externalTrafficPolicy: Local` on Traefik's Service is a Phase 5 item.
-- **Internal chat token (built, not yet used):** HS256 JWT, audience `gateway-chat`, issuer `urumi-gateway`, `sub` = user id, 5-minute expiry, verified with `algorithms: ['HS256']` (so `alg: none` and other algorithms are refused) and a 5 s clock tolerance. The user is re-read on every use, so a user disabled after the token was minted is refused (**tested**). An expired token is audited to its user with `source: chat`; jose checks the signature before the expiry, so the user id of a forged token is never used (**tested**). Phase 4 will use it for the chat loopback ([ADR-010](decisions/ADR-010-chat-agent-loopback.md)).
+- **Internal chat token** (built in Phase 3, used by the chat agent since Phase 4, [section 11](#11-the-chat-agent-acts-as-the-user)): HS256 JWT, audience `gateway-chat`, issuer `urumi-gateway`, `sub` = user id, 5-minute expiry, verified with `algorithms: ['HS256']` (so `alg: none` and other algorithms are refused) and a 5 s clock tolerance. The user is re-read on every use, so a user disabled after the token was minted is refused (**tested**). An expired token is audited to its user with `source: chat`; jose checks the signature before the expiry, so the user id of a forged token is never used (**tested**). The chat loopback uses it ([ADR-010](decisions/ADR-010-chat-agent-loopback.md)).
 - **First admin:** created from `gateway-bootstrap` only when the `users` table is empty, name `Admin`.
 
 ## 4. CSRF
 
 Every mutating `/api` request (`POST`, `PUT`, `PATCH`, `DELETE`) must carry `Content-Type: application/json` **and** `Origin` equal to the origin of `PUBLIC_APP_URL`. A browser form or cross-site request cannot set both. `DELETE` needs them even without a body, and so do the public invite routes. The check runs before the session check. Verified live: a `DELETE` without a content type and a `POST` with neither header both got `403 CSRF_REJECTED`. `SameSite=Lax` on the cookie is a second layer. `/mcp` uses no cookies, so CSRF does not apply to it.
+
+**The dashboard does not loosen it (Phase 4).** The dashboard is served from the same origin as the API, its `apiFetch` sends `Content-Type: application/json` on every mutating call (a `DELETE` without a body included) and the browser adds `Origin` itself. In development, the Vite proxy rewrites `Origin` to `http://app.localhost` only when the header is missing or equals the dev server's own origin (`http://localhost:5173`, `http://127.0.0.1:5173`); a foreign `Origin` passes through and is still refused (**live** through the dev proxy in Task 4.3: login with the dev origin 200, with `Origin: http://evil.example` 403).
 
 ## 5. SSRF guard
 
@@ -90,7 +92,9 @@ An admin supplies upstream URLs, and the gateway then makes requests to them fro
 | Revoke another user's keys | yes | no |
 | Change their own role or disable themselves | no (409) | no (403) |
 
-Role checks are **tested** in the API suites under `apps/gateway/test/api/`. All of this goes through the REST API today; the dashboard that will use it is Phase 4.
+| Use the chat (its tools run with the user's own rights) | yes | yes |
+
+Role checks are **tested** in the API suites under `apps/gateway/test/api/`. Since Phase 4 the dashboard shows each role only what it may do (no Add server, Edit or Team page for members, no user filter in a member's audit log), but **the backend is the enforcement**: hiding a button is a convenience, and every route checks the role itself.
 
 ## 8. Residual risks
 
@@ -101,12 +105,70 @@ Known, accepted for Phase 3, not fixed. The Phase 5 hardening item is named wher
 3. **An allowlisted internal name that resolves to an IPv6 ULA passes.** The allow-list lets `*.mcp.svc.cluster.local` resolve to private addresses, and `fc00::/7` is private. A name on the allow-list is trusted to resolve inside the cluster; if DNS for it were poisoned to another ULA address the guard would accept it. The default allow-list names only cluster-internal services.
 4. **Health and catalog state is per replica, and server edits apply on the replica that handled them.** One replica is deployed, and the Deployment uses the `Recreate` strategy, so a rollout never runs two gateway pods at once (it costs a few seconds of downtime instead). Scaling out would need a shared catalog or a periodic resync; the login limiter is per replica too.
 5. **Notes are kept in memory** by `mcp-notes`: they are lost on restart and not shared between replicas. They are not a secure store.
-6. **Internal chat tokens cannot be revoked individually;** they expire after 5 minutes. A disabled user's token is refused on the next use because the user is re-read.
+6. **Internal chat tokens cannot be revoked individually;** they expire after 5 minutes. A disabled user's token is refused on the next use because the user is re-read, and the chat mints a new token for every request anyway.
 7. **Invite links are bearer secrets until used.** Anyone who gets the link within 72 hours can claim the account. Mitigations: single use, expiry, only the hash is stored, the path is redacted in logs (case-insensitive, including the `/invite/<token>` page path), and the admin can cancel a link (`DELETE /api/invites/:id`, **live**: the link then answered `404 INVITE_INVALID`).
 8. **Nothing limits which pods can reach the gateway or the upstreams** until NetworkPolicies exist (Phase 5). Any pod in the cluster can reach `mcp-woocommerce`, but needs its bearer token.
 9. **`COOKIE_SECURE` is false locally** (plain http on `app.localhost`), and k3d publishes ports 80 and 443 without a host IP, so the gateway may be reachable from the local network (**not verified**). Stop the cluster on untrusted networks.
 10. **The login limiter may see one address for everyone** behind k3s ServiceLB (see `TRUST_PROXY` above; expected, not tested). Phase 5.
 
+Added in Phase 4:
+
+11. **Prompt injection through tool output.** Text in a tool result (for example an order note a shopper typed, or a tool description from an upstream) can try to steer the model into calling another tool. Mitigations are in [section 12](#12-untrusted-data-and-prompt-injection); the residual risk is that the model is persuaded anyway. The damage is bounded by the user's own rights, every call is visible in the trace and audited with source `chat`, and there is no confirmation step before a write.
+12. **Chat content leaves the cluster.** Messages, the system prompt (it names the user and the store's time zone) and tool results (which can hold customer names and order totals) are sent to the LLM provider. Do not use the chat with data you may not share with Groq (or OpenRouter, when configured).
+13. **An invite token can appear in the dashboard's nginx access log.** nginx logs request paths, so opening `http://app.localhost/invite/<token>` writes the token into `kubectl -n gateway logs deploy/dashboard` (**expected** from nginx's default log format; not observed, because no link was opened on the cluster). The gateway's own log redacts it. Until it is fixed (a custom `log_format` or `access_log off` for `/invite/`), treat the dashboard log as sensitive while an invite is pending; the link works once and for 72 hours, and an admin can cancel it.
+14. **One provider key is shared by everyone.** The per-user limit (10 turns a minute) does not stop several users, together, from exhausting Groq's free quota (about two single-tool turns a minute for the whole team); the others then see "rate limited".
+15. **The internal-token count per request is not pinned by a test.** The code mints a fresh token for every loopback request; no test counts the mints (a deferred minor).
+
 ## 9. Not yet covered
 
-NetworkPolicies and pod hardening review (Phase 5), production TLS and secrets handling (Phase 5), the dashboard's own headers and the chat agent's prompt-injection stance (Phase 4), the threat model including malicious tool descriptions and compromised upstreams (Phase 6).
+NetworkPolicies and pod hardening review (Phase 5), production TLS and secrets handling (Phase 5), a rate limit on `/mcp` (Phase 5), the threat model including malicious tool descriptions and compromised upstreams (Phase 6).
+
+## 10. Browser headers and the dashboard
+
+The dashboard's nginx (`apps/dashboard/nginx.conf`) sets these headers on **every** response, at server level with `always`, so no location can drop them (an `add_header` inside a location would replace all of them; the locations therefore only set a cache variable):
+
+| Header | Value | Why |
+|---|---|---|
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` | Only our own scripts run (no inline script, no CDN); fonts are self-hosted; the page can only call its own origin; it cannot be framed (clickjacking). `'unsafe-inline'` for styles is needed by Radix UI's inline positioning styles. |
+| `X-Content-Type-Options` | `nosniff` | The browser never guesses a type (a text file cannot run as script). |
+| `Referrer-Policy` | `no-referrer` | No URL, in particular an invite link with its token, is sent to another site. |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | The page cannot ask for these. |
+
+Also: `/.well-known/*` answers **404** (MCP clients probe OAuth metadata there after a 401; a fallback `index.html` would confuse them), `server_tokens off` (no nginx version), hashed `/assets/` cached as immutable and `index.html` revalidated every time (`no-cache`). The gateway adds `X-Content-Type-Options: nosniff` and `Cache-Control: no-store` to every `/api` response, errors included, so no API answer is cached by the browser or a proxy (**tested**). **Live** on 2026-10-19 through Traefik: `/` and `/servers` carried the CSP and the other three headers; `/.well-known/oauth-authorization-server` answered 404; `/api/auth/me` answered 401 JSON with `nosniff` and `no-store`.
+
+The dashboard pod runs as uid/gid 101 (`runAsNonRoot`), seccomp `RuntimeDefault`, no service-account token, no privilege escalation, all capabilities dropped, read-only root filesystem with an `emptyDir` at `/tmp` ([ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md)). It holds no secret.
+
+Chat replies are rendered as **plain text** (no Markdown or HTML rendering), so text from a model or a tool can never become markup in the page.
+
+## 11. The chat agent acts as the user
+
+- `POST /api/chat` needs a session and passes the CSRF guard like every other mutating call. The body is validated strictly: 1-20 messages, roles `user` and `assistant` only (a client can never send a `system` prompt or a fake `tool` result), 1-4,000 characters each, the last from the user (**tested**).
+- The agent calls tools through the gateway's own `/mcp` over loopback, as the logged-in user. Its MCP client mints a **fresh 5-minute internal token for every HTTP request** (`connectLoopback(mcpUrl, mintToken)`), so `/mcp` authenticates and re-reads the user on each call: a user disabled during a turn is refused on the next tool call and an `auth_rejected` row says `user disabled` (**tested**). The chat therefore has exactly the user's access, never more, and every call is audited with `source = chat`, the user, and no API key (**live**: the Audit page shows the Chat badge on these rows).
+- The internal token exists only in that request header. It is not logged, not returned to the browser and not sent to the model (**tested**: no JWT-shaped string in the logs).
+- Per-user limits keep one person from monopolising the shared provider key or racing themselves: one turn in flight (`409 CONFLICT`) and `CHAT_RATE_LIMIT_PER_MIN` (10) turns a minute (`429 RATE_LIMITED` with `Retry-After`).
+- A tool call the gateway rejects with HTTP 401/403 becomes a fixed tool error text; SDK and transport error messages are never passed to the model, because they can quote URLs and response bodies.
+
+## 12. Untrusted data and prompt injection
+
+Tool output and tool descriptions are **untrusted**: they come from upstream servers (which an admin registered, but which may be compromised) and, through the store, from anything a shopper typed. The agent therefore:
+
+1. wraps every tool result as `<tool_result name="…">…</tool_result>` and cuts it to 6,000 characters;
+2. rewrites any `<tool_result` or `</tool_result` inside the result to `tool-result`, so a result cannot close its own block and open a fake one (**tested**: `a tool result cannot close its own wrapper`); the rewrite is an exact match on that tag name (a deferred minor);
+3. keeps only `[A-Za-z0-9_-]` of the tool name inside the attribute (the model can send any name);
+4. says in the system prompt that text inside `<tool_result>` blocks and in tool descriptions is untrusted data, never instructions, and that data may be created or changed only when the user asked;
+5. cuts tool descriptions to 300 characters before they reach the model.
+
+**Residual risk (accepted, documented):** none of this makes injection impossible; a model can still be persuaded to call a tool the user did not ask for. What limits the damage: the call runs with the user's own rights, appears in the trace on the page, is audited, and the turn stops after 8 steps or 60 s. There is no human confirmation before a write tool runs. The Phase 6 threat model will revisit this.
+
+## 13. LLM keys and chat privacy
+
+- **Where the keys live:** in the developer's git-ignored `.env`, and in the cluster Secret `llm-api-keys` (namespace `gateway`). `scripts\create-secrets.ps1` builds the Secret in memory, prints only `set` or `empty`, and applies it with **server-side apply**, which keeps no `last-applied-configuration` annotation (with client-side apply that annotation would hold the keys in plain text and `kubectl describe` would print it; **live**: the Secret has no such annotation). The gateway Deployment references it with `optional: true`; the keys are never in a values file, a ConfigMap, the chart, the image or the browser (**live**: `helm get manifest` and the rendered chart contain no key pattern).
+- **Where they never go:** the gateway logs only `llm configured: <provider>/<model>`; `GET /api/chat/status` returns provider and model names only (**tested**); an `LlmError` message is fixed text and never contains the provider's response body (which could echo the request); the adapter does not follow redirects, so the bearer key is never forwarded to another host.
+- **Chat content is not logged.** The `chat turn` log line has the user id, step count, tool names, outcome, duration, token usage, provider and model only (**tested**: the message text is absent from the logs). Audit rows never store arguments or results. The conversation exists only in the user's browser tab (React state, no browser storage) and in the request to the provider; see residual risk 12 for what the provider receives.
+
+## 14. The one-time key dialog and other dashboard secrets
+
+- A new API key's plaintext appears once, in a dialog that **cannot be dismissed by accident** (Esc and clicks outside are ignored) and whose **Close** button is disabled until "I have copied the key" is ticked. The key and the client setups (Claude Code, Cursor, MCP Inspector) are shown only there.
+- The plaintext is held in component state only: the create call is a plain function rather than a cached mutation, nothing is written to `localStorage` or `sessionStorage`, and after the dialog closes the page holds no trace of it (**tested** in `KeyCreatedDialog.test.tsx`; the Playwright smoke checks the key's shape inside the page and returns only true/false, so a failing test cannot print it).
+- The same rules apply to the invite link (shown once in its own dialog) and to a credential typed into the server form (sent only in the request body, cleared when the dialog closes). The invite token is part of the invite page's preview query key in memory (garbage-collected immediately when the page closes; a deferred minor notes it).
+- The Playwright configuration records nothing (`screenshot`, `trace` and `video` are off), and the documentation screenshots were taken of pages that show no key, link or password.

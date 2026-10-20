@@ -1,6 +1,6 @@
 # Error handling
 
-> **Status (end of Phase 3).** Covers the gateway, the three upstreams and the Postgres database. The LLM and chat rows of the spec (§10) are **not built** (Phase 4) and are listed at the end only so nothing is silently missing. The complete document is finished in Phase 6.
+> **Status (end of Phase 4).** Covers the gateway, the three upstreams and the Postgres database, and since Phase 4 the chat agent with its LLM provider ([section 4](#4-the-chat-post-apichat)) and the dashboard's error states ([section 5](#5-the-dashboard)). The complete document is finished in Phase 6.
 
 Each row answers: what fails, how it is detected, whether it is retried, what the caller sees, and what is logged or audited. Evidence labels:
 
@@ -10,7 +10,7 @@ Each row answers: what fails, how it is detected, whether it is retried, what th
 
 **Two kinds of failure.** A tool the model could plausibly fix or retry (bad argument, missing note, upstream down) is an MCP result with `isError: true` and HTTP 200. A request that is not allowed at all (no key, wrong method, bad host) is an HTTP error with a JSON-RPC error body. See [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md#7-iserror-versus-a-protocol-error).
 
-**Retries.** Tool calls are **never** retried anywhere (a retry could repeat a write). Health checks are the only repeated operation, every 15 s. Startup retries the database connection (30 attempts, 2 s apart).
+**Retries.** Tool calls are **never** retried anywhere (a retry could repeat a write), including by the chat agent and the dashboard. Health checks repeat every 15 s. Startup retries the database connection (30 attempts, 2 s apart). Since Phase 4 two more things retry: a **model call** to the LLM provider (429, 5xx and network errors, up to 2 retries that never pass the turn deadline, then an optional fallback once; [section 4](#4-the-chat-post-apichat)), and the dashboard's **reads** (network errors and 5xx, at most 2 retries; writes are never retried).
 
 ## 1. `/mcp` (the aggregated endpoint)
 
@@ -68,7 +68,7 @@ All errors have the shape `{"error":{"code","message","details"?,"requestId"}}`.
 | `404 NOT_FOUND` | Unknown route, server, user, key or invite id. Another user's key looks the same as a missing one. Also a server `PATCH` whose server was deleted by a concurrent `DELETE` (the server is then removed from the catalog too, **tested**). | `Key not found` |
 | `404 INVITE_INVALID` | Invite token unknown, expired, used or cancelled | `This invite link is invalid or has expired` |
 | `409 CONFLICT` | Duplicate slug, a user with that email exists, changing your own role or disabling yourself, an admin issuing a key for a disabled user | `A server with this slug already exists`; `User is disabled` (**tested**) |
-| `413` (code `VALIDATION_FAILED`) | `/api` body over 100 kb | `Request body too large` (**tested**) |
+| `413` (code `VALIDATION_FAILED`) | `/api` body over 100 kb (`/api/chat`: over 512 kb) | `Request body too large` (**tested**) |
 | `429 RATE_LIMITED` | More than 10 login attempts per minute for the same IP and email | `Too many login attempts; try again later`, header `Retry-After` (seconds left in the window, 1-60). The 11th attempt was refused, with `Retry-After: 60` (**live**). |
 | `500 INTERNAL` | Anything unexpected, including a database error | `Internal error`, no message or stack; the log line has the request id and the error class only (**tested**) |
 
@@ -92,6 +92,47 @@ Details worth knowing:
 | A built-in (seeded) server was deleted | seeding at start | It is **not** re-created: each seed slug is inserted once, ever (table `seeded_slugs`). Re-add it with `POST /api/servers` (**tested**) | `GET /api/servers` |
 | The process is killed in the middle of a tool call | none | No audit row exists for that call, because the row is written after the call (spec §6.8; a known limit, no code change) | |
 
-## 4. Not built yet (Phase 4)
+## 4. The chat (`POST /api/chat`)
 
-LLM rate limits and fallback, the chat error messages, and the dashboard error states are in the spec (§10) but do not exist yet. No claim is made about them here.
+A turn either succeeds (HTTP 200, possibly with failed tool calls inside its trace) or fails with one of the codes below. Every `LLM_*` error body carries `details.toolCalls`, the tool calls that already ran in that turn, because they are not undone. Provider text never reaches the user: `LlmError` messages are fixed, and the dashboard shows its own wording. Rules, numbers and the retry algorithm: [ai-integration.md](ai-integration.md#7-failures-retries-deadline-and-fallback); the turn as a diagram: [workflow 15](workflows.md#15-a-chat-turn-tool-loop-retries-and-fallback).
+
+| Failure | Detected by | Retried? | HTTP and code | Chat page shows | Log (`chat turn`) |
+|---|---|---|---|---|---|
+| No key for the configured provider | `deps.llm` is null at the start of the turn | no | `503 LLM_NOT_CONFIGURED`; no MCP connection is opened (**tested**) | the empty state "The AI provider isn't configured" (the page reads `GET /api/chat/status` first) | no turn line; the start-up warning `llm not configured` |
+| Bad body (a `system` or `tool` role, 0 or 21 messages, empty or 4,001-character content, last message not from the user, an unknown field) | zod | no | `400 VALIDATION_FAILED` (**tested**); the LLM is never called | not reachable from the page | request line |
+| A second turn while one runs | per-user in-flight set | no | `409 CONFLICT` "A reply is already being generated" (**tested**) | "A reply is already being generated." | request line |
+| More than `CHAT_RATE_LIMIT_PER_MIN` turns a minute | per-user limiter | no | `429 RATE_LIMITED`, `Retry-After` (**tested**) | "You're sending messages too quickly."; Retry waits for the seconds | request line |
+| Provider rate limit | provider HTTP 429 | yes, up to `LLM_MAX_RETRIES` (2), honouring `retry-after` (max 20 s per wait), never past the deadline; then the fallback once | `429 LLM_RATE_LIMITED`, `Retry-After` = the provider's seconds or **60**, `details.retryAfterSec` (**tested**, including "does not sleep past the deadline") | "The AI provider is rate limited. Try again in N seconds." with a countdown | warn: `code`, `provider`, `httpStatus` 429, `providerCode`, `fallbackProvider`, `fallbackCode`, `usage` |
+| Wrong or revoked AI key | provider HTTP 401/403 | no | `502 LLM_AUTH_FAILED` | "The AI provider rejected the API key. An admin needs to update it." | warn, `httpStatus` 401/403 |
+| Provider down: network error, 5xx, request timeout (`LLM_TIMEOUT_MS`, 30 s) | the adapter | yes (backoff 500 ms × 2^attempt + up to 250 ms jitter), then the fallback once | `502 LLM_UNAVAILABLE` | "The AI provider is unavailable right now." | warn, `httpStatus` 5xx or none |
+| Unusable answer: not JSON, no message, malformed `tool_calls`, another 4xx; Groq `400 tool_use_failed` | the adapter | `tool_use_failed` once (from the same budget); the rest no | `502 LLM_BAD_RESPONSE` | "The AI returned an unexpected answer. Try rephrasing." | warn, `providerCode` (for example `tool_use_failed`) |
+| An LLM error after a tool already ran | `AgentLlmError` keeps the traces | no (tool calls are never retried) | the matching code above, with the executed calls in `details.toolCalls` (**tested**) | the message plus "These actions already ran. Check them before asking again, so nothing is created twice." and the trace (**tested**) | `tools` lists them |
+| The model sends arguments that are not a JSON object, or calls a tool that does not exist | the agent's parse; `/mcp` `Unknown tool` | no; the error goes back to the model, which may correct itself within the 8 steps | 200; the trace row is `error` (**tested**) | a **Failed** row; the model usually explains | `/mcp` audit `denied` for an unknown tool |
+| A tool fails (upstream `isError`, timeout, upstream down, the user was disabled mid-turn) | `/mcp` ([section 1](#1-mcp-the-aggregated-endpoint)) | no | 200; the trace row is `error` with the preview (**tested**, disabled-user case included) | a **Failed** row | the `/mcp` audit row and `tool call` line |
+| The turn takes longer than `CHAT_TURN_TIMEOUT_MS` (60 s) | deadline and turn signal | no | 200, `stoppedReason: "timeout"`, reply "This took too long and was stopped. The actions listed below already ran.", the trace so far (**tested**) | that reply and the trace | `stoppedReason timeout` |
+| More than `CHAT_MAX_STEPS` (8) tool steps | step counter | no | 200, `stoppedReason: "max_steps"`, reply "I stopped after 8 tool steps without a final answer. Try a narrower question." (**tested**) | that reply | `stoppedReason max_steps` |
+| The browser goes away (tab closed, **New conversation** mid-turn) | the response's `close` event aborts the turn | no | none (nobody is listening) (**tested**: the slot is freed) | nothing; a quick next send may get 409 until the old turn has stopped | `stoppedReason timeout` (not told apart from a real timeout: a deferred minor) |
+| The loopback connect or `tools/list` fails for a reason other than the timeout | exception in the service | no | `500 INTERNAL` with a request id (not tested; rare; a deferred minor) | the generic error with the request id | `code INTERNAL` and the error class |
+
+**What is never retried, and why.** Not a tool call (it may have written something), not a whole turn (the page's **Retry** resends the question as a new turn, with the "already ran" list as the guard), and not a model call after a 401/403 or an unusable answer (repeating it would fail the same way).
+
+## 5. The dashboard
+
+The dashboard never leaves a blank screen: each failure has a visible state.
+
+| Failure | Detected by | What the user sees | Recovery |
+|---|---|---|---|
+| A page's data fails to load (5xx, network error, a non-JSON answer such as a proxy's HTML error) | `apiFetch` turns it into `ApiError` (`NETWORK` when there was no usable answer); TanStack Query retries reads twice for network errors and 5xx | an error state in place of the list ("Servers didn't load", "The audit log didn't load", …) with the message, the request id when there is one, and **Try again** | **Try again** refetches; the rest of the page keeps working |
+| The gateway is unreachable when the app starts (`/api/auth/me` fails) | `RequireAuth` | a retryable error, **not** a misleading redirect to the login page (**tested**) | **Try again** |
+| The session expired, or the user was disabled | any `401 UNAUTHENTICATED` (except from the login call) | the login page with `next` set; after signing in, the same page again (**tested**) | sign in |
+| A member opens an admin page by URL (`/team`) | `RequireRole` (and the API's 403) | "You don't have access to this page" with a link to the Overview (**tested**) | n/a |
+| A form is invalid | inline validation before sending; a `400 VALIDATION_FAILED` maps `details.issues` to fields; `SSRF_REJECTED` goes to the URL field, `CONFLICT` to the slug field | inline field errors with `aria-invalid`; focus moves to the first bad field | fix and resubmit |
+| A write fails (create, revoke, disable, delete, invite, role change) | the call's `ApiError` | an error toast with the message and the request id; a confirmation dialog stays open if its action failed | retry by hand; writes are never retried automatically |
+| A server edit changes the URL's host while a credential is stored | the form's origin check (and the API's `400`) | an inline error on Credential: enter a new one or tick Remove (**tested**) | [workflow 16](workflows.md#16-an-admin-edits-a-server-and-the-url-origin-rule) |
+| Server status changes while a page is open | the 10 s refetch | the status badge and tool count update by themselves | n/a |
+| Empty data (no servers, no keys, no calls, no invites, filters that match nothing) | an empty list | an empty state that says what to do (**Add server**, **Create key**, **Clear filters**) | n/a |
+| An unknown address | the router | a Not found page; a crash inside a page shows an error page with **Reload** instead of a blank screen | n/a |
+| A chat failure | `ApiError` from `POST /api/chat` | an inline alert above the message box ([section 4](#4-the-chat-post-apichat)); the user's message stays in the thread so **Retry** resends it | **Retry**, after the countdown for a rate limit |
+| The page is refreshed on a deep link (`/servers/<id>`) | nginx SPA fallback | the page loads normally (nginx answers `index.html` for unknown paths; `/assets/` and `/.well-known/` answer 404 for missing files) | n/a |
+
+Logs for dashboard problems: the gateway log (every dashboard action is an `/api` request with an `X-Request-Id`, the same id the page shows) and `kubectl -n gateway logs deploy/dashboard` for file requests.
