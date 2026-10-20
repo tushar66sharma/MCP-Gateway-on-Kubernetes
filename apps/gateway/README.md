@@ -1,17 +1,15 @@
 # gateway
 
-The team MCP gateway (Phase 3). One Node 24 / Express 5 / TypeScript process that is an MCP **server** for your AI clients and an MCP **client** of the upstream servers (WooCommerce, Notes, Utilities). It owns users, API keys, invites, the upstream registry and the audit log, all in its own Postgres database.
+The team MCP gateway (Phase 3, chat agent since Phase 4). One Node 24 / Express 5 / TypeScript process that is an MCP **server** for your AI clients and an MCP **client** of the upstream servers (WooCommerce, Notes, Utilities). It owns users, API keys, invites, the upstream registry and the audit log, all in its own Postgres database, and runs the dashboard's **chat agent** (`POST /api/chat`): an LLM tool loop that calls the gateway's own `/mcp` as the logged-in user. The dashboard itself is a separate app ([apps/dashboard](../dashboard/README.md)). Everything below exists and was run.
 
-Not built yet (Phase 4): the dashboard, `POST /api/chat` and the LLM layer. Everything below exists and was run.
-
-How to run and inspect it: [docs/run-guide.md](../../docs/run-guide.md#9-the-gateway-phase-3). Design: [docs/system-design.md](../../docs/system-design.md). Security: [docs/security.md](../../docs/security.md).
+How to run and inspect it: [docs/run-guide.md](../../docs/run-guide.md#9-the-gateway-phase-3). Design: [docs/system-design.md](../../docs/system-design.md). Security: [docs/security.md](../../docs/security.md). The LLM layer and the chat: [docs/ai-integration.md](../../docs/ai-integration.md).
 
 ## Endpoints
 
 | Path | Who | What |
 |---|---|---|
 | `POST /mcp` | API key (`ugw_...`) or the internal chat token | The aggregated MCP endpoint: `tools/list` from the cached catalog, `tools/call` routed to the owning upstream. `GET /mcp` answers 405. |
-| `/api/...` | session cookie `ugw_session` (some routes public or admin only) | Login, invites, users, API keys, servers, audit. Full table: [system-design.md](../../docs/system-design.md#3-interfaces). |
+| `/api/...` | session cookie `ugw_session` (some routes public or admin only) | Login, invites, users, API keys, servers, audit, and `GET /api/chat/status` and `POST /api/chat` (Phase 4). Full table: [system-design.md](../../docs/system-design.md#3-interfaces). Every `/api` response carries `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`. |
 | `GET /healthz` | anyone | Liveness: the process is up. |
 | `GET /readyz` | anyone | Readiness: 200 only when Postgres answers `select 1` (503 otherwise). It does not wait for upstreams. |
 
@@ -39,10 +37,21 @@ A missing or invalid variable stops the process at start with a message that lis
 | `UPSTREAM_HEALTH_INTERVAL_MS` | no | `15000` | Health-check period (1000-300000). |
 | `UPSTREAM_HEALTH_TIMEOUT_MS` | no | `5000` | Timeout of one health check (500-60000); must be below `UPSTREAM_HEALTH_INTERVAL_MS`. |
 | `UPSTREAM_CALL_TIMEOUT_MS` | no | `20000` | Timeout of one tool call (11000-120000): above `WOO_TIMEOUT_MS` (10000), enforced here and by the chart schema. |
+| `LLM_PROVIDER` | no | `groq` | Chat model provider: `groq` or `openrouter` (Phase 4). |
+| `LLM_MODEL` | no | `""` | Model id; empty = the provider's default (`openai/gpt-oss-120b` on Groq, `nvidia/nemotron-3-super-120b-a12b:free` on OpenRouter). |
+| `LLM_BASE_URL` | no | `""` | Overrides the primary provider's API URL (`http(s)` URL or empty). |
+| `LLM_FALLBACK_PROVIDER`, `LLM_FALLBACK_MODEL` | no | `""` | A provider tried once, with no retries, when the primary is rate limited or unavailable; must differ from `LLM_PROVIDER`. |
+| `GROQ_API_KEY`, `OPENROUTER_API_KEY` | no | `""` | Provider keys, from the Secret `llm-api-keys` (optional). No key for `LLM_PROVIDER` = chat answers `503 LLM_NOT_CONFIGURED`; the gateway still starts. |
+| `LLM_TIMEOUT_MS` | no | `30000` | One request to the provider (5000-120000). |
+| `LLM_MAX_RETRIES` | no | `2` | Retries on 429, 5xx and network errors (0-5), never past the turn deadline. |
+| `CHAT_TURN_TIMEOUT_MS` | no | `60000` | One whole chat turn (10000-120000). |
+| `CHAT_MAX_STEPS` | no | `8` | Tool steps per turn (1-16). |
+| `CHAT_RATE_LIMIT_PER_MIN` | no | `10` | Chat turns per user per minute (1-120); one turn per user at a time regardless. |
+| `STORE_TIMEZONE` | no | `UTC` | IANA zone the chat's system prompt uses for "today" (validated; the chart passes `storeSetup.timezone`). |
 
 ## Startup order (`src/main.ts`)
 
-1. Load and validate the configuration.
+1. Load and validate the configuration, and build the LLM provider: it logs `llm configured: <provider>/<model>` or warns `llm not configured: chat is disabled (no API key for the provider)` (names only, never a key).
 2. Connect to Postgres, ping and run the migrations in `drizzle/`, up to 30 attempts 2 s apart. If all fail the process exits non-zero (Kubernetes restarts it). `/mcp` is never served on an unmigrated database.
 3. Create the bootstrap admin if there are no users.
 4. Insert each seed server whose slug is in neither `upstream_servers` nor `seeded_slugs`, recording the slug in `seeded_slugs` in the same transaction. A seed never overwrites a row, so admin edits survive restarts, and a deleted built-in server stays deleted (re-add it with `POST /api/servers`).
@@ -60,12 +69,14 @@ A missing or invalid variable stops the process at start with a message that lis
 | `src/audit/` | The audit writer and the audit query. |
 | `src/mcp/` | The gateway's own MCP server factory and the `/mcp` auth middleware. |
 | `src/db/` | The Drizzle schema, the Postgres client and the migrator. |
-| `test/` | Vitest suites on PGlite (an in-process Postgres) and in-process fake upstreams, see [docs/testing.md](../../docs/testing.md). |
+| `src/chat/` | The chat agent (Phase 4): `agent.ts` (the tool loop and its limits), `service.ts` (per-user limits, turn timeout, the `chat turn` log line), `mcpLoopback.ts` (`connectLoopback(mcpUrl, mintToken)`: an MCP client to the gateway's own `/mcp` with a fresh internal token per request), `systemPrompt.ts`. |
+| `src/chat/llm/` | The provider-independent LLM layer: `types.ts`, `errors.ts`, `providers.ts` (Groq, OpenRouter), `openaiCompatible.ts` (the one adapter: retries, backoff, deadline), `registry.ts` (primary plus one-shot fallback). |
+| `test/` | Vitest suites on PGlite (an in-process Postgres), in-process fake upstreams and a scripted fake LLM, see [docs/testing.md](../../docs/testing.md). |
 
 ## Development
 
 ```powershell
-npm test -w @urumi/gateway          # 202 tests, about 45-60 s
+npm test -w @urumi/gateway          # 293 tests in 26 files, about 45-65 s
 npm run typecheck -w @urumi/gateway
 npm run build -w @urumi/gateway
 npm run db:generate -w @urumi/gateway   # after changing src/db/schema.ts; commit the new SQL in drizzle/
@@ -79,3 +90,5 @@ To run it against a throwaway local Postgres you need every required variable ab
 - The login rate limiter is in memory per replica.
 - There is no rate limit on `/mcp` yet (Phase 5); see [security.md](../../docs/security.md#8-residual-risks).
 - The audit row for a tool call is written after the call finishes. A crash in the middle leaves no row.
+- Chat: a failure of the loopback connect or `tools/list` answers a generic `500 INTERNAL`; a client disconnect is logged as `stoppedReason: timeout`; the loopback connect has its own 10 s timeout and does not follow the turn signal. The model sees tool output as untrusted data, but prompt injection remains a residual risk ([security.md](../../docs/security.md#12-untrusted-data-and-prompt-injection)).
+- `scripts/dev/llm-probe.mjs` compares models' tool calling against the captured 15-tool catalogue (`test/fixtures/gateway-tools.json`); it reads the key from `.env` and prints only `set`.
