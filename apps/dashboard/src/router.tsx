@@ -6,6 +6,7 @@ import { BrandName } from './components/layout/BrandMark';
 import { EmptyState } from './components/ui/EmptyState';
 import { PageHeader } from './components/ui/PageHeader';
 import { RequireAuth, RequireRole } from './lib/auth';
+import { Keys } from './pages/Keys';
 import { Login } from './pages/Login';
 import { Overview } from './pages/Overview';
 import { ServerDetail } from './pages/ServerDetail';
@@ -69,7 +70,7 @@ export const routes: RouteObject[] = [
       {
         path: 'keys',
         handle: handle('API keys'),
-        element: <ComingSoon title="API keys" description="Keys that let MCP clients such as Claude Code and Cursor call tools as you." />,
+        element: <Keys />,
       },
       {
         path: 'audit',
