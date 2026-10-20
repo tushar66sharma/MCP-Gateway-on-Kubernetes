@@ -1,13 +1,19 @@
 import { clsx } from 'clsx';
 import { X } from 'lucide-react';
 import { Dialog as RadixDialog } from 'radix-ui';
-import type { ReactElement, ReactNode } from 'react';
+import type { ReactElement, ReactNode, RefObject } from 'react';
+import { useReturnFocus } from '../../lib/useReturnFocus';
 
 export interface DialogProps {
   title: ReactNode;
   description?: ReactNode;
   /** The element that opens the dialog; focus returns to it when the dialog closes. */
   trigger?: ReactElement;
+  /**
+   * Where focus goes when the dialog closes. Without a trigger focus returns to whatever opened the dialog;
+   * pass this when that element may be gone by then (a menu item). Falls back to `#main`.
+   */
+  returnFocusTo?: RefObject<HTMLElement | null>;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   /** Buttons along the bottom edge (Cancel / Save). */
@@ -20,8 +26,20 @@ export interface DialogProps {
 
 const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl' } as const;
 
-/** A modal dialog: focus-trapped, Esc to close, labelled by its title (Radix Dialog). */
-export function Dialog({ title, description, trigger, open, onOpenChange, footer, size = 'md', dismissible = true, children }: DialogProps) {
+/** A modal dialog: focus-trapped, Esc to close, labelled by its title, focus returned on close (Radix Dialog). */
+export function Dialog({
+  title,
+  description,
+  trigger,
+  returnFocusTo,
+  open,
+  onOpenChange,
+  footer,
+  size = 'md',
+  dismissible = true,
+  children,
+}: DialogProps) {
+  const focusReturn = useReturnFocus({ hasTrigger: Boolean(trigger), returnFocusTo });
   const block = (e: Event) => {
     if (!dismissible) e.preventDefault();
   };
@@ -31,6 +49,8 @@ export function Dialog({ title, description, trigger, open, onOpenChange, footer
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 z-40 bg-overlay animate-fade-in" />
         <RadixDialog.Content
+          onOpenAutoFocus={focusReturn.onOpenAutoFocus}
+          onCloseAutoFocus={focusReturn.onCloseAutoFocus}
           onEscapeKeyDown={block}
           onPointerDownOutside={block}
           onInteractOutside={block}

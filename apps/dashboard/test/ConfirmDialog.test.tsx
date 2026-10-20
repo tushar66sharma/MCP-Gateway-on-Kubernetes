@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { Button } from '../src/components/ui/Button';
 import { ConfirmDialog } from '../src/components/ui/ConfirmDialog';
@@ -73,6 +73,44 @@ describe('ConfirmDialog', () => {
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(opener).toHaveFocus();
+  });
+
+  it('focus goes to returnFocusTo when the opener has left the DOM', async () => {
+    function MenuOpened() {
+      const [open, setOpen] = useState(false);
+      const [menuOpen, setMenuOpen] = useState(true);
+      const menuButton = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <Button ref={menuButton}>Key actions</Button>
+          {menuOpen && (
+            <Button
+              onClick={() => {
+                setOpen(true);
+                setMenuOpen(false); // like a menu item that unmounts when the menu closes
+              }}
+            >
+              Revoke
+            </Button>
+          )}
+          <ConfirmDialog
+            open={open}
+            onOpenChange={setOpen}
+            returnFocusTo={menuButton}
+            title="Revoke key?"
+            body="Clients using it stop working."
+            confirmLabel="Revoke key"
+            onConfirm={vi.fn()}
+          />
+        </>
+      );
+    }
+    render(<MenuOpened />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    await screen.findByRole('alertdialog', { name: 'Revoke key?' });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Key actions' })).toHaveFocus();
   });
 
   it('stays open when onConfirm rejects', async () => {

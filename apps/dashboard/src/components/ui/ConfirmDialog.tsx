@@ -1,6 +1,7 @@
 import { clsx } from 'clsx';
 import { AlertDialog } from 'radix-ui';
-import { useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { useState, type ReactElement, type ReactNode, type RefObject } from 'react';
+import { useReturnFocus } from '../../lib/useReturnFocus';
 import { Button } from './Button';
 
 export interface ConfirmDialogProps {
@@ -15,6 +16,11 @@ export interface ConfirmDialogProps {
   trigger?: ReactElement;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Where focus goes when the dialog closes. Needed when the opener disappears meanwhile (a menu item):
+   * pass the menu's trigger. Without it, focus returns to the opener, or to `#main` if that is gone.
+   */
+  returnFocusTo?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -31,11 +37,11 @@ export function ConfirmDialog({
   trigger,
   open: openProp,
   onOpenChange,
+  returnFocusTo,
 }: ConfirmDialogProps) {
   const [openState, setOpenState] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Without a Radix trigger (a controlled dialog opened from a menu), remember what had focus ourselves.
-  const returnFocus = useRef<HTMLElement | null>(null);
+  const focusReturn = useReturnFocus({ hasTrigger: Boolean(trigger), returnFocusTo });
   const open = openProp ?? openState;
 
   const setOpen = (next: boolean) => {
@@ -63,18 +69,8 @@ export function ConfirmDialog({
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="fixed inset-0 z-40 bg-overlay animate-fade-in" />
         <AlertDialog.Content
-          onOpenAutoFocus={() => {
-            // Still the element that had focus before the dialog opened (Radix moves focus after this event).
-            if (!trigger) returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-          }}
-          onCloseAutoFocus={(e) => {
-            if (trigger) return;
-            const target = returnFocus.current;
-            if (target?.isConnected) {
-              e.preventDefault();
-              target.focus();
-            }
-          }}
+          onOpenAutoFocus={focusReturn.onOpenAutoFocus}
+          onCloseAutoFocus={focusReturn.onCloseAutoFocus}
           className={clsx(
             'fixed top-1/2 left-1/2 z-50 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2',
             'rounded-dialog border border-border bg-surface p-6 shadow-overlay animate-dialog-in focus:outline-none',

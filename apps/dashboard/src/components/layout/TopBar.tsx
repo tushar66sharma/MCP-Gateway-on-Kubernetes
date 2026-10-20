@@ -1,7 +1,7 @@
 import { clsx } from 'clsx';
 import { ChevronDown, LogOut, Menu, Monitor, Moon, Sun } from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
-import { useEffect } from 'react';
+import { useEffect, type Ref } from 'react';
 import { useMatches, useNavigate } from 'react-router';
 import { ApiError } from '../../lib/api';
 import { useLogout, useMe } from '../../lib/auth';
@@ -9,6 +9,7 @@ import { useThemePreference, type ThemePreference } from '../../lib/theme';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { toast } from '../ui/Toast';
+import { MOBILE_NAV_ID } from './MobileNav';
 
 export interface RouteHandle {
   title?: string;
@@ -117,7 +118,14 @@ function UserMenu() {
   );
 }
 
-export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
+export interface TopBarProps {
+  onOpenNav: () => void;
+  /** Whether the navigation drawer is open (for the hamburger's `aria-expanded`). */
+  navOpen: boolean;
+  navButtonRef?: Ref<HTMLButtonElement>;
+}
+
+export function TopBar({ onOpenNav, navOpen, navButtonRef }: TopBarProps) {
   const title = usePageTitle();
 
   useEffect(() => {
@@ -126,7 +134,17 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
 
   return (
     <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center gap-3 border-b border-border bg-surface/90 px-4 backdrop-blur sm:px-6 lg:px-10">
-      <Button variant="ghost" className="-ml-2 lg:hidden" aria-label="Open navigation" icon={<Menu aria-hidden />} onClick={onOpenNav} />
+      <Button
+        ref={navButtonRef}
+        variant="ghost"
+        className="-ml-2 lg:hidden"
+        aria-label="Open navigation"
+        aria-haspopup="dialog"
+        aria-expanded={navOpen}
+        aria-controls={MOBILE_NAV_ID}
+        icon={<Menu aria-hidden />}
+        onClick={onOpenNav}
+      />
       <p className="min-w-0 flex-1 truncate text-sm font-medium text-fg-muted">{title}</p>
       <div className="flex items-center gap-1">
         <ThemeMenu />
