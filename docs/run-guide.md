@@ -911,8 +911,10 @@ It checks Node 24, `node_modules` and the Chromium build (and tells you the inst
 
 ```powershell
 kubectl -n gateway get pods                        # dashboard-... should be 1/1 Running
-kubectl -n gateway logs deploy/dashboard --tail=20 # nginx access log (no cookies or keys)
+kubectl -n gateway logs deploy/dashboard --tail=20 # nginx access log: one line per file or page requested
 ```
+
+The nginx log holds request paths, client addresses and browser names, never cookies, keys or passwords. **One exception to know:** opening an invite link logs its path, so a `GET /invite/<token>` line holds the token (**expected** from nginx's default log format; the gateway's own log redacts it, the dashboard's does not, see [security.md](security.md#8-residual-risks)). An invite works once and for 72 hours; do not share this log while an invite is pending.
 
 What the page does is in the gateway log (`kubectl -n gateway logs deploy/gateway`), because the dashboard only calls `/api`. Problems: [blank page or 404 on refresh](troubleshooting.md#the-dashboard-is-blank-or-a-refresh-gives-404), [Playwright browsers missing](troubleshooting.md#check-dashboardps1-says-playwright-chromium-is-not-installed), [the dashboard image is not found](troubleshooting.md#the-dashboard-pod-is-in-errimagepull-image-tag-not-found). The design rules (colours, spacing, accessibility) and the code layout are in [apps/dashboard/README.md](../apps/dashboard/README.md).
 

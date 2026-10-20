@@ -13,7 +13,7 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 
 | Diagram | Shows | Where | Status |
 |---|---|---|---|
-| Architecture overview | Clients, Traefik, the three namespaces, upstream MCP servers, LLM | [architecture.md](../architecture.md) | Available (target architecture; the store, the three MCP servers and the gateway with Postgres are built; the dashboard and NetworkPolicies are not) |
+| Architecture overview | Clients, Traefik, the three namespaces, upstream MCP servers, LLM | [architecture.md](../architecture.md) | Available (target architecture; everything in it is built since Phase 4 except the NetworkPolicies, Phase 5) |
 | Hello-world request path | How a request reaches a pod through Traefik, Ingress and Service on the local cluster | [learning/01-kubernetes-primer.md](../learning/01-kubernetes-primer.md) | Available |
 | Store install sequence | `deploy.ps1` to Helm to the hook Job, with decision points | [workflows.md](../workflows.md) | Available (Phase 1) |
 | Store checkout sequence | A customer placing a Cash-on-delivery order on the store | [workflows.md](../workflows.md) | Available (Phase 1; expected flow, verified by the manual exit check) |
@@ -34,7 +34,13 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 | Auth and API-key lifecycle | Login, key creation, use and revocation | [workflows.md](../workflows.md#9-api-key-lifecycle-create-use-revoke) | Available (Phase 3; run live) |
 | Invite a teammate sequence | Invite creation, link delivery, preview, accept, cancel | [workflows.md](../workflows.md#10-invite-a-teammate) | Available (Phase 3; accept covered by tests, the rest run live) |
 | Upstream goes down and comes back sequence | Health check failure, tools vanish, recovery with a fresh client | [workflows.md](../workflows.md#11-upstream-goes-down-and-comes-back) | Available (Phase 3; timings measured live) |
-| Chat agent loop | Dashboard chat, LLM calls and loopback tool calls through `/mcp` | Planned | (planned) — Phase 4 |
+| Dashboard and chat resource map | The `dashboard` pod beside the gateway, the Ingress split (`/` to nginx, `/api` and `/mcp` to the gateway), the `llm-api-keys` Secret and the call to the LLM provider | [architecture.md](../architecture.md#the-dashboard-and-the-chat-agent-built-in-phase-4) | Available (Phase 4; pods, Ingress paths and Secret checked in the cluster) |
+| Log in to the dashboard sequence | SPA fallback, `/api/auth/me`, login with CSRF and the limiter, the session-expiry redirect with `next` | [workflows.md](../workflows.md#12-log-in-to-the-dashboard-and-what-happens-when-the-session-ends) | Available (Phase 4; login and logout run by Playwright, expiry unit-tested) |
+| Accept an invite sequence | Team page invite, the link page, preview, accept, session start | [workflows.md](../workflows.md#13-accept-an-invite-in-the-browser) | Available (Phase 4; create and cancel run by Playwright, accept unit-tested) |
+| Create an API key in the dashboard sequence | Create, the one-time dialog with client setups, list | [workflows.md](../workflows.md#14-create-an-api-key-in-the-dashboard) | Available (Phase 4; run by Playwright at desktop and phone width) |
+| Chat turn sequence (tool loop, retries, fallback) | Dashboard chat, the per-user refusals, the loopback MCP client with a token per request, LLM retries and the one-shot fallback, audited tool calls | [workflows.md](../workflows.md#15-a-chat-turn-tool-loop-retries-and-fallback) | Available (Phase 4; the success path run live with Groq, failure paths unit-tested, fallback not tested live) |
+| The LLM layer | Route, service, agent, registry, the one OpenAI-compatible adapter configured for Groq and OpenRouter | [ai-integration.md](../ai-integration.md#1-the-layer) | Available (Phase 4) |
+| Admin edits a server sequence | The form's origin check, `PATCH` with SSRF and the origin rule, encryption, upsert and health check | [workflows.md](../workflows.md#16-an-admin-edits-a-server-and-the-url-origin-rule) | Available (Phase 4; component and API tests, not run live) |
 | NetworkPolicy map | Which pods may talk to which | Planned | (planned) — Phase 5 |
 | Helm / Kubernetes resource map | Resources created by the chart per namespace | Planned | (planned) — Phases 5-6 |
 
