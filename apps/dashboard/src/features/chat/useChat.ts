@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MAX_HISTORY, MAX_MESSAGE_CHARS, postChat, type AgentToolTrace, type StoppedReason } from './api';
+import { ApiError } from '../../lib/api';
+import { MAX_HISTORY, MAX_MESSAGE_CHARS, postChat, toolCallsFromDetails, type AgentToolTrace, type StoppedReason, type WireMessage } from './api';
 
 export interface ChatMessage {
   id: number;
@@ -8,13 +9,54 @@ export interface ChatMessage {
   /** Assistant turns only. */
   toolCalls?: AgentToolTrace[];
   stoppedReason?: StoppedReason;
+  /** User turns only: tool calls that ran before a failed reply to this turn (names and outcomes only). */
+  ranBeforeError?: Array<Pick<AgentToolTrace, 'name' | 'outcome'>>;
+}
+
+/** Sent after a user turn that was never answered, so two user messages are never sent back to back. */
+export const NO_REPLY_NOTE = '(no reply)';
+/** What Retry asks for when tool calls already ran: resending the original request could repeat a write. */
+export const CONTINUE_TEXT = 'Continue from where you stopped.';
+
+/** A fixed note for the model: tool names and outcomes only, never arguments or results. */
+export function ranNote(ran: NonNullable<ChatMessage['ranBeforeError']>): string {
+  const list = ran.map((c) => `${c.name} ${c.outcome === 'success' ? 'succeeded' : 'failed'}`).join(', ');
+  return `(The previous request failed after these actions already ran: ${list}. Do not repeat them unless asked.)`;
+}
+
+/**
+ * The messages sent to the gateway (the stored thread is not changed). Empty messages are skipped (the
+ * API rejects them). A user turn whose reply failed is followed by an assistant note: the tool calls that
+ * already ran, or `(no reply)` when none did. When tool calls ran, the turn is continued rather than
+ * repeated: Retry, and a reply that Retry produced, follow the note with CONTINUE_TEXT.
+ */
+export function toWire(thread: ChatMessage[]): WireMessage[] {
+  const kept = thread.filter((m) => m.content.trim() !== '');
+  const wire: WireMessage[] = [];
+  kept.forEach((m, i) => {
+    wire.push({ role: m.role, content: m.content });
+    if (m.role !== 'user') return;
+    const next = kept[i + 1];
+    const ran = m.ranBeforeError ?? [];
+    if (ran.length > 0) {
+      wire.push({ role: 'assistant', content: ranNote(ran) });
+      if (next?.role !== 'user') wire.push({ role: 'user', content: CONTINUE_TEXT });
+    } else if (next?.role === 'user') {
+      wire.push({ role: 'assistant', content: NO_REPLY_NOTE });
+    }
+  });
+  // The gateway caps one message at 4000 characters; a longer earlier reply is cut so it can be sent back.
+  return wire.slice(-MAX_HISTORY).map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
 }
 
 export interface UseChat {
   messages: ChatMessage[];
   /** Adds the user's turn and asks for the reply. A no-op while a reply is pending or the text is blank. */
   send: (text: string) => Promise<void>;
-  /** Asks again for the last user turn after an error; the turn is not added twice. */
+  /**
+   * Asks again for the last user turn after an error; the turn is not added twice. When tool calls already
+   * ran, the request carries a note of them and asks the model to continue instead of starting over.
+   */
   retry: () => Promise<void>;
   pending: boolean;
   error: unknown;
@@ -23,7 +65,8 @@ export interface UseChat {
 
 /**
  * The conversation lives in React state only (never browser storage): message text is private to the
- * session. Only `{role, content}` of the last 20 turns is sent; the gateway rejects any other field.
+ * session. Only `{role, content}` of the last 20 messages is sent (see toWire); the gateway rejects any
+ * other field.
  */
 export function useChat(): UseChat {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -49,8 +92,7 @@ export function useChat(): UseChat {
     inFlight.current = true;
     setPending(true);
     setError(null);
-    // The gateway caps one message at 4000 characters; a longer earlier reply is cut so it can be sent back.
-    const wire = history.current.slice(-MAX_HISTORY).map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
+    const wire = toWire(history.current);
     try {
       const out = await postChat(wire, controller.signal);
       if (turn !== generation.current) return;
@@ -64,6 +106,13 @@ export function useChat(): UseChat {
       commit([...history.current, reply]);
     } catch (err) {
       if (turn !== generation.current) return;
+      // Remember what already ran on the unanswered user turn, so later requests tell the model about it.
+      const ran = err instanceof ApiError ? toolCallsFromDetails(err.details) : [];
+      const last = history.current.at(-1);
+      if (ran.length > 0 && last?.role === 'user') {
+        const ranBeforeError = [...(last.ranBeforeError ?? []), ...ran.map(({ name, outcome }) => ({ name, outcome }))];
+        commit([...history.current.slice(0, -1), { ...last, ranBeforeError }]);
+      }
       setError(err);
     } finally {
       if (turn === generation.current) {
