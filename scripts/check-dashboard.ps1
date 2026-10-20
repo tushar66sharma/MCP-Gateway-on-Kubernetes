@@ -64,5 +64,6 @@ try {
   Pop-Location
 }
 if ($code -ne 0) { Write-Host "ERROR: Dashboard end-to-end check failed (Playwright exit code $code)." -ForegroundColor Red; exit $code }
-Write-Host 'Dashboard works end to end in Chromium (desktop and mobile).' -ForegroundColor Green
+$scope = if ($Project) { $Project } else { 'desktop and mobile' }
+Write-Host "Dashboard works end to end in Chromium ($scope)." -ForegroundColor Green
 exit 0
