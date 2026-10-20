@@ -10,3 +10,15 @@ Admin password (copied to the clipboard, never printed; run from the repository 
 
 Store setup log:
   kubectl -n {{ .Values.namespaces.store }} logs job/store-setup
+{{- if .Values.gateway.enabled }}
+{{- $app := include "urumi.publicUrl" (dict "root" $ "host" .Values.global.appHost) }}
+
+{{ if .Values.dashboard.enabled -}}
+Dashboard:    {{ $app }}/
+{{ end -}}
+Gateway API:  {{ $app }}/api
+MCP endpoint: {{ $app }}/mcp   (needs a personal API key)
+
+AI chat (optional): put GROQ_API_KEY (and optionally OPENROUTER_API_KEY) in .env, then run:
+  powershell -ExecutionPolicy Bypass -File scripts\create-secrets.ps1
+{{- end }}

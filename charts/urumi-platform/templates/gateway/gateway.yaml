@@ -7,6 +7,11 @@
 {{- $wooTok := default "mcp-woocommerce-token" .Values.secrets.existing.mcpWoocommerceToken -}}
 {{- $notesTok := default "mcp-notes-token" .Values.secrets.existing.mcpNotesToken -}}
 {{- $utilsKey := default "mcp-utilities-key" .Values.secrets.existing.mcpUtilitiesKey -}}
+{{- /* Created by scripts/create-secrets.ps1, never by the chart; referenced with optional: true. */ -}}
+{{- $llmKeys := default "llm-api-keys" .Values.secrets.existing.llmApiKeys -}}
+{{- if and $g.llm.fallbackProvider (eq $g.llm.fallbackProvider $g.llm.provider) -}}
+{{- fail "gateway.llm.fallbackProvider must differ from gateway.llm.provider (or be empty)" -}}
+{{- end -}}
 {{- /* The Host check compares the hostname only (ADR-007), so ports are not listed. */ -}}
 {{- $hosts := list .Values.global.appHost $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.cluster.local" $name $ns) "127.0.0.1" "localhost" -}}
 apiVersion: v1
@@ -122,6 +127,36 @@ spec:
               value: {{ $g.healthTimeoutMs | quote }}
             - name: UPSTREAM_CALL_TIMEOUT_MS
               value: {{ $g.callTimeoutMs | quote }}
+            # AI chat. Provider and model names only; the keys come from the llm-api-keys Secret below.
+            - name: LLM_PROVIDER
+              value: {{ $g.llm.provider | quote }}
+            - name: LLM_MODEL
+              value: {{ $g.llm.model | quote }}
+            - name: LLM_BASE_URL
+              value: {{ $g.llm.baseUrl | quote }}
+            - name: LLM_FALLBACK_PROVIDER
+              value: {{ $g.llm.fallbackProvider | quote }}
+            - name: LLM_FALLBACK_MODEL
+              value: {{ $g.llm.fallbackModel | quote }}
+            - name: LLM_TIMEOUT_MS
+              value: {{ $g.llm.timeoutMs | quote }}
+            - name: LLM_MAX_RETRIES
+              value: {{ $g.llm.maxRetries | quote }}
+            - name: CHAT_TURN_TIMEOUT_MS
+              value: {{ $g.chat.turnTimeoutMs | quote }}
+            - name: CHAT_MAX_STEPS
+              value: {{ $g.chat.maxSteps | quote }}
+            - name: CHAT_RATE_LIMIT_PER_MIN
+              value: {{ $g.chat.rateLimitPerMin | quote }}
+            # The same zone the store uses, so "today" means the same day in chat and in WooCommerce.
+            - name: STORE_TIMEZONE
+              value: {{ .Values.storeSetup.timezone | quote }}
+            # optional: true, so a missing Secret (or key) never blocks the pod: chat then answers
+            # LLM_NOT_CONFIGURED. After changing the Secret, restart the gateway (create-secrets.ps1 does).
+            - name: GROQ_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ $llmKeys }}, key: GROQ_API_KEY, optional: true } }
+            - name: OPENROUTER_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ $llmKeys }}, key: OPENROUTER_API_KEY, optional: true } }
           # /readyz checks the database only, never the upstreams, so a fresh `helm --wait` cannot deadlock.
           readinessProbe:
             httpGet: { path: /readyz, port: http }

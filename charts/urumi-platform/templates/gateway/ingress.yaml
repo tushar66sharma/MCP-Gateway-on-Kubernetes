@@ -21,7 +21,8 @@ spec:
     - host: {{ .Values.global.appHost | quote }}
       http:
         paths:
-          # The dashboard (Phase 4) will own "/"; only the API and the MCP endpoint are routed now.
+          # Traefik matches the longest prefix first, so /api and /mcp stay with the gateway and every
+          # other path goes to the dashboard.
           - path: /api
             pathType: Prefix
             backend:
@@ -36,4 +37,13 @@ spec:
                 name: gateway
                 port:
                   name: http
+          {{- if .Values.dashboard.enabled }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard
+                port:
+                  name: http
+          {{- end }}
 {{- end }}

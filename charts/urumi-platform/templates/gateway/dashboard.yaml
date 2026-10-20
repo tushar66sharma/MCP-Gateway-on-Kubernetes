@@ -1,0 +1,74 @@
+{{- if and .Values.gateway.enabled .Values.dashboard.enabled }}
+{{- $ns := .Values.namespaces.gateway -}}
+{{- $d := .Values.dashboard -}}
+{{- $name := "dashboard" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" $name "component" "dashboard") | nindent 4 }}
+spec:
+  selector:
+    {{- include "urumi.selectorLabels" (dict "root" $ "name" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $d.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" $name "component" "dashboard") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (dict "root" $ "name" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.podLabels" (dict "root" $ "name" $name "component" "dashboard") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      # uid/gid 101 is the nginx user of nginxinc/nginx-unprivileged.
+      securityContext:
+        {{- include "urumi.podSecurityContext" (dict "uid" 101 "gid" 101) | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "urumi.image" (dict "root" $ "repository" $d.image.repository "tag" $d.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "urumi.containerSecurityContext" $ | nindent 12 }}
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: {{ $d.port }}
+          # Gives the endpoint removal time to reach Traefik before SIGTERM stops nginx.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $d.resources | nindent 12 }}
+          # nginx writes its pid file and temp files under /tmp; everything else is read-only.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

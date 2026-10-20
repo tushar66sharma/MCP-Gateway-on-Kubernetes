@@ -5,3 +5,10 @@ global:
   appHost: app.localhost
   publicScheme: http
   publicPort: 80        # change to 8081 if host port 80 is taken (also change deploy/k3d-config.yaml)
+# The dashboard is served at http://app.localhost/ (chart default dashboard.enabled: true).
+# AI chat: the provider keys are never put in a values file. scripts\create-secrets.ps1 reads them from the
+# git-ignored .env and creates the Secret llm-api-keys in namespace gateway. The model is a chart value:
+# gateway:
+#   llm:
+#     provider: groq        # groq | openrouter
+#     model: ""             # "" = the provider's default model
