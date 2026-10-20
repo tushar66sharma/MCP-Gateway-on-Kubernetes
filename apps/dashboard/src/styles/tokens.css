@@ -1,0 +1,74 @@
+/*
+ * Design tokens: every colour the dashboard uses, for both themes.
+ *
+ * Each token is `light-dark(<light>, <dark>)`, resolved by `color-scheme`:
+ *   - default: follow the operating system (`color-scheme: light dark`);
+ *   - <html data-theme="light|dark">: forced by the theme toggle (src/lib/theme.ts).
+ * One definition per token keeps the two themes from drifting apart.
+ *
+ * Contrast (WCAG 2.x relative luminance; light / dark), all text pairs at least AA 4.5 : 1:
+ *   fg on surface 17.9 / 14.2; fg-muted 7.6 / 8.0; fg-subtle 5.4 / 5.6 (on canvas 5.0 / 6.0);
+ *   accent-fg on accent 6.3 / 6.7; accent-text on surface 7.9 / 8.6 (on accent-subtle 7.0 / 7.4);
+ *   success on success-subtle 4.6 / 8.8; danger on danger-subtle 5.8 / 6.0; danger-solid-fg 6.5 / 6.9;
+ *   warning on warning-subtle 5.2 / 9.1; rail-muted on rail 7.1 / 7.9.
+ *   Non-text (3 : 1): border-input on surface 3.6 / 3.5; neutral status dot 3.7 / 4.9.
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces: neutral slate. The canvas sits behind cards; sunken is for table heads and code. */
+  --canvas: light-dark(#f4f6f9, #0d1322);
+  --surface: light-dark(#ffffff, #141b2c);
+  --surface-sunken: light-dark(#f1f4f8, #10172a);
+  --surface-hover: light-dark(#eef1f6, #1a2236);
+  --border: light-dark(#e2e8f0, #253049);
+  --border-strong: light-dark(#cbd5e1, #34405b);
+  /* Form-control outlines: 3 : 1 against surface and canvas (WCAG 1.4.11 non-text contrast). */
+  --border-input: light-dark(#7b889c, #64718d);
+
+  /* Text */
+  --fg: light-dark(#0f172a, #e5eaf2);
+  --fg-muted: light-dark(#475569, #a6b2c4);
+  --fg-subtle: light-dark(#5c6b80, #8794a9);
+
+  /* The one accent: indigo */
+  --accent: light-dark(#4f46e5, #8b93f8);
+  --accent-hover: light-dark(#4338ca, #a5adfb);
+  --accent-fg: light-dark(#ffffff, #0d1322);
+  --accent-subtle: light-dark(#eef0ff, #1e2350);
+  --accent-text: light-dark(#4338ca, #aab2fc);
+  --focus: light-dark(#4f46e5, #aab2fc);
+
+  /* Status: always paired with a text label */
+  --success: light-dark(#15803d, #4ade80);
+  --success-subtle: light-dark(#ebf8f0, #0f2a1d);
+  --danger: light-dark(#b91c1c, #f87171);
+  --danger-subtle: light-dark(#fdf0f0, #33151a);
+  --danger-solid: light-dark(#b91c1c, #f87171);
+  --danger-solid-hover: light-dark(#991b1b, #fca5a5);
+  --danger-solid-fg: light-dark(#ffffff, #1b0a0c);
+  --warning: light-dark(#a35207, #fbbf24);
+  --warning-subtle: light-dark(#fdf5e7, #2f2410);
+  --neutral: light-dark(#7a8799, #7d8aa0);
+  --neutral-subtle: light-dark(#eef1f5, #1c2438);
+
+  /* The navigation rail stays dark in both themes: the one bold surface of the shell. */
+  --rail: light-dark(#111a2e, #0a0f1c);
+  --rail-border: light-dark(#1d2840, #182035);
+  --rail-fg: #e5eaf2;
+  --rail-muted: #9aa7bb;
+  --rail-hover: light-dark(#1a2540, #141c30);
+  --rail-active: light-dark(#222c52, #1b2148);
+  --rail-signal: #8b93f8;
+
+  --overlay: light-dark(rgb(15 23 42 / 0.45), rgb(3 6 14 / 0.7));
+  --shadow-overlay: 0 1px 2px rgb(15 23 42 / 0.08), 0 12px 32px -8px rgb(15 23 42 / 0.28);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
