@@ -67,6 +67,27 @@ function toIso(local: string): string | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
+export interface ToolFilterSplit {
+  serverSlug: string;
+  toolName: string;
+  /** Set when the input named another server than the one already chosen: that server filter was kept. */
+  keptServer?: string;
+}
+
+/**
+ * The table shows prefixed names (`utils__calculate`) while the API filters on the bare tool name, so a
+ * prefixed input is split on its first `__` into the server and the tool. A server filter that is already
+ * set to a different slug wins, and only the tool part is used.
+ */
+export function splitToolFilter(input: string, serverSlug: string): ToolFilterSplit {
+  const at = input.indexOf('__');
+  if (at <= 0 || at + 2 >= input.length) return { serverSlug, toolName: input };
+  const slug = input.slice(0, at);
+  const toolName = input.slice(at + 2);
+  if (serverSlug !== '' && serverSlug !== slug) return { serverSlug, toolName, keptServer: serverSlug };
+  return { serverSlug: slug, toolName };
+}
+
 export const AUDIT_PAGE_SIZE = 50;
 
 export function auditPath(values: AuditFilterValues, cursor?: string, limit = AUDIT_PAGE_SIZE): string {

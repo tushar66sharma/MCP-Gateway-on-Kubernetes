@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { KeyRound, Power, UserCheck } from 'lucide-react';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -78,22 +78,70 @@ function UserActions({ user: u, self, onDisabled, onKeys }: UserActionsProps) {
   );
 }
 
-/** Users with a role select, Keys…, and Disable / Enable. Your own row cannot be demoted or disabled. */
-export function UsersTable({ users, meId, onRole, onDisabled, onKeys }: UsersTableProps) {
-  const roleSelect = (u: UserView) => {
-    const self = u.id === meId;
-    return (
+interface RoleSelectProps {
+  user: UserView;
+  self: boolean;
+  onRole: UsersTableProps['onRole'];
+}
+
+/**
+ * A role change is a privilege change, and ArrowDown on a focused closed select fires `change` in some
+ * browsers, so it is confirmed first. The select keeps showing the current role until the change is saved,
+ * and is disabled while it is.
+ */
+function RoleSelect({ user: u, self, onRole }: RoleSelectProps) {
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const [proposed, setProposed] = useState<Role | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const confirm = async () => {
+    if (!proposed) return;
+    setSaving(true);
+    try {
+      await onRole(u, proposed);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
       <Select
+        ref={selectRef}
         aria-label={`Role for ${u.name}`}
         options={ROLE_OPTIONS}
         value={u.role}
-        disabled={self}
+        disabled={self || saving}
         {...(self && { title: SELF_HINT })}
         className="w-32"
-        onChange={(e) => void onRole(u, e.target.value as Role).catch(() => undefined)}
+        onChange={(e) => {
+          const next = e.target.value as Role;
+          if (next !== u.role) setProposed(next);
+        }}
       />
-    );
-  };
+      <ConfirmDialog
+        open={proposed !== null}
+        onOpenChange={(open) => {
+          if (!open) setProposed(null);
+        }}
+        returnFocusTo={selectRef}
+        tone="default"
+        title={proposed === 'admin' ? `Make ${u.name} an admin?` : `Make ${u.name} a member?`}
+        body={
+          proposed === 'admin'
+            ? 'Admins can manage servers, credentials and users, and see every audit row.'
+            : `${u.name} loses admin rights at once: they can no longer manage servers, credentials or users, and see only their own audit rows.`
+        }
+        confirmLabel={proposed === 'admin' ? 'Make admin' : 'Make member'}
+        onConfirm={confirm}
+      />
+    </>
+  );
+}
+
+/** Users with a role select, Keys…, and Disable / Enable. Your own row cannot be demoted or disabled. */
+export function UsersTable({ users, meId, onRole, onDisabled, onKeys }: UsersTableProps) {
+  const roleSelect = (u: UserView) => <RoleSelect user={u} self={u.id === meId} onRole={onRole} />;
 
   const actions = (u: UserView) => <UserActions user={u} self={u.id === meId} onDisabled={onDisabled} onKeys={onKeys} />;
 

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
@@ -95,14 +95,56 @@ describe('Team', () => {
     });
   });
 
-  it('changing a role sends only the role', async () => {
+  it('changing a role sends only the role, after confirming', async () => {
     const fetchMock = renderTeam({ 'PATCH /api/users/u-m1': () => jsonResponse(200, { user: { ...users[2], role: 'admin' } }) });
     await ready();
     await userEvent.selectOptions(screen.getByLabelText('Role for Max Member'), 'admin');
+    const dialog = await screen.findByRole('alertdialog', { name: 'Make Max Member an admin?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Make admin' }));
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH');
       expect(call?.[1]?.body).toBe(JSON.stringify({ role: 'admin' }));
     });
+  });
+
+  it('a keyboard-style role change opens a confirm and sends nothing yet', async () => {
+    const fetchMock = renderTeam();
+    await ready();
+    const select = screen.getByLabelText<HTMLSelectElement>('Role for Max Member');
+    select.focus();
+    // ArrowDown on a focused closed select fires `change` in Chrome and Edge on Windows.
+    fireEvent.change(select, { target: { value: 'admin' } });
+    expect(await screen.findByRole('alertdialog', { name: 'Make Max Member an admin?' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
+    // The select keeps the current role until the change is confirmed.
+    expect(select.value).toBe('member');
+  });
+
+  it('cancelling a role change keeps the role and returns focus to the select', async () => {
+    const fetchMock = renderTeam();
+    await ready();
+    const select = screen.getByLabelText<HTMLSelectElement>('Role for Bo Boss');
+    await userEvent.selectOptions(select, 'member');
+    const dialog = await screen.findByRole('alertdialog', { name: 'Make Bo Boss a member?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(select.value).toBe('admin');
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
+    await waitFor(() => expect(document.activeElement).toBe(select));
+  });
+
+  it('the role select is disabled while the change is saved', async () => {
+    let release: (r: Response) => void = () => undefined;
+    renderTeam({ 'PATCH /api/users/u-m1': () => new Promise<Response>((resolve) => (release = resolve)) });
+    await ready();
+    const select = screen.getByLabelText<HTMLSelectElement>('Role for Max Member');
+    await userEvent.selectOptions(select, 'admin');
+    const dialog = await screen.findByRole('alertdialog', { name: 'Make Max Member an admin?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Make admin' }));
+    await waitFor(() => expect(select).toBeDisabled());
+    release(jsonResponse(200, { user: { ...users[2], role: 'admin' } }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(select).toBeEnabled();
   });
 
   it('lists pending invites with an Expired badge and cancels with a confirm', async () => {

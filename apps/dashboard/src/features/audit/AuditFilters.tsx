@@ -6,7 +6,7 @@ import { Select, type SelectOption } from '../../components/ui/Select';
 import { useMe } from '../../lib/auth';
 import { useServers } from '../servers/api';
 import { useUsers } from '../team/api';
-import { EMPTY_FILTERS, hasFilters, OUTCOMES, type AuditFilterValues } from './api';
+import { EMPTY_FILTERS, hasFilters, OUTCOMES, splitToolFilter, type AuditFilterValues } from './api';
 
 export interface AuditFiltersProps {
   value: AuditFilterValues;
@@ -43,15 +43,24 @@ export function AuditFilters({ value, onChange }: AuditFiltersProps) {
   // The tool name is committed on Enter or blur, so typing does not refetch on every keystroke.
   const [toolDraft, setToolDraft] = useState(value.toolName);
   const [seenTool, setSeenTool] = useState(value.toolName);
+  // Shown when a prefixed tool name named another server than the chosen one.
+  const [toolHint, setToolHint] = useState<string | null>(null);
   if (seenTool !== value.toolName) {
-    // The URL changed under the field (Clear filters, back button): show it.
+    // The URL changed under the field (Clear filters, back button, a split prefix): show it.
     setSeenTool(value.toolName);
     setToolDraft(value.toolName);
   }
 
   const commitTool = () => {
-    const next = toolDraft.trim();
-    if (next !== value.toolName) onChange({ ...value, toolName: next });
+    const split = splitToolFilter(toolDraft.trim(), value.serverSlug);
+    setToolHint(
+      split.keptServer !== undefined ? `The server filter is “${split.keptServer}”, so only the tool name “${split.toolName}” is used.` : null,
+    );
+    // The field shows the bare tool name the filter now uses.
+    setToolDraft(split.toolName);
+    if (split.toolName !== value.toolName || split.serverSlug !== value.serverSlug) {
+      onChange({ ...value, serverSlug: split.serverSlug, toolName: split.toolName });
+    }
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -71,10 +80,13 @@ export function AuditFilters({ value, onChange }: AuditFiltersProps) {
           placeholder="All servers"
           options={serverOptions}
           value={value.serverSlug}
-          onChange={(e) => onChange({ ...value, serverSlug: e.target.value })}
+          onChange={(e) => {
+            setToolHint(null);
+            onChange({ ...value, serverSlug: e.target.value });
+          }}
         />
       </FormField>
-      <FormField label="Tool name">
+      <FormField label="Tool name" hint={toolHint ?? 'With or without the server prefix (woo__create_product).'}>
         <Input
           value={toolDraft}
           maxLength={200}
@@ -105,7 +117,14 @@ export function AuditFilters({ value, onChange }: AuditFiltersProps) {
       </FormField>
       {hasFilters(value) ? (
         <div className="sm:col-span-2 lg:col-span-3">
-          <Button variant="ghost" size="sm" onClick={() => onChange(EMPTY_FILTERS)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setToolHint(null);
+              onChange(EMPTY_FILTERS);
+            }}
+          >
             Clear filters
           </Button>
         </div>

@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider, useSearchParams } from 'react-router';
 import { describe, expect, it } from 'vitest';
-import { parseFilters, serializeFilters } from '../src/features/audit/api';
+import { parseFilters, serializeFilters, splitToolFilter } from '../src/features/audit/api';
 import { AuditFilters } from '../src/features/audit/AuditFilters';
 import { useMe } from '../src/lib/auth';
 import { admin, jsonResponse, member, mockFetch, Providers } from './helpers';
@@ -77,6 +77,40 @@ describe('AuditFilters', () => {
   it('ignores an unknown outcome in the URL and trims the tool name', () => {
     expect(parseFilters(new URLSearchParams('outcome=bogus')).outcome).toBe('');
     expect(parseFilters(new URLSearchParams('toolName=%20x%20')).toolName).toBe('x');
+  });
+
+  it('splits a prefixed tool name into server and tool', () => {
+    expect(splitToolFilter('utils__calculate', '')).toEqual({ serverSlug: 'utils', toolName: 'calculate' });
+    expect(splitToolFilter('utils__calculate', 'utils')).toEqual({ serverSlug: 'utils', toolName: 'calculate' });
+    // Split on the first `__` only.
+    expect(splitToolFilter('woo__get__thing', '')).toEqual({ serverSlug: 'woo', toolName: 'get__thing' });
+    expect(splitToolFilter('calculate', 'utils')).toEqual({ serverSlug: 'utils', toolName: 'calculate' });
+    // A different server is already chosen: keep it and use the tool part only.
+    expect(splitToolFilter('utils__calculate', 'notes')).toEqual({ serverSlug: 'notes', toolName: 'calculate', keptServer: 'notes' });
+    // Nothing on one side of `__`: not a prefix.
+    expect(splitToolFilter('__x', '')).toEqual({ serverSlug: '', toolName: '__x' });
+    expect(splitToolFilter('x__', '')).toEqual({ serverSlug: '', toolName: 'x__' });
+  });
+
+  it('a tool name copied from the table sets the server and tool filters', async () => {
+    renderBar(admin);
+    await waitFor(() => expect(screen.getByTestId('role')).toHaveTextContent('admin'));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Tool name'), 'woo__create_product{Enter}');
+    await waitFor(() => expect(search().get('toolName')).toBe('create_product'));
+    expect(search().get('serverSlug')).toBe('woo');
+    expect(screen.getByLabelText('Tool name')).toHaveValue('create_product');
+  });
+
+  it('keeps a different server filter and explains it', async () => {
+    renderBar(admin, '/audit?serverSlug=notes');
+    await waitFor(() => expect(screen.getByTestId('role')).toHaveTextContent('admin'));
+    await waitFor(() => expect(screen.getByLabelText('Server')).toHaveValue('notes'));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('Tool name'), 'woo__create_product{Enter}');
+    await waitFor(() => expect(search().get('toolName')).toBe('create_product'));
+    expect(search().get('serverSlug')).toBe('notes');
+    expect(screen.getByText(/The server filter is “notes”, so only the tool name “create_product” is used\./)).toBeInTheDocument();
   });
 
   it('member has no user filter', async () => {
