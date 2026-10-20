@@ -2,15 +2,16 @@ import { Hammer } from 'lucide-react';
 import { createBrowserRouter, type RouteObject } from 'react-router';
 import { AppShell } from './components/layout/AppShell';
 import type { RouteHandle } from './components/layout/TopBar';
-import { BrandName } from './components/layout/BrandMark';
 import { EmptyState } from './components/ui/EmptyState';
 import { PageHeader } from './components/ui/PageHeader';
 import { RequireAuth, RequireRole } from './lib/auth';
 import { Keys } from './pages/Keys';
+import { AcceptInvite } from './pages/AcceptInvite';
 import { Login } from './pages/Login';
 import { Overview } from './pages/Overview';
 import { ServerDetail } from './pages/ServerDetail';
 import { Servers } from './pages/Servers';
+import { Team } from './pages/Team';
 import { NotFound, RouteError } from './pages/NotFound';
 
 /*
@@ -28,22 +29,11 @@ function ComingSoon({ title, description }: { title: string; description: string
   );
 }
 
-function InvitePlaceholder() {
-  return (
-    <div className="flex min-h-dvh flex-col bg-canvas px-4 py-8 sm:px-10">
-      <BrandName className="text-fg" />
-      <main className="flex flex-1 items-center justify-center">
-        <EmptyState icon={<Hammer aria-hidden />} title="Coming in this phase" description="Accepting an invite is being built in the current phase." />
-      </main>
-    </div>
-  );
-}
-
 const handle = (title: string): RouteHandle => ({ title });
 
 export const routes: RouteObject[] = [
   { path: '/login', element: <Login />, errorElement: <RouteError /> },
-  { path: '/invite/:token', element: <InvitePlaceholder />, errorElement: <RouteError /> },
+  { path: '/invite/:token', element: <AcceptInvite />, errorElement: <RouteError /> },
   {
     element: (
       <RequireAuth>
@@ -87,7 +77,7 @@ export const routes: RouteObject[] = [
         handle: handle('Team'),
         element: (
           <RequireRole role="admin">
-            <ComingSoon title="Team" description="Invite people, set their roles and manage their access." />
+            <Team />
           </RequireRole>
         ),
       },

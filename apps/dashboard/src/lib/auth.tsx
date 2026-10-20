@@ -96,6 +96,22 @@ export function useLogin(): (email: string, password: string) => Promise<Me> {
   );
 }
 
+/**
+ * Adopts a session the API just started (the cookie is already set, e.g. by accepting an invite): drops
+ * everything cached for the previous user and makes `me` the new user.
+ */
+export function useStartSession(): (me: Me) => void {
+  const { setMe } = useAuthContext();
+  const queryClient = useQueryClient();
+  return useCallback(
+    (me) => {
+      queryClient.clear();
+      setMe(me);
+    },
+    [queryClient, setMe],
+  );
+}
+
 /** Logs out. A 401 means the session was already gone, which is the outcome we wanted anyway. */
 export function useLogout(): () => Promise<void> {
   const { setMe } = useAuthContext();
