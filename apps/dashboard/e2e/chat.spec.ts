@@ -29,11 +29,11 @@ test('chat calls utils__calculate, answers 42 and the call is audited as Chat', 
   // The reply bubble itself (not the trace) must give the answer.
   await expect(reply.locator('div.whitespace-pre-wrap')).toContainText('42');
 
-  // The tool call is in the audit log, marked as coming from the chat.
-  await page.goto('/audit?serverSlug=utils');
+  // The newest calculate call in the audit log is this one, marked as coming from the chat.
+  await page.goto('/audit?serverSlug=utils&toolName=calculate');
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log' })).toBeVisible();
-  const chatRow = tableRows(page, 'Audit log', false)
-    .filter({ hasText: 'utils__calculate' })
-    .filter({ has: page.getByText('Chat', { exact: true }) });
-  await expect(chatRow.first()).toBeVisible();
+  const newest = tableRows(page, 'Audit log', false).first();
+  await expect(newest).toContainText('utils__calculate');
+  await expect(newest.getByText('Chat', { exact: true })).toBeVisible();
+  await expect(newest).toContainText('success');
 });
