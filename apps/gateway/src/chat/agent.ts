@@ -11,6 +11,10 @@ export const TOOL_DESCRIPTION_MAX_CHARS = 300;
 const RAW_ARGUMENTS_MAX_CHARS = 500;
 
 export const TIMEOUT_REPLY = 'This took too long and was stopped. The actions listed below already ran.';
+/** The timeout reply when no tool call ran, so it never claims actions that did not happen. */
+export const TIMEOUT_NO_ACTIONS_REPLY = 'This took too long and was stopped. No actions ran.';
+/** Replaces an empty final answer: the API rejects empty messages, so an empty reply would break the next request. */
+export const EMPTY_REPLY = "I couldn't produce an answer. Try rephrasing your question.";
 export const maxStepsReply = (n: number): string => `I stopped after ${n} tool steps without a final answer. Try a narrower question.`;
 
 export interface AgentToolTrace {
@@ -125,7 +129,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<AgentTurnResult
     model,
     steps,
   });
-  const timedOut = (): AgentTurnResult => result(TIMEOUT_REPLY, 'timeout');
+  const timedOut = (): AgentTurnResult => result(traces.length > 0 ? TIMEOUT_REPLY : TIMEOUT_NO_ACTIONS_REPLY, 'timeout');
 
   if (expired()) return timedOut();
   let tools: ToolSpec[];
@@ -160,7 +164,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<AgentTurnResult
       usage.totalTokens += res.usage.totalTokens;
     }
 
-    if (res.toolCalls.length === 0) return result((res.message.content ?? '').trim(), 'final');
+    if (res.toolCalls.length === 0) return result((res.message.content ?? '').trim() || EMPTY_REPLY, 'final');
     if (steps >= o.maxSteps) return result(maxStepsReply(o.maxSteps), 'max_steps');
     steps += 1;
 

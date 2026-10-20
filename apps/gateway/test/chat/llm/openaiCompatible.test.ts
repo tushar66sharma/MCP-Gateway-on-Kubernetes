@@ -133,6 +133,23 @@ describe('openai-compatible provider', () => {
     expect(delays).toEqual([]);
   });
 
+  it('fails fast when retry-after is above the 20 s cap', async () => {
+    const { provider, delays, calls } = setup([json({}, 429, { 'retry-after': '3600' }), json(okBody({ content: 'ok' }))]);
+    const err = await errorOf(provider.chat(req()));
+    expect(err.code).toBe('LLM_RATE_LIMITED');
+    expect(err.retryAfterSec).toBe(3600);
+    expect(delays).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('still retries when retry-after equals the 20 s cap', async () => {
+    const { provider, delays, calls } = setup([json({}, 429, { 'retry-after': '20' }), json(okBody({ content: 'ok' }))]);
+    const r = await provider.chat(req());
+    expect(r.message.content).toBe('ok');
+    expect(delays).toEqual([20000]);
+    expect(calls).toHaveLength(2);
+  });
+
   it('401 is LLM_AUTH_FAILED without retry', async () => {
     const { provider, calls } = setup([json({ error: { message: 'bad' } }, 401)]);
     expect((await errorOf(provider.chat(req()))).code).toBe('LLM_AUTH_FAILED');

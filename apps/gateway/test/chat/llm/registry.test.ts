@@ -41,6 +41,17 @@ describe('LLM registry', () => {
     expect(urls.filter((u) => u.includes('openrouter'))).toHaveLength(1);
   });
 
+  it('uses the fallback at once when the primary asks for a long wait', async () => {
+    const { f, urls } = fakeFetch((u) => (u.includes('groq') ? new Response('{}', { status: 429, headers: { 'retry-after': '3600' } }) : okResponse()));
+    const delays: number[] = [];
+    const llm = createLlmFromConfig({ ...BASE, LLM_MAX_RETRIES: 2 }, { fetch: f, sleep: async (ms) => void delays.push(ms), random: () => 0 })!;
+    const r = await llm.chat(request());
+    expect(r.provider).toBe('openrouter');
+    expect(delays).toEqual([]);
+    expect(urls.filter((u) => u.includes('groq'))).toHaveLength(1);
+    expect(urls.filter((u) => u.includes('openrouter'))).toHaveLength(1);
+  });
+
   it('no fallback on auth failure', async () => {
     const { f, urls } = fakeFetch(() => new Response('{}', { status: 401 }));
     const llm = createLlmFromConfig(BASE, { fetch: f, sleep: async () => {} })!;

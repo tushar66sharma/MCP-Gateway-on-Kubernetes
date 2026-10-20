@@ -180,6 +180,7 @@ describe('runAgentTurn', () => {
     const out = await run(llm, mcp, { deadline: Date.now() + 40 });
     expect(out.stoppedReason).toBe('timeout');
     expect(out.toolCalls).toEqual([]);
+    expect(out.reply).toBe('This took too long and was stopped. No actions ran.');
     expect(mcp.calls).toHaveLength(0);
   });
 
@@ -206,8 +207,23 @@ describe('runAgentTurn', () => {
     expect(content.match(/<tool_result/g)).toHaveLength(1);
   });
 
-  it('a final answer with null content gives an empty reply', async () => {
+  it('a final answer with null content gives the fixed no-answer reply', async () => {
     const out = await run(new ScriptedLlm(finalStep(null)), fakeMcp());
-    expect(out).toMatchObject({ reply: '', stoppedReason: 'final', toolCalls: [], steps: 0 });
+    expect(out).toMatchObject({ reply: "I couldn't produce an answer. Try rephrasing your question.", stoppedReason: 'final', toolCalls: [], steps: 0 });
+  });
+
+  it('a whitespace-only final answer gives the fixed no-answer reply', async () => {
+    const out = await run(new ScriptedLlm(toolStep([{ name: 'woo__list_orders' }]), finalStep('  \n\t ')), fakeMcp());
+    expect(out.reply).toBe("I couldn't produce an answer. Try rephrasing your question.");
+    expect(out.stoppedReason).toBe('final');
+    expect(out.toolCalls).toHaveLength(1);
+  });
+
+  it('a timeout before any tool ran says that no actions ran', async () => {
+    const llm = new ScriptedLlm(finalStep('never sent'));
+    const out = await run(llm, fakeMcp(), { deadline: Date.now() - 1 });
+    expect(out.stoppedReason).toBe('timeout');
+    expect(out.toolCalls).toEqual([]);
+    expect(out.reply).toBe('This took too long and was stopped. No actions ran.');
   });
 });

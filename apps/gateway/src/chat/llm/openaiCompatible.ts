@@ -188,7 +188,10 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
       if (!retry || attempt >= opts.maxRetries) throw out.error;
 
       const after = out.error.retryAfterSec;
-      const delay = after !== undefined ? Math.min(after, MAX_RETRY_AFTER_SEC) * 1000 : 500 * 2 ** attempt + random() * 250;
+      // A provider wait above the cap (for example a daily quota) is not worth sleeping for: fail now with the
+      // provider's own value, so the registry can try the fallback at once and the client sees the true wait.
+      if (after !== undefined && after > MAX_RETRY_AFTER_SEC) throw out.error;
+      const delay = after !== undefined ? after * 1000 : 500 * 2 ** attempt + random() * 250;
       // Waiting would leave no time for the call itself: report the failure now.
       if (now() + delay >= r.deadline) throw out.error;
       try {
