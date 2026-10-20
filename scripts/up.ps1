@@ -112,6 +112,17 @@ $g = $values.global
 # Gateway lines come from the same values: the admin email as configured, and nothing when disabled.
 $gatewayEnabled = [bool]$values.gateway.enabled
 $gatewayAdminEmail = [string]$values.gateway.bootstrapAdminEmail
+# The chart renders the dashboard only when both gateway.enabled and dashboard.enabled are true.
+$dashboardEnabled = $gatewayEnabled -and [bool]$values.dashboard.enabled
+# AI chat needs the llm-api-keys Secret (scripts\create-secrets.ps1). Only its existence is checked; its
+# data is never read. The name follows secrets.existing.llmApiKeys like the chart does.
+$llmSecretName = [string]$values.secrets.existing.llmApiKeys
+if (-not $llmSecretName) { $llmSecretName = 'llm-api-keys' }
+$llmSecretExists = $true
+if ($gatewayEnabled) {
+  cmd /c "kubectl -n $($values.namespaces.gateway) get secret $llmSecretName -o name >nul 2>&1"
+  $llmSecretExists = ($LASTEXITCODE -eq 0)
+}
 $port = [int]$g.publicPort
 $isDefaultPort = ($g.publicScheme -eq 'http' -and $port -eq 80) -or ($g.publicScheme -eq 'https' -and $port -eq 443)
 $storeUrl = if ($isDefaultPort) { "$($g.publicScheme)://$($g.storeHost)" } else { "$($g.publicScheme)://$($g.storeHost):$port" }
@@ -124,10 +135,16 @@ Write-Host "  Shop         : $storeUrl/shop/"
 Write-Host "  My account   : $storeUrl/my-account/   (customers: register, log in, see their orders)"
 Write-Host "  WP admin     : $storeUrl/wp-admin/     (user: admin)"
 Write-Host '  MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1'
+if ($dashboardEnabled) {
+  Write-Host "  Dashboard    : $appUrl/"
+}
 if ($gatewayEnabled) {
   Write-Host "  Gateway API  : $appUrl/api"
   Write-Host "  MCP endpoint : $appUrl/mcp   (needs a personal API key)"
   Write-Host "  Gateway admin: $gatewayAdminEmail - copy the password with: powershell -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password"
+  if (-not $llmSecretExists) {
+    Write-Host '  AI chat      : not set up - see docs/run-guide.md "Set up the AI chat"' -ForegroundColor Yellow
+  }
 }
 Write-Host ''
 Write-Host '  Admin password - run this to copy it to the clipboard (it is never printed here):'
