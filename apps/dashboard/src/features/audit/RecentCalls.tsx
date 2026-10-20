@@ -1,34 +1,20 @@
 import { useQuery } from '@tanstack/react-query';
 import { ScrollText } from 'lucide-react';
 import { Link } from 'react-router';
-import { Badge, type BadgeTone } from '../../components/ui/Badge';
+import { Badge } from '../../components/ui/Badge';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { SkeletonList } from '../../components/ui/Skeleton';
 import { apiFetch } from '../../lib/api';
 import { formatDuration, formatRelative } from '../../lib/format';
-
-export interface AuditItem {
-  id: string;
-  event: string;
-  source: string;
-  userId: string | null;
-  userEmail: string | null;
-  serverSlug: string | null;
-  toolName: string | null;
-  startedAt: string;
-  durationMs: number;
-  outcome: string;
-  errorMessage: string | null;
-}
-
-const OUTCOME_TONE: Record<string, BadgeTone> = { success: 'success', error: 'danger', timeout: 'warning', denied: 'warning', unauthorized: 'danger' };
+import type { AuditPage } from './api';
+import { OUTCOME_TONE } from './AuditTable';
 
 /** The five newest tool calls: every call for an admin, the member's own for a member (the API decides). */
 export function RecentCalls() {
   const query = useQuery({
     queryKey: ['audit', 'recent'],
-    queryFn: ({ signal }) => apiFetch<{ items: AuditItem[]; nextCursor: string | null }>('/api/audit?limit=5', { signal }),
+    queryFn: ({ signal }) => apiFetch<AuditPage>('/api/audit?limit=5', { signal }),
   });
 
   if (query.isPending) return <SkeletonList rows={3} label="Loading recent calls" />;
