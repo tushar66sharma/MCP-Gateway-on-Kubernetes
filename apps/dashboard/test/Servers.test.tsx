@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { describe, expect, it } from 'vitest';
 import type { ServerView } from '../src/features/servers/api';
+import { useMe } from '../src/lib/auth';
 import { Servers } from '../src/pages/Servers';
 import { admin, errorResponse, jsonResponse, member, mockFetch, Providers } from './helpers';
 
@@ -32,15 +33,10 @@ const list: ServerView[] = [
   make({ id: '33333333-3333-4333-8333-333333333333', slug: 'utils', name: 'Utils', status: 'disabled', enabled: false }),
 ];
 
-function renderServersMock(user: typeof admin) {
-  const fn = mockFetch({ 'GET /api/auth/me': () => jsonResponse(200, { user }), 'GET /api/servers': () => jsonResponse(200, list) });
-  const router = createMemoryRouter([{ path: '/servers', element: <Servers /> }], { initialEntries: ['/servers'] });
-  render(
-    <Providers>
-      <RouterProvider router={router} />
-    </Providers>,
-  );
-  return fn;
+/** Shows the resolved session role, so a test can wait for it instead of racing the /me request. */
+function RoleProbe() {
+  const { me } = useMe();
+  return <p data-testid="role">{me?.role ?? 'loading'}</p>;
 }
 
 function renderServers(user: typeof admin, servers: () => Response) {
@@ -50,6 +46,7 @@ function renderServers(user: typeof admin, servers: () => Response) {
   });
   render(
     <Providers>
+      <RoleProbe />
       <RouterProvider router={router} />
     </Providers>,
   );
@@ -58,17 +55,17 @@ function renderServers(user: typeof admin, servers: () => Response) {
 
 describe('Servers', () => {
   it('member sees no Add server', async () => {
-    const fetchMock = renderServersMock(member);
+    renderServers(member, () => jsonResponse(200, list));
+    await waitFor(() => expect(screen.getByTestId('role')).toHaveTextContent('member'));
     await screen.findByText('Notes');
-    // Proof the member session resolved before asserting absence.
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/auth/me', expect.anything()));
-    await screen.findByRole('heading', { name: 'Servers' });
-    expect(screen.queryByRole('button', { name: /add server/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /add server/i })).toBeNull();
   });
 
-  it('admin sees Add server', async () => {
+  it('admin sees Add server (control for the member test)', async () => {
     renderServers(admin, () => jsonResponse(200, list));
-    expect(await screen.findByRole('button', { name: /add server/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('role')).toHaveTextContent('admin'));
+    await screen.findByText('Notes');
+    expect(screen.getByRole('button', { name: /add server/i })).toBeInTheDocument();
   });
 
   it('renders status labels not only colours', async () => {
