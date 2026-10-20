@@ -1,4 +1,4 @@
-import { useId, useState, type RefObject } from 'react';
+import { useId, useRef, useState, type RefObject } from 'react';
 import { Button } from '../../components/ui/Button';
 import { Dialog, DialogClose } from '../../components/ui/Dialog';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -31,6 +31,7 @@ export function MemberKeysDialog({ user, meId, onClose, returnFocusTo }: MemberK
   const [issuing, setIssuing] = useState(false);
   // The issued key's plaintext lives only in this state; its dialog's Close drops it.
   const [plaintext, setPlaintext] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   // Forget the form whenever the dialog opens or closes.
   const [lastUserId, setLastUserId] = useState(user?.id ?? null);
@@ -104,6 +105,7 @@ export function MemberKeysDialog({ user, meId, onClose, returnFocusTo }: MemberK
             <form id={formId} onSubmit={(e) => void issue(e)} noValidate className="flex items-start gap-2">
               <FormField label="Key name" required error={nameError} className="min-w-0 flex-1">
                 <Input
+                  ref={nameRef}
                   value={name}
                   onChange={(e) => {
                     setName(e.target.value);
@@ -125,7 +127,7 @@ export function MemberKeysDialog({ user, meId, onClose, returnFocusTo }: MemberK
           <div className="overflow-hidden rounded-card border border-border">{list}</div>
         </div>
       </Dialog>
-      <KeyCreatedDialog plaintext={plaintext} onClose={() => setPlaintext(null)} />
+      <KeyCreatedDialog plaintext={plaintext} onClose={() => setPlaintext(null)} returnFocusTo={nameRef} />
     </>
   );
 }

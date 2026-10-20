@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { KeyRound, Power, UserCheck } from 'lucide-react';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -25,6 +26,58 @@ function Status({ disabled }: { disabled: boolean }) {
   return disabled ? <Badge tone="neutral">Disabled</Badge> : <Badge tone="success">Active</Badge>;
 }
 
+interface UserActionsProps {
+  user: UserView;
+  self: boolean;
+  onDisabled: UsersTableProps['onDisabled'];
+  onKeys: UsersTableProps['onKeys'];
+}
+
+function UserActions({ user: u, self, onDisabled, onKeys }: UserActionsProps) {
+  // Disable and Enable replace each other, so the button that opened a dialog is gone afterwards:
+  // focus returns to this container instead of dropping to the page.
+  const boxRef = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={boxRef} tabIndex={-1} className="flex flex-wrap items-center justify-end gap-2 focus:outline-none">
+      <Button size="sm" icon={<KeyRound aria-hidden />} aria-label={`Keys for ${u.name}`} onClick={(e) => onKeys(u, e.currentTarget)}>
+        Keys…
+      </Button>
+      {u.disabled ? (
+        <Button
+          size="sm"
+          icon={<UserCheck aria-hidden />}
+          aria-label={`Enable ${u.name}`}
+          onClick={() =>
+            void onDisabled(u, false).then(
+              () => boxRef.current?.focus(),
+              () => undefined,
+            )
+          }
+        >
+          Enable
+        </Button>
+      ) : self ? (
+        <Button size="sm" icon={<Power aria-hidden />} aria-label={`Disable ${u.name}`} title={SELF_HINT} disabled>
+          Disable
+        </Button>
+      ) : (
+        <ConfirmDialog
+          returnFocusTo={boxRef}
+          trigger={
+            <Button size="sm" icon={<Power aria-hidden />} aria-label={`Disable ${u.name}`}>
+              Disable
+            </Button>
+          }
+          title={`Disable ${u.name}?`}
+          body="Disabling signs them out and revokes all their API keys. You can enable the account again, but the keys stay revoked."
+          confirmLabel="Disable user"
+          onConfirm={() => onDisabled(u, true)}
+        />
+      )}
+    </div>
+  );
+}
+
 /** Users with a role select, Keys…, and Disable / Enable. Your own row cannot be demoted or disabled. */
 export function UsersTable({ users, meId, onRole, onDisabled, onKeys }: UsersTableProps) {
   const roleSelect = (u: UserView) => {
@@ -42,37 +95,7 @@ export function UsersTable({ users, meId, onRole, onDisabled, onKeys }: UsersTab
     );
   };
 
-  const actions = (u: UserView) => {
-    const self = u.id === meId;
-    return (
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button size="sm" icon={<KeyRound aria-hidden />} aria-label={`Keys for ${u.name}`} onClick={(e) => onKeys(u, e.currentTarget)}>
-          Keys…
-        </Button>
-        {u.disabled ? (
-          <Button size="sm" icon={<UserCheck aria-hidden />} aria-label={`Enable ${u.name}`} onClick={() => void onDisabled(u, false).catch(() => undefined)}>
-            Enable
-          </Button>
-        ) : self ? (
-          <Button size="sm" icon={<Power aria-hidden />} aria-label={`Disable ${u.name}`} title={SELF_HINT} disabled>
-            Disable
-          </Button>
-        ) : (
-          <ConfirmDialog
-            trigger={
-              <Button size="sm" icon={<Power aria-hidden />} aria-label={`Disable ${u.name}`}>
-                Disable
-              </Button>
-            }
-            title={`Disable ${u.name}?`}
-            body="Disabling signs them out and revokes all their API keys. You can enable the account again, but the keys stay revoked."
-            confirmLabel="Disable user"
-            onConfirm={() => onDisabled(u, true)}
-          />
-        )}
-      </div>
-    );
-  };
+  const actions = (u: UserView) => <UserActions user={u} self={u.id === meId} onDisabled={onDisabled} onKeys={onKeys} />;
 
   const identity = (u: UserView) => (
     <div className="min-w-0">

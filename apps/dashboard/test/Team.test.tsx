@@ -128,4 +128,37 @@ describe('Team', () => {
     expect(await screen.findByLabelText('Invite link')).toHaveValue(link);
     expect(screen.getByText(/valid for 72 hours, works once/i)).toBeInTheDocument();
   });
+
+  it('focus stays in the row after Disable and after Enable', async () => {
+    let disabled = false;
+    renderTeam({
+      'GET /api/users': () => jsonResponse(200, users.map((u) => (u.id === 'u-m1' ? { ...u, disabled } : u))),
+      'PATCH /api/users/u-m1': (init) => {
+        disabled = JSON.parse(String(init?.body)).disabled as boolean;
+        return jsonResponse(200, { user: { ...users[2], disabled } });
+      },
+    });
+    await ready();
+    await userEvent.click(screen.getByRole('button', { name: 'Disable Max Member' }));
+    await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Disable user' }));
+    const enable = await screen.findByRole('button', { name: 'Enable Max Member' });
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(enable.parentElement?.contains(document.activeElement)).toBe(true);
+    await userEvent.click(enable);
+    await screen.findByRole('button', { name: 'Disable Max Member' });
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(screen.getByRole('button', { name: 'Disable Max Member' }).parentElement).toBe(document.activeElement);
+  });
+
+  it('issuing a key returns focus to the name input when the key dialog closes', async () => {
+    renderTeam({ 'POST /api/users/u-m1/keys': () => jsonResponse(201, { key, plaintext: `ugw_${'x'.repeat(43)}` }) });
+    await ready();
+    await userEvent.click(screen.getByRole('button', { name: 'Keys for Max Member' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/Key name/), 'ci');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Issue key' }));
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'I have copied the key' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(document.activeElement).toBe(within(screen.getByRole('dialog')).getByLabelText(/Key name/)));
+  });
 });
