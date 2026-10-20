@@ -21,4 +21,17 @@ describe('buildSystemPrompt', () => {
     expect(text).toMatch(/bullet list/i);
     expect(text).toMatch(/same language as the user/i);
   });
+
+  it('asks for plain text, because the dashboard shows replies verbatim and renders no Markdown', () => {
+    const text = buildSystemPrompt({ now: new Date('2026-10-19T08:00:00Z'), storeTimeZone: 'UTC', userName: 'Bo' });
+    expect(text).toMatch(/plain text/i);
+    expect(text).toMatch(/no markdown/i);
+    expect(text).toMatch(/start each item with "- "/i);
+  });
+
+  it('forbids guessing a currency the tools did not give', () => {
+    const text = buildSystemPrompt({ now: new Date('2026-10-19T08:00:00Z'), storeTimeZone: 'Asia/Kolkata', userName: 'Bo' });
+    expect(text).toMatch(/currency/i);
+    expect(text).toMatch(/never infer it from the time zone/i);
+  });
 });
