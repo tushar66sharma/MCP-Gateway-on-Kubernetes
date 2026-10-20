@@ -7,6 +7,9 @@ import { EmptyState } from './components/ui/EmptyState';
 import { PageHeader } from './components/ui/PageHeader';
 import { RequireAuth, RequireRole } from './lib/auth';
 import { Login } from './pages/Login';
+import { Overview } from './pages/Overview';
+import { ServerDetail } from './pages/ServerDetail';
+import { Servers } from './pages/Servers';
 import { NotFound, RouteError } from './pages/NotFound';
 
 /*
@@ -51,17 +54,17 @@ export const routes: RouteObject[] = [
       {
         index: true,
         handle: handle('Overview'),
-        element: <ComingSoon title="Overview" description="Server health, recent tool calls and how to connect an MCP client." />,
+        element: <Overview />,
       },
       {
         path: 'servers',
         handle: handle('Servers'),
-        element: <ComingSoon title="Servers" description="The MCP servers behind this gateway and the tools each one provides." />,
+        element: <Servers />,
       },
       {
         path: 'servers/:id',
         handle: handle('Server'),
-        element: <ComingSoon title="Server" description="Status, tools and settings of one MCP server." />,
+        element: <ServerDetail />,
       },
       {
         path: 'keys',
