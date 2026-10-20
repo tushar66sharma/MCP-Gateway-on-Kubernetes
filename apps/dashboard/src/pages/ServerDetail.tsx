@@ -1,5 +1,5 @@
 import { ArrowLeft, Pencil, Power, RefreshCw, SearchX, Trash2, TriangleAlert } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useRef, useState, type RefObject } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { Button, buttonClasses } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -35,7 +35,7 @@ function Back() {
   );
 }
 
-function Actions({ server }: { server: ServerView }) {
+function Actions({ server, returnFocusTo }: { server: ServerView; returnFocusTo: RefObject<HTMLElement | null> }) {
   const navigate = useNavigate();
   const invalidate = useInvalidateServers();
   const [editing, setEditing] = useState(false);
@@ -90,6 +90,7 @@ function Actions({ server }: { server: ServerView }) {
           title={`Disable ${server.name}?`}
           body={`Its ${server.toolCount === 1 ? 'tool is' : 'tools are'} removed from the gateway until you enable it again. Clients and the chat can no longer call them.`}
           confirmLabel="Disable server"
+          returnFocusTo={returnFocusTo}
           onConfirm={() => setEnabled(false)}
         />
       ) : (
@@ -124,6 +125,7 @@ function Actions({ server }: { server: ServerView }) {
           </>
         }
         confirmLabel="Delete server"
+        returnFocusTo={returnFocusTo}
         onConfirm={() =>
           run(async () => {
             await deleteServer(server.id);
@@ -142,6 +144,7 @@ export function ServerDetail() {
   const { id } = useParams();
   const { me } = useMe();
   const query = useServer(id);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   if (query.isPending) {
     return (
@@ -185,14 +188,14 @@ export function ServerDetail() {
       <div className="mb-6 flex flex-col gap-4 sm:mb-8 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-[1.5rem] leading-tight font-semibold tracking-[-0.02em] text-fg">{server.name}</h1>
+            <h1 ref={headingRef} tabIndex={-1} className="text-[1.5rem] leading-tight font-semibold tracking-[-0.02em] text-fg">{server.name}</h1>
             <StatusBadge status={server.status} />
           </div>
           <p className="mt-1.5 font-mono text-sm text-fg-subtle">{server.slug}</p>
         </div>
         {me?.role === 'admin' ? (
           <div className="flex flex-wrap items-center gap-2">
-            <Actions server={server} />
+            <Actions server={server} returnFocusTo={headingRef} />
           </div>
         ) : null}
       </div>

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { describe, expect, it } from 'vitest';
@@ -32,6 +32,17 @@ const list: ServerView[] = [
   make({ id: '33333333-3333-4333-8333-333333333333', slug: 'utils', name: 'Utils', status: 'disabled', enabled: false }),
 ];
 
+function renderServersMock(user: typeof admin) {
+  const fn = mockFetch({ 'GET /api/auth/me': () => jsonResponse(200, { user }), 'GET /api/servers': () => jsonResponse(200, list) });
+  const router = createMemoryRouter([{ path: '/servers', element: <Servers /> }], { initialEntries: ['/servers'] });
+  render(
+    <Providers>
+      <RouterProvider router={router} />
+    </Providers>,
+  );
+  return fn;
+}
+
 function renderServers(user: typeof admin, servers: () => Response) {
   mockFetch({ 'GET /api/auth/me': () => jsonResponse(200, { user }), 'GET /api/servers': servers });
   const router = createMemoryRouter([{ path: '/servers', element: <Servers /> }, { path: '/servers/:id', element: <p>detail page</p> }], {
@@ -47,8 +58,11 @@ function renderServers(user: typeof admin, servers: () => Response) {
 
 describe('Servers', () => {
   it('member sees no Add server', async () => {
-    renderServers(member, () => jsonResponse(200, list));
+    const fetchMock = renderServersMock(member);
     await screen.findByText('Notes');
+    // Proof the member session resolved before asserting absence.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/auth/me', expect.anything()));
+    await screen.findByRole('heading', { name: 'Servers' });
     expect(screen.queryByRole('button', { name: /add server/i })).not.toBeInTheDocument();
   });
 

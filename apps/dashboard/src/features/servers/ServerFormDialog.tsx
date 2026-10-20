@@ -58,11 +58,10 @@ export function ServerFormDialog({ open, onOpenChange, server, returnFocusTo }: 
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
-    if (open) {
-      setValues(initialFormValues(server));
-      setErrors({});
-      setSubmitting(false);
-    }
+    // On open: a fresh form. On close: drop what was typed, so a credential never lingers in state.
+    setValues(initialFormValues(server));
+    setErrors({});
+    setSubmitting(false);
   }
 
   const set = <K extends keyof ServerFormValues>(key: K, value: ServerFormValues[K]) => {
@@ -172,12 +171,14 @@ export function ServerFormDialog({ open, onOpenChange, server, returnFocusTo }: 
             }}
           />
         )}
-        <Checkbox
-          label="Enabled"
-          description="A disabled server is not connected and its tools are not offered to clients."
-          checked={values.enabled}
-          onChange={(e) => set('enabled', e.target.checked)}
-        />
+        {editing && (
+          <Checkbox
+            label="Enabled"
+            description="A disabled server is not connected and its tools are not offered to clients."
+            checked={values.enabled}
+            onChange={(e) => set('enabled', e.target.checked)}
+          />
+        )}
       </form>
     </Dialog>
   );

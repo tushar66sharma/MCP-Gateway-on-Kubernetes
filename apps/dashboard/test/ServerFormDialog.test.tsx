@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ServerView } from '../src/features/servers/api';
 import { ServerFormDialog } from '../src/features/servers/ServerFormDialog';
@@ -101,5 +102,46 @@ describe('ServerFormDialog', () => {
     renderDialog({ server });
     await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(screen.getByLabelText(/^Name/)).toHaveAccessibleDescription(/is too long/));
+  });
+
+  it('create mode has no Enabled checkbox', () => {
+    mockFetch({ 'GET /api/auth/me': () => errorResponse(401, 'UNAUTHENTICATED') });
+    renderDialog();
+    expect(screen.queryByLabelText('Enabled')).not.toBeInTheDocument();
+  });
+
+  it('edit mode sends enabled when changed', async () => {
+    const fetchMock = mockFetch({
+      'GET /api/auth/me': () => errorResponse(401, 'UNAUTHENTICATED'),
+      [`PATCH /api/servers/${server.id}`]: () => jsonResponse(200, server),
+    });
+    renderDialog({ server });
+    await userEvent.click(screen.getByLabelText('Enabled'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true));
+    expect(bodyOf(fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')?.[1])).toMatchObject({ enabled: false });
+  });
+
+  it('clears a typed credential when the dialog closes', async () => {
+    mockFetch({ 'GET /api/auth/me': () => errorResponse(401, 'UNAUTHENTICATED') });
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>reopen</button>
+          <ServerFormDialog open={open} onOpenChange={setOpen} server={server} />
+        </>
+      );
+    }
+    render(
+      <Providers>
+        <Harness />
+      </Providers>,
+    );
+    await userEvent.type(screen.getByLabelText(/^Credential/), 'typed-secret');
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'reopen' }));
+    expect(await screen.findByLabelText(/^Credential/)).toHaveValue('');
   });
 });
