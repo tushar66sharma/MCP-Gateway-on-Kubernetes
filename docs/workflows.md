@@ -771,7 +771,7 @@ sequenceDiagram
         T->>T: "Invite link not valid. Ask your admin for a new one."
     end
     API-->>T: {email, role, expiresAt}
-    T->>T: name, password (10 or more), confirm; checked in the form first
+    T->>T: name, password (10 or more) and confirm, checked in the form first
     T->>API: POST /api/invites/<token>/accept {name, password}
     API->>API: claim the invite and create the user in one transaction
     alt someone created that email meanwhile
@@ -817,7 +817,7 @@ sequenceDiagram
     API->>DB: insert the 12-character prefix and the SHA-256 hash only
     API-->>U: 201 {key, plaintext}
     U->>U: one-time dialog: the key, plus Claude Code, Cursor and MCP Inspector setups
-    Note over U: Esc and clicks outside are ignored; Close unlocks after "I have copied the key"
+    Note over U: Esc and clicks outside are ignored, Close unlocks after "I have copied the key"
     U->>U: Close: the plaintext is dropped from memory, the list reloads
     U->>API: GET /api/keys
     API-->>U: the list with prefixes, never a key or a hash
@@ -962,7 +962,7 @@ sequenceDiagram
     API->>M: upsert(row): replace the entry, check now
     M-->>API: status connected or unreachable
     API-->>A: 200 ServerView (never the credential)
-    A->>A: toast and refetch; the status keeps refreshing every 10 s
+    A->>A: toast and refetch, the status keeps refreshing every 10 s
 ```
 
 **Reading the diagram.** The rule exists twice on purpose. The form (steps 2-4, `needsNewCredential` in `serverForm.ts`) catches it before anything is sent, with the message "The URL points to a different host, so enter a new credential, or tick "Remove stored credential"." (**tested**: `origin change requires credential`). The gateway enforces it even for a client that skips the form (**tested** in `apps/gateway/test/api/servers.test.ts`), and its `400` is shown inline if it ever arrives. A path-only change keeps the credential, and the rule does not apply when the authentication is **none**. A blank credential field means "keep the stored one"; only a typed value is sent, and it lives only in the form's state (cleared when the dialog closes; server edits are plain function calls, not cached mutations). The upsert replaces the manager's entry and checks the server at once, so the tool list follows the edit within seconds; a call still running against the old entry answers `Server '<slug>' was reconfigured during the call`. Disable and delete ask for confirmation; a deleted built-in server stays deleted until it is added again with **Add server**.

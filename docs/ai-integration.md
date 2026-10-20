@@ -18,7 +18,7 @@ flowchart LR
   S --> A["agent loop<br/>chat/agent.ts"]
   A -- "LlmProvider.chat()" --> REG["registry<br/>primary + optional fallback"]
   REG --> P1["OpenAI-compatible adapter<br/>configured for Groq"]
-  REG -. "once, on 429 / unavailable" .-> P2["OpenAI-compatible adapter<br/>configured for OpenRouter"]
+  REG -.->|"once, on 429 or unavailable"| P2["OpenAI-compatible adapter<br/>configured for OpenRouter"]
   P1 -- "HTTPS POST /chat/completions" --> G[("api.groq.com")]
   P2 -- "HTTPS POST /chat/completions" --> O[("openrouter.ai")]
   A -- "tools/list, tools/call" --> L["MCP loopback client<br/>chat/mcpLoopback.ts"]

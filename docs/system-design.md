@@ -293,7 +293,7 @@ Postgres: StatefulSet `postgres-0`, uid/gid 999, `PGDATA` in a subdirectory of t
 
 ```mermaid
 flowchart TB
-  R["api/chat.routes.ts<br/>zod body, Retry-After, error mapping"] --> S["chat/service.ts<br/>not configured? in flight? rate limit; turn signal; log line"]
+  R["api/chat.routes.ts<br/>zod body, Retry-After, error mapping"] --> S["chat/service.ts<br/>not configured? in flight? rate limit, turn signal, log line"]
   S --> L["chat/mcpLoopback.ts<br/>MCP client to 127.0.0.1/mcp,<br/>fresh internal token per request"]
   S --> A["chat/agent.ts<br/>tool loop, limits, untrusted wrapping"]
   A --> P["chat/systemPrompt.ts<br/>date in the store zone, user name, rules"]
