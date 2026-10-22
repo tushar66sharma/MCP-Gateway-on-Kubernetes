@@ -6,6 +6,8 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $dir = Join-Path $root 'charts\urumi-platform\files\store-setup'
 $image = 'wordpress:cli-2.12.0-php8.3'
 $script:fail = 0
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ('urumi-store-setup-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmp | Out-Null
 
 function Report([string]$name, [bool]$ok, [string]$detail = '') {
   if ($ok) { Write-Host "PASS  $name" } else { Write-Host "FAIL  $name $detail"; $script:fail++ }
@@ -58,10 +60,20 @@ Report 'DB failure output has no password' (($r.Out -notmatch 'Dummy-Db-Pass') -
 $lines = ($r.Out -split "`n" | Where-Object { $_ -match '\S' }).Count
 Report 'DB failure output stays short' ($lines -le 15) "($lines lines)"
 
+# 3b. A failing version comparison must stop the Job, not be treated as "equal". A stub wp (mounted from a temp dir, because PowerShell 5.1 mangles quotes in native arguments) answers everything
+# except eval (the comparison), which fails; WooCommerce 10.0.0 is "installed", so a masked failure would skip the upgrade silently.
+$stubDir = Join-Path $tmp 'stub'
+New-Item -ItemType Directory -Path $stubDir | Out-Null
+[IO.File]::WriteAllText((Join-Path $stubDir 'wp'), "#!/bin/sh`ncase `$* in`n  *option*get*) echo `$WP_URL ;;`n  *plugin*get*) echo 10.0.0 ;;`n  *eval*) echo stub-eval-failed >&2; exit 1 ;;`n  *) exit 0 ;;`nesac`n")
+$stubCase = 'touch /var/www/html/wp-config.php; PATH=/stub:$PATH sh /s/setup.sh'
+$r = Invoke-Container $stubCase ($baseEnv + @('-e','ADMIN_PASSWORD=Dummy-Admin-Pass-7q2m','-v',"${stubDir}:/stub:ro"))
+Report 'a failing version comparison stops setup with a message' (($r.Code -ne 0) -and ($r.Out -match 'could not compare WooCommerce versions') -and ($r.Out -notmatch 'SETUP COMPLETE')) "(exit $($r.Code))"
+
 # 4. Static: the password is never an argument.
 $src = Get-Content (Join-Path $dir 'setup.sh') -Raw
 Report 'setup.sh has no --admin_password= argument' ($src -notmatch '--admin_password=')
 Report 'setup.sh passes the password on stdin' ($src -match 'printf ''%s\\n'' "\$ADMIN_PASSWORD" \|')
 
+Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 Write-Host ''
 if ($script:fail -eq 0) { Write-Host 'All store-setup tests passed.'; exit 0 } else { Write-Host "$script:fail store-setup test(s) FAILED."; exit 1 }

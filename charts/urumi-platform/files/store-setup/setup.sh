@@ -57,7 +57,10 @@ if $WP plugin is-installed woocommerce >/dev/null 2>&1; then
 fi
 # Install when WooCommerce is absent or older than WOO_VERSION; never downgrade a newer one.
 woo_changed=false
-case "$(woo_version_cmp "$current_woo" "$WOO_VERSION")" in
+# Assign first: the status of a command substitution used as a case word is discarded, so a failing
+# helper would look like "no match" and skip the upgrade silently.
+cmp=$(woo_version_cmp "$current_woo" "$WOO_VERSION") || fail "could not compare WooCommerce versions (installed: ${current_woo:-none}, wanted: $WOO_VERSION)"
+case "$cmp" in
   older)
     log "installing WooCommerce $WOO_VERSION (found: ${current_woo:-none})"
     $WP plugin install woocommerce --version="$WOO_VERSION" --force
@@ -65,6 +68,12 @@ case "$(woo_version_cmp "$current_woo" "$WOO_VERSION")" in
     ;;
   newer)
     log "WooCommerce $current_woo is newer than $WOO_VERSION; not downgrading"
+    ;;
+  equal)
+    log "WooCommerce $current_woo is already at $WOO_VERSION"
+    ;;
+  *)
+    fail "could not compare WooCommerce versions (unexpected result '$cmp')"
     ;;
 esac
 $WP plugin is-active woocommerce >/dev/null 2>&1 || $WP plugin activate woocommerce
