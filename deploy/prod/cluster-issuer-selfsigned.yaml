@@ -1,0 +1,9 @@
+# Self-signed issuer for rehearsals on a cluster that has no public DNS (for example a second k3d cluster).
+# Browsers do not trust the certificates it issues. Use it by setting global.tls.clusterIssuer: selfsigned.
+#   kubectl apply -f deploy/prod/cluster-issuer-selfsigned.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned
+spec:
+  selfSigned: {}

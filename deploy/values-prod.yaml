@@ -1,26 +1,68 @@
-# Production-like k3s VPS environment — STUB, completed in Phase 5 (see docs/deployment.md).
-# Never put secrets in this file: create the Secrets named below with kubectl first.
-# The chart owns the namespaces, so create "store" (and "mcp") WITH Helm ownership labels/annotations
-# before creating the Secrets: see "Pre-created Secrets" in docs/deployment.md (expected; verified in Phase 5).
+# Production values for one k3s node on a VPS (see "Production (k3s VPS)" in docs/deployment.md).
+# Never put secrets in this file: scripts/prod/create-prod-secrets.sh creates the Secrets named below.
+# Edit every CHANGE-ME and both example.com hostnames before installing; scripts\validate-chart.ps1 warns
+# while any placeholder remains. Sized for a 2 OCPU / 12 GB VM (Oracle Always Free A1): the memory limits of
+# all long-running pods add up to 3.5 GiB and the CPU requests to under 1 core, which leaves room for k3s,
+# Traefik, cert-manager and the one-off store-setup Job (768 MiB limit).
 global:
-  # Our own images (urumi/<app>) are pulled from this registry with this tag. Replace both before deploying.
+  # Our own images (<registry>/urumi/<app>:<tag>) are pulled from this registry. Replace both.
+  # The chart has no imagePullSecrets, so the GHCR packages must be public (docs/deployment.md).
   imageRegistry: ghcr.io/CHANGE-ME
   imageTag: CHANGE-ME
+  # Must be real DNS names that point at the VPS (placeholders are valid hostnames on purpose: the schema
+  # rejects anything that is not a lower-case RFC 1123 name).
   storeHost: store.example.com
   appHost: app.example.com
   publicScheme: https
   publicPort: 443
   tls:
-    enabled: true
-    clusterIssuer: letsencrypt-prod
+    enabled: true                     # adds the TLS blocks, HTTP->HTTPS redirect and HSTS (Traefik Middlewares)
+    clusterIssuer: letsencrypt-prod   # deploy/prod/cluster-issuer-letsencrypt.yaml
+podSecurity:
+  level: restricted
+networkPolicies:
+  enabled: true
 secrets:
-  existing:
-    storeDb: store-db            # must exist in namespace "store"
-    storeAdmin: store-admin      # must exist in namespace "store"
-    storeWooApi: store-woo-api   # must exist in "store" (and in "mcp" from Phase 2)
-    mcpWoocommerceToken: mcp-woocommerce-token   # must exist in "mcp" AND "gateway" (key: token)
-    mcpNotesToken: mcp-notes-token       # must exist in "mcp" AND "gateway" (key: token)
-    mcpUtilitiesKey: mcp-utilities-key   # must exist in "mcp" AND "gateway" (key: key)
-    gatewaySecrets: gateway-secrets      # must exist in "gateway" (keys: postgres-password, encryption-key = base64 of 32 bytes, internal-token-secret)
-    gatewayBootstrap: gateway-bootstrap  # must exist in "gateway" (keys: email, password)
-    llmApiKeys: llm-api-keys             # optional, in "gateway" (keys: GROQ_API_KEY, OPENROUTER_API_KEY); without it chat is disabled
+  existing:                    # all created by scripts/prod/create-prod-secrets.sh
+    storeDb: store-db            # namespace store
+    storeAdmin: store-admin      # namespace store
+    storeWooApi: store-woo-api   # namespaces store and mcp
+    mcpWoocommerceToken: mcp-woocommerce-token   # namespaces mcp and gateway (key: token)
+    mcpNotesToken: mcp-notes-token       # namespaces mcp and gateway (key: token)
+    mcpUtilitiesKey: mcp-utilities-key   # namespaces mcp and gateway (key: key)
+    gatewaySecrets: gateway-secrets      # namespace gateway
+    gatewayBootstrap: gateway-bootstrap  # namespace gateway
+    llmApiKeys: llm-api-keys             # optional, namespace gateway; without it chat is disabled
+storeSetup:
+  adminEmail: CHANGE-ME@example.com   # the WordPress administrator's email
+  customerRegistration: false         # no CAPTCHA or email verification: do not let strangers register
+mariadb:
+  storage: 10Gi
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+wordpress:
+  storage: 10Gi
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1500m", memory: 1Gi }
+postgres:
+  storage: 5Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+gateway:
+  logLevel: info
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+dashboard:
+  resources:
+    requests: { cpu: 10m, memory: 16Mi }
+    limits: { cpu: 100m, memory: 64Mi }
+mcpWoocommerce:
+  logLevel: info
+mcpNotes:
+  logLevel: info
+mcpUtilities:
+  logLevel: info
