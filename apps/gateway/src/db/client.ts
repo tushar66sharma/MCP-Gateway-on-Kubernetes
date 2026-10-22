@@ -4,7 +4,7 @@ import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import pg from 'pg';
 import type { Logger } from '@urumi/shared';
-import { migrationsFolder } from './migrate.js';
+import { migrationsFolder, withMigrationLock } from './migrate.js';
 import * as schema from './schema.js';
 
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
@@ -46,7 +46,13 @@ export function createPostgresHandle(logger?: Logger): DbHandle {
       const migrationPool = new pg.Pool({ ...PG_POOL_OPTIONS, max: 1, statement_timeout: undefined });
       migrationPool.on('error', (err) => logger?.warn({ reason: safeReason(err) }, 'postgres migration pool error'));
       try {
-        await migratePg(drizzle(migrationPool, { schema }), { migrationsFolder: migrationsFolder() });
+        // One client for the whole run: the advisory lock belongs to its session.
+        const client = await migrationPool.connect();
+        try {
+          await withMigrationLock(client, () => migratePg(drizzle(client, { schema }), { migrationsFolder: migrationsFolder() }));
+        } finally {
+          client.release();
+        }
       } finally {
         await migrationPool.end();
       }
