@@ -44,7 +44,7 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
       const mintToken = () => mintInternalToken(user.id, config.GATEWAY_INTERNAL_TOKEN_SECRET, undefined, deps.clock());
       let mcp: McpToolClient | undefined;
       try {
-        mcp = await connectLoopback(mcpUrl(), mintToken);
+        mcp = await connectLoopback(mcpUrl(), mintToken, signal);
         const turn = await runAgentTurn({
           history: messages,
           llm,
