@@ -36,7 +36,7 @@ $matrix = @(
   @('gateway (gateway)',        'gateway', (Labels 'gateway'),       'http://mariadb.store.svc:3306',                  'blocked'),
   @('gateway (gateway)',        'gateway', (Labels 'gateway'),       'http://169.254.169.254',                         'blocked'),
   @('gateway (gateway)',        'gateway', (Labels 'gateway'),       "http://$nodeIp",                                  'blocked'),
-  @('mcp-woocommerce (mcp)',    'mcp',     (Labels 'mcp-woocommerce'), 'http://wordpress.store.svc/wp-login.php',      '200'),
+  @('mcp-woocommerce (mcp)',    'mcp',     (Labels 'mcp-woocommerce'), 'http://wordpress.store.svc/wp-login.php',      '200', '-H X-Forwarded-Proto:https'),  # with TLS on, WordPress redirects plain http (302) to https
   @('dashboard (gateway)',      'gateway', (Labels 'dashboard'),     'http://gateway.gateway.svc:3000/healthz',        'blocked')
 )
 
