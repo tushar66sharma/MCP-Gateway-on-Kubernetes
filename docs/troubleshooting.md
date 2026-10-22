@@ -839,3 +839,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policie
 - Only to confirm that a policy is the cause, redeploy with `--set networkPolicies.enabled=false` (local use only), then turn it back on.
 - A **brand-new pod** can behave oddly for its first 3 to 6 seconds: kube-router programs its rules a little after it starts, so an allowed call may be refused and a blocked one may succeed. Wait a few seconds and retry; the probe script does the same.
 - `kubectl port-forward`, `exec` and kubelet probes are not affected by NetworkPolicies.
+
+
+## `forbidden: violates PodSecurity`
+
+**Symptom.** Creating a pod (or a Deployment's ReplicaSet, or `kubectl run`) in `store`, `mcp` or `gateway` fails with `forbidden: violates PodSecurity "restricted:latest": ...` and a list such as `allowPrivilegeEscalation != false`, `unrestricted capabilities`, `runAsNonRoot != true` or `seccompProfile`.
+
+**Cause.** The three namespaces enforce Pod Security `restricted` ([ADR-017](decisions/ADR-017-pod-security-restricted.md)); the pod does not set the required security context. For a Deployment the Deployment is created but its ReplicaSet reports the error in events.
+
+**Fix.** Fix the pod spec, do not lower the level:
+
+```powershell
+kubectl -n <ns> get events --field-selector reason=FailedCreate
+kubectl -n <ns> describe replicaset <name>
+```
+
+Set at pod level `runAsNonRoot: true`, `runAsUser: <non-zero>` and `seccompProfile: {type: RuntimeDefault}`, and at container level `allowPrivilegeEscalation: false` and `capabilities: {drop: [ALL]}`. For a throw-away `kubectl run`, add `--overrides` with those fields (see the probe pods in `scripts\test-network-policies.ps1`) or run it in another namespace. Chart pods use the `urumi.podSecurityContext` and `urumi.containerSecurityContext` helpers. Check a change against the cluster before applying it: `kubectl label --dry-run=server --overwrite ns store mcp gateway pod-security.kubernetes.io/enforce=restricted` prints a warning for every existing pod that would be refused.

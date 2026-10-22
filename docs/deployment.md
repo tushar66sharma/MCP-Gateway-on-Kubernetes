@@ -277,6 +277,14 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 | Release state | `helm status urumi -n urumi-system`, `helm history urumi -n urumi-system` |
 | What values are in use? | `helm get values urumi -n urumi-system` |
 
+### Pod security and WordPress file changes (Phase 5)
+
+- The chart labels the `store`, `mcp` and `gateway` namespaces with Pod Security `restricted` (`podSecurity.level`, [ADR-017](decisions/ADR-017-pod-security-restricted.md)). Any pod you add there must comply.
+- **`MARIADB_ROOT_HOST=localhost` applies only on the first initialisation of an empty data directory.** An existing MariaDB volume keeps the root accounts it already has, so upgrading a running cluster does not change them (verified 2026-10-22: the variable is set on the pod, but the existing data directory was not re-initialised). A fresh install is where it takes effect (not yet tested; Task 5.8).
+- **`DISALLOW_FILE_MODS` is on**, so plugins and themes cannot be installed, updated or deleted from wp-admin. They change only through the store-setup Job and the image tag.
+- **The WordPress image tag pins only the first core copy** into the `wordpress-data` volume (the `copy-wordpress` initContainer copies core once). Later core updates are not applied by changing the tag.
+- `helm lint` rejects hostnames that are not lower-case DNS names, an empty or malformed `storeSetup.timezone`, and `tls.enabled: true` with `publicScheme: http`. Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1` to check the rules.
+
 ### Local limitations
 
 - Single node, single replica for every component; no backups and no high availability.

@@ -65,3 +65,4 @@ Small clarifications that do not change the decision (typos, a confirmed spike r
 | 014 | Cached health-checked tool catalog | Accepted, implemented in Phase 3 | [ADR-014](ADR-014-cached-tool-catalog.md) |
 | 015 | Dashboard served by its own unprivileged nginx pod, same origin as the API | Accepted, implemented in Phase 4 | [ADR-015](ADR-015-dashboard-served-by-nginx.md) |
 | 016 | Default-deny NetworkPolicies with one explicit allow rule per flow | Accepted, implemented in Phase 5 (Task 5.3) | [ADR-016](ADR-016-default-deny-network-policies.md) |
+| 017 | Pod Security Admission at `restricted` on the app namespaces, plus schema validation of hostnames | Accepted, implemented in Phase 5 (Task 5.4) | [ADR-017](ADR-017-pod-security-restricted.md) |

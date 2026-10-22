@@ -120,6 +120,31 @@ Added in Phase 4:
 14. **One provider key is shared by everyone.** The per-user limit (10 turns a minute) does not stop several users, together, from exhausting Groq's free quota (about two single-tool turns a minute for the whole team); the others then see "rate limited".
 15. **The internal-token count per request is not pinned by a test.** The code mints a fresh token for every loopback request; no test counts the mints (a deferred minor).
 
+### 8.5 Pod security (Phase 5, Task 5.4)
+
+The namespaces `store`, `mcp` and `gateway` carry `pod-security.kubernetes.io/enforce`, `warn` and `audit` at `restricted`, each with `-version: latest` (chart value `podSecurity.level`, schema enum `restricted | baseline | privileged`; [ADR-017](decisions/ADR-017-pod-security-restricted.md)). A pod that is not compliant is refused at admission.
+
+**As built (verified 2026-10-22 on k3d, k3s v1.35.5):** all workloads were admitted unchanged; the server-side dry run `kubectl label --dry-run=server --overwrite ns store mcp gateway pod-security.kubernetes.io/enforce=restricted` printed no warnings before enforcing. Every pod also has `runAsNonRoot`, `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]` and no service-account token.
+
+| Workload | uid | Read-only root | emptyDir `sizeLimit` | PSA level |
+|---|---|---|---|---|
+| wordpress (and its `copy-wordpress` initContainer) | 33 | no (Apache and the volume need writes) | `/tmp` 16Mi | restricted |
+| store-setup Job | 33 | no | `/tmp` 16Mi | restricted |
+| mariadb | 999 | no (data volume) | `/run` 16Mi, `/tmp` 16Mi | restricted |
+| mcp-woocommerce | 1000 | yes | `/tmp` 16Mi | restricted |
+| mcp-notes, mcp-utilities | 1000 | yes | `/tmp` 16Mi | restricted |
+| postgres | 999 | no (data volume) | `/run` 16Mi, `/tmp` 16Mi | restricted |
+| gateway | 1000 | yes | `/tmp` 16Mi | restricted |
+| dashboard (nginx-unprivileged) | 101 | yes | `/tmp` 16Mi | restricted |
+
+- WordPress sets the namespaced sysctl `net.ipv4.ip_unprivileged_port_start=0` so uid 33 can bind port 80; it is in the Pod Security safe set, so `restricted` allows it.
+- **Refusal tested live (2026-10-22):** `kubectl run psa-test -n mcp --image=curlimages/curl:8.22.0 --restart=Never -- sleep 1` was refused with `violates PodSecurity "restricted:latest"` (privilege escalation, capabilities, runAsNonRoot, seccomp); no pod was created. The NetworkPolicy probe pods set a restricted-compliant `securityContext`, and the probe script still passed (13 probes).
+- `DISALLOW_FILE_MODS` is set in WordPress, so plugins and themes cannot be installed, updated or deleted from wp-admin. Verified: the constant prints `true`, and for administrator user 1 `current_user_can('install_plugins')` and `update_core` are `false` (the "Add New" button depends on that capability; the page itself was **not** viewed in a browser).
+- The WordPress liveness probe is now a TCP check on the `http` port, so a PHP or database stall (which fails readiness) does not restart Apache. Readiness and startup still use `/wp-login.php`.
+- The chart schema rejects any `global.storeHost` / `global.appHost` that is not a lower-case RFC 1123 hostname, because those values are written into the PHP in `WORDPRESS_CONFIG_EXTRA`. `helm lint` with `storeHost: "x');evil('"` fails (`scripts\validate-chart.ps1`, 2026-10-22). `storeSetup.timezone` must match `^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$`, and `tls.enabled: true` requires `publicScheme: https`.
+- The dashboard image sets `worker_processes 2;` (checked with `nginx -T` in the built image, and in the running pod).
+- **Not tested:** a brand-new cluster under `restricted` (first-boot paths such as `MARIADB_ROOT_HOST` and the WordPress copy initContainer on an empty volume); that is Task 5.8.
+
 ## 9. Not yet covered
 
 Pod hardening review (Phase 5), production TLS and secrets handling (Phase 5), the threat model including malicious tool descriptions and compromised upstreams (Phase 6).
