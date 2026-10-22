@@ -1,6 +1,6 @@
 # Security
 
-> **Status: partial (end of Phase 4).** This file covers what the gateway does today: credentials, authentication, sessions, CSRF, the SSRF guard, logging, roles, and the known residual risks; and since Phase 4 the dashboard's browser headers, the chat agent acting as the user, untrusted tool output and prompt injection, the LLM keys and chat privacy, and the one-time key dialog (sections 10-14). **NetworkPolicies are Phase 5** and the full **threat model** is Phase 6 (`threat-model.md`); neither exists yet, and nothing here relies on them. The security chapter of the spec is [§9](superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: end of Phase 5 (hardening and production values; the threat model is Phase 6).** This file covers what the gateway does today: credentials, authentication, sessions, CSRF, the SSRF guard, logging, roles, and the known residual risks; and since Phase 4 the dashboard's browser headers, the chat agent acting as the user, untrusted tool output and prompt injection, the LLM keys and chat privacy, and the one-time key dialog (sections 10-14). **NetworkPolicies are Phase 5** and the full **threat model** is Phase 6 (`threat-model.md`); neither exists yet, and nothing here relies on them. The security chapter of the spec is [§9](superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 Evidence labels: **live** = run against the k3d cluster on 2026-10-19; **tested** = pinned by an automated test ([testing.md](testing.md)); **expected** = follows from the code, not run.
 
@@ -109,8 +109,8 @@ Known, accepted for Phase 3, not fixed. The Phase 5 hardening item is named wher
 6. **Internal chat tokens cannot be revoked individually;** they expire after 5 minutes. A disabled user's token is refused on the next use because the user is re-read, and the chat mints a new token for every request anyway.
 7. **Invite links are bearer secrets until used.** Anyone who gets the link within 72 hours can claim the account. Mitigations: single use, expiry, only the hash is stored, the path is redacted in the gateway's log and in the dashboard's nginx access log (case-insensitive, including the `/invite/<token>` page path; see section 6), and the admin can cancel a link (`DELETE /api/invites/:id`, **live**: the link then answered `404 INVITE_INVALID`).
 8. **Pod-to-pod traffic is now restricted by NetworkPolicies (Phase 5, Task 5.3; [section 15](#15-networkpolicies-phase-5)).** Only the flows in the allow matrix are open. Two limits remain: a new pod is unrestricted for a few seconds until kube-router programs it, and the internet rule allows any public IP on 80 and 443.
-9. **`COOKIE_SECURE` is false locally** (plain http on `app.localhost`), and k3d publishes ports 80 and 443 without a host IP, so the gateway may be reachable from the local network (**not verified**). Stop the cluster on untrusted networks.
-10. **The login limiter may see one address for everyone** behind k3s ServiceLB (see `TRUST_PROXY` above; expected, not tested). Phase 5.
+9. **`COOKIE_SECURE` is false locally** (plain http on `app.localhost`). **The LAN exposure is closed (Task 5.8, 2026-10-23):** `deploy/k3d-config.yaml` now publishes ports 80 and 443 on `127.0.0.1` only. Verified: `curl` to `127.0.0.1` with `Host: store.localhost` answers `200`, the same request to this computer's Wi-Fi address (192.168.1.7) gets no answer (curl exit 7), and `docker port k3d-urumi-serverlb` lists `127.0.0.1` bindings for 80 and 443. **Still open:** k3d publishes the Kubernetes API (`6443/tcp`) on `0.0.0.0` with a random host port. The API server needs the cluster's client certificate (kubeconfig), so this is not an anonymous door, but it is reachable from the network. Not changed (it would need another cluster recreation); stop the cluster on untrusted networks. Details: [section 16](#16-the-real-client-ip-the-loopback-only-cluster-and-production-secrets-phase-5).
+10. **The login limiter sees the address Traefik saw, which locally is the k3d proxy for every host client.** Observed 2026-10-23, see [section 16](#16-the-real-client-ip-the-loopback-only-cluster-and-production-secrets-phase-5): all requests from the host share one limiter key, a pod going through Traefik has its own. On a VPS the result depends on `externalTrafficPolicy: Local`: expected; not tested (k3d always proxies). Valid `/mcp` keys are exempt from the failure limit either way.
 
 Added in Phase 4:
 
@@ -123,7 +123,7 @@ Added in Phase 4:
 Added in Phase 5 (Task 5.5):
 
 16. **Open customer registration has no CAPTCHA or email verification.** Anyone who can reach the store can create accounts, and with cash-on-delivery guest checkout can place fake orders. The local default keeps registration on for the demo. The chart value `storeSetup.customerRegistration` (default `true`) turns it off: the setup Job sets `woocommerce_enable_myaccount_registration` and `woocommerce_enable_signup_and_login_from_checkout` to `no`. Production values are meant to set it to `false` (`deploy/values-prod.yaml`, completed in Task 5.6). Verified locally on 2026-10-22 that `false` removes the Register form and the checkout sign-up. Guest checkout stays on, so fake guest orders are still possible; there is no rate limit on checkout.
-17. **The admin password never appears in a process argument or the Job log.** `setup.sh` passes it to `wp core install` on stdin (`--prompt=admin_password`) and discards that command's stdout, because WP-CLI echoes the prompt and the equivalent command line, password included, when its input is piped. An empty `ADMIN_PASSWORD` makes the Job fail before any WP-CLI call. Verified 2026-10-22: the rendered ConfigMap has no `--admin_password=`, and the redeployed Job log contained neither `admin_password` nor the first six characters of the real password (only counts were printed). A fresh install, where `wp core install` really runs in the cluster, is exercised later in Task 5.8; the stdin behaviour itself was verified in a throwaway `wordpress:cli-2.12.0-php8.3` container against a scratch MariaDB with a dummy password.
+17. **The admin password never appears in a process argument or the Job log.** `setup.sh` passes it to `wp core install` on stdin (`--prompt=admin_password`) and discards that command's stdout, because WP-CLI echoes the prompt and the equivalent command line, password included, when its input is piped. An empty `ADMIN_PASSWORD` makes the Job fail before any WP-CLI call. Verified 2026-10-22: the rendered ConfigMap has no `--admin_password=`, and the redeployed Job log contained neither `admin_password` nor the first six characters of the real password (only counts were printed). **Fresh install, 2026-10-23:** on the recreated cluster `wp core install` ran in the cluster with the password on stdin, the Job continued and ended with `SETUP COMPLETE`, and its log held 0 occurrences of the real password and 0 of `admin_password` (counts only; the password was read into a variable and never printed). The stdin behaviour itself was verified in a throwaway `wordpress:cli-2.12.0-php8.3` container against a scratch MariaDB with a dummy password.
 
 ### 8.5 Pod security (Phase 5, Task 5.4)
 
@@ -149,11 +149,11 @@ The namespaces `store`, `mcp` and `gateway` carry `pod-security.kubernetes.io/en
 - The WordPress liveness probe is now a TCP check on the `http` port, so a PHP or database stall (which fails readiness) does not restart Apache. Readiness and startup still use `/wp-login.php`.
 - The chart schema rejects any `global.storeHost` / `global.appHost` that is not a lower-case RFC 1123 hostname, because those values are written into the PHP in `WORDPRESS_CONFIG_EXTRA`. `helm lint` with `storeHost: "x');evil('"` fails (`scripts\validate-chart.ps1`, 2026-10-22). `storeSetup.timezone` must match `^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$`, and `tls.enabled: true` requires `publicScheme: https`.
 - The dashboard image sets `worker_processes 2;` (checked with `nginx -T` in the built image, and in the running pod).
-- **Not tested:** a brand-new cluster under `restricted` (first-boot paths such as `MARIADB_ROOT_HOST` and the WordPress copy initContainer on an empty volume); that is Task 5.8.
+- **Fresh install under `restricted` (verified 2026-10-23, Task 5.8):** the local cluster was deleted and recreated from nothing. Every first-boot path was admitted and ran: the WordPress copy initContainer, MariaDB's first initialisation with `MARIADB_ROOT_HOST=localhost`, the store-setup Job and the probe pods. All 9 long-running pods became 1/1 and the Job `Completed`; no pod was refused. On that install `SELECT user,host FROM mysql.user WHERE user='root'` returned only `root` at `localhost`, and `mariadb -uroot` worked inside the pod, so the root account is not reachable from other pods.
 
 ## 9. Not yet covered
 
-Pod hardening review (Phase 5), production TLS and secrets handling (Phase 5), the threat model including malicious tool descriptions and compromised upstreams (Phase 6).
+The threat model including malicious tool descriptions and compromised upstreams, and the Helm release Secret exposure note (Phase 6). Pod hardening, production TLS and secrets handling are covered in sections 8.5, 15 and 16.
 
 ## 10. Browser headers and the dashboard
 
@@ -263,3 +263,39 @@ Private ranges never reachable through the internet rules: `10.0.0.0/8`, `172.16
 - Blocked connections are normally refused (curl exit 7), not timed out.
 - Any public host on 80 and 443 is reachable from the gateway, WordPress and the Job; FQDN allow-lists need a different CNI.
 - The ranges `10/8`, `172.16/12`, `192.168/16`, `100.64/10` and `127/8` were not each probed; only `169.254.169.254` was. Production (`k3d-urumi-prod`, a real VPS with ServiceLB or hairpin to its own public IP) is **not tested** yet.
+
+
+## 16. The real client IP, the loopback-only cluster and production secrets (Phase 5)
+
+### Loopback-only local cluster
+
+Before 2026-10-23 k3d published the local ports on all network interfaces. `deploy/k3d-config.yaml` now maps `127.0.0.1:80:80` and `127.0.0.1:443:443`. The cluster was recreated for this (agreed with the owner; all local data was lost once and new passwords were generated). **Verified live, 2026-10-23:**
+
+| Check | Result |
+|---|---|
+| `curl.exe -m 5 http://127.0.0.1/ -H "Host: store.localhost"` | `200` |
+| the same to this computer's Wi-Fi IPv4 address (192.168.1.7) | no answer (curl exit 7, HTTP code `000`) |
+| `docker port k3d-urumi-serverlb` | `80/tcp -> 127.0.0.1:80`, `443/tcp -> 127.0.0.1:443`, and `6443/tcp -> 0.0.0.0:<port>` (the Kubernetes API, client certificate required; residual risk 9) |
+
+### Which client address the gateway sees
+
+`TRUST_PROXY=1`, so `req.ip` is the address Traefik saw. **Observed 2026-10-23 on the local cluster** with one email and wrong passwords: from the host (through the k3d proxy) the login limiter answered `401` ten times and `429` on the eleventh; immediately afterwards two attempts from a pod that called Traefik inside the cluster were answered `401` (not limited), while the host stayed limited (`429`). So the limiter keys sources separately, but **every client on the host shares one key** because k3d proxies them all. This is acceptable now that the cluster is loopback-only (only programs on this computer can reach it, and valid `/mcp` keys are exempt from the failure limit, Task 5.1). For a VPS, [deployment.md](deployment.md#4-traefik-keep-the-real-client-ip) sets Traefik's Service to `externalTrafficPolicy: Local` so the visitor's address survives; that is **expected, not tested** (k3d always proxies; the rehearsal could not show it).
+
+### TLS, redirect and HSTS (production values, rehearsed on k3d only)
+
+With `tls.enabled: true` (production values) the chart adds cert-manager Certificates, a `redirect-https` Traefik Middleware (plain http gets a `301` to https, keeping a non-default public port) and an `hsts` Middleware (`Strict-Transport-Security: max-age=31536000`) in `store` and `gateway`; the gateway sets `COOKIE_SECURE`, so the session cookie is `Secure` and `HttpOnly`. The schema refuses `tls.enabled` without `publicScheme: https`. **Rehearsed 2026-10-23 on a second k3d cluster** with a self-signed issuer (details in [deployment.md](deployment.md#rehearsal-results-2026-10-23)): both certificates `Ready`, `301` to https, HSTS on the store and the dashboard, no mixed content, `Secure` cookie, 13 of 13 NetworkPolicy probes. **Not run:** Let's Encrypt issuance on a real domain, browsers (self-signed certificate), HSTS preload. HSTS makes a browser refuse plain http to that host for a year, so test with a short `max-age` before a real domain commits to it.
+
+### Production secrets bootstrap
+
+`scripts/prod/create-prod-secrets.sh` creates the three namespaces with the Helm ownership metadata and every Secret the production values name. It generates values with `openssl rand` on the server and pipes each manifest to `kubectl apply -f -` on **stdin**, so no secret appears in a file, in Git, in the process list or in the output (the script prints names and `created`/`kept`, never values). It is **idempotent**: a second run keeps existing Secrets (`kept`) and re-creates a deleted copy byte-identical to its twin. Verified on a throw-away k3d cluster and in the rehearsal (2026-10-23). Backups of these Secrets are the operator's job ([deployment.md](deployment.md#12-backups)); the Helm release Secret also holds rendered values and is a Phase 6 item.
+
+### Defence layers as built (summary)
+
+| Layer | What it stops | Verified |
+|---|---|---|
+| Pod Security `restricted` (section 8.5) | privileged or root pods, privilege escalation, missing seccomp | refusal test 2026-10-22 and a fresh install 2026-10-23 |
+| Default-deny NetworkPolicies (section 15) | pod-to-pod movement outside the allow matrix, private ranges through the internet rule | 13 probes pass, 2026-10-23 |
+| Loopback binding (above) | other devices on the LAN reaching the local cluster | 2026-10-23 |
+| TLS, redirect, HSTS, `Secure` cookies (above) | plain-text traffic in production | rehearsal only |
+| Auth-failure limits, migration lock, chat hardening (sections 8 and 11) | key-guessing floods, concurrent migrations, orphaned chat slots | tests and live checks, 2026-10-22 |
+| `npm audit --omit=dev --audit-level=high` | known-vulnerable runtime dependencies | 0 vulnerabilities, 2026-10-23 (step 8 of `scripts\smoke-test.ps1`) |

@@ -30,7 +30,7 @@ Until Phase 4 every pod could connect to every other pod and to the whole intern
 
 ## Consequences/trade-offs
 
-- Verified (2026-10-22, k3d, k3s v1.35.5): the probe script failed before the policies existed (8 of 12 rows) and passes after (12 of 12); all pods 1/1 with no restarts, the four check scripts passed, one chat turn reached the LLM, wp-admin and wp-login answered in about 0.06 to 1.1 s, and the `store-setup` Job completed (27 to 35 s) under the policies.
+- Verified (2026-10-22, k3d, k3s v1.35.5): the probe script failed before the policies existed (8 of 12 rows) and passes after (12 of 12; a 13th probe, mcp-woocommerce to WordPress with `X-Forwarded-Proto: https`, was added in the production rehearsal, so the script now runs 13 probes); all pods 1/1 with no restarts, the four check scripts passed, one chat turn reached the LLM, wp-admin and wp-login answered in about 0.06 to 1.1 s, and the `store-setup` Job completed (27 to 35 s) under the policies.
 - **New pods are briefly unprotected.** kube-router programs a new pod's rules a few seconds after it starts (3 to 6 s observed); in that window blocked flows are open and allowed flows are cut. Probes in the script therefore wait 10 s before connecting. This is a property of the controller; a CNI that enforces at pod start would remove it.
 - **Public-IP egress is broad:** the gateway and WordPress can reach any public host on 80 and 443. The gateway's SSRF guard remains the second layer for admin-added URLs.
 - A new in-cluster flow needs a new rule, or it fails with "connection refused" ([troubleshooting](../troubleshooting.md#a-pod-cannot-reach-x-after-phase-5)).

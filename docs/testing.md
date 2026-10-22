@@ -1,16 +1,16 @@
 # Testing
 
-> **Status: partial (end of Phase 4).** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent and the LLM layer), the dashboard's component tests and the Playwright browser smoke. The NetworkPolicy checks and `scripts/smoke-test.ps1` belong to Phase 5 and do not exist yet. The complete document is Phase 6.
+> **Status: end of Phase 5.** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent, the LLM layer, the `/mcp` failure limit and the migration lock), the dashboard's component tests, the Playwright browser smoke, and the Phase 5 scripts (`scripts/smoke-test.ps1`, `test-network-policies.ps1`, `validate-chart.ps1`, `check-invite-log.ps1`). The complete strategy and a coverage statement are Phase 6.
 
-Test counts below come from the Phase 4 final-review fix wave on 2026-10-22 (`npm test` from the repository root: **586 tests, all passing**: shared 55, dashboard 123, gateway 299, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
+Test counts below come from the Phase 5 final run on 2026-10-23 (`npm test` from the repository root: **604 tests, all passing**: shared 55, dashboard 123, gateway 317, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
 
 | Run | shared | dashboard | gateway | mcp-notes | mcp-utilities | mcp-woocommerce |
 |---|---|---|---|---|---|---|
-| 1 | 55/55 (1.84 s) | 123/123 (34.30 s) | 299/299 (52.63 s) | 12/12 | 27/27 | 70/70 |
-| 2 | 55/55 (1.52 s) | 123/123 (11.35 s) | 299/299 (46.72 s) | 12/12 | 27/27 | 70/70 |
-| 3 | 55/55 (1.48 s) | 123/123 (12.38 s) | 299/299 (44.34 s) | 12/12 | 27/27 | 70/70 |
+| 1 | 55/55 (1.64 s) | 123/123 (34.37 s) | 317/317 (56.89 s) | 12/12 | 27/27 | 70/70 |
+| 2 | 55/55 (1.73 s) | 123/123 (12.86 s) | 317/317 (54.86 s) | 12/12 | 27/27 | 70/70 |
+| 3 | 55/55 (1.70 s) | 123/123 (13.23 s) | 317/317 (55.82 s) | 12/12 | 27/27 | 70/70 |
 
-Before the fix wave (Task 4.8, 2026-10-19) the same three runs gave 570 tests (dashboard 113, gateway 293).
+History: 570 tests at the end of Task 4.8 (2026-10-19, dashboard 113, gateway 293), 586 after the Phase 4 fix wave (2026-10-22, gateway 299), 604 now (gateway 317 in 29 files: Phase 5 added the `/mcp` auth-failure limit tests `mcp/authLimit.test.ts`, the migration-lock test `db/migrate.test.ts`, the loopback-connect cancellation test `chat/mcpLoopback.test.ts` and more chat and rate-limiter cases).
 
 Known flakiness (not reproduced in those runs): twice during Phase 4 a full root run had gateway test files fail, once with "Worker exited unexpectedly" while the Vite dev server was also running, once with two database-backed files failing; each time the next run was green. Memory pressure from PGlite and argon2 in parallel workers is the suspected cause (not proven).
 
@@ -40,7 +40,10 @@ Run from the repository root.
 | `npm run lint` | ESLint over the whole repository. |
 | `npm run build -w @urumi/dashboard` | Type-check and Vite production build of the dashboard (warns that the single JS chunk is over 500 kB; known). |
 | `npx playwright install chromium` | Once, for the browser check (about 118 MiB into `%LOCALAPPDATA%\ms-playwright`). |
-| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dashboard.ps1` | The Playwright smoke against the cluster (`-Project desktop` or `mobile`, `-Base <url>`). |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1` | **Everything on the cluster in one command** (Phase 5): see section 5. `-Quick` skips the dashboard and `npm audit`. |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dashboard.ps1` | The Playwright smoke against the cluster (`-Project desktop` or `mobile`, `-Base <url>`); ends with the invite-log check. |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invite-log.ps1` | Requests `/invite/<random>` and counts the random value in the dashboard log (expected 0), with a positive control. |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policies.ps1` | 13 allowed/blocked probe pods (about 3 minutes). |
 | `helm lint charts/urumi-platform -f deploy/values-local.yaml` (and `-f deploy/values-prod.yaml`) | Chart lint. |
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1` | Chart schema and render rules, the TLS redirect/HSTS Middlewares (prod only), the `deploy.ps1` context guards, the `create-secrets.ps1` `.env` parser (fixtures in `scripts/dev/fixtures/`, fake values) and `kubeconform` v0.8.0 on both values files (needs Docker; custom resources such as Traefik Middlewares are skipped, not validated). Warns while `deploy/values-prod.yaml` has placeholders. No cluster needed. |
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1` | Cluster end-to-end check, read-only calls. Add `-Write` and/or `-Isolation`. |
@@ -67,7 +70,7 @@ Run from the repository root.
 | `mcp-utilities` | 27 | The hand-written calculator (precedence, `^` right-associative, `-2^2`, nesting depth, division by zero, no `eval`), the time tools, header auth |
 | `mcp-woocommerce` | 70 | OAuth1 signing against a known vector, the REST client (timeouts, redirects not followed, redaction), the six tools, the server |
 
-### `apps/gateway` (299 tests in 26 files)
+### `apps/gateway` (317 tests in 29 files)
 
 | Area | Files (tests) | Proves |
 |---|---|---|
@@ -105,6 +108,13 @@ The manager tests (`test/upstreams/manager.test.ts`) pin the five inputs that hu
 - **Timing.** Vitest timeouts are 30 s because PGlite start-up plus argon2 take seconds when files run in parallel; the suite takes 45-60 s.
 
 ## 5. Cluster checks
+
+### `scripts\smoke-test.ps1` (Phase 5)
+
+Runs eight steps in order, each as its own PowerShell process, and prints only the last line of each plus a PASS/FAIL/SKIPPED table; exit code 0 only if no step failed: (1) all pods ready, (2) `check-woo-api`, (3) `check-mcp-woocommerce`, (4) `check-gateway -Write`, (5) `check-dashboard` (Chromium at two widths, one live chat turn), (6) `test-network-policies`, (7) `check-invite-log`, (8) `npm audit --omit=dev --audit-level=high`. `-Quick` skips 5 and 8.
+
+Verified 2026-10-23 on the freshly recreated cluster: the full run passed all 8 steps (about 3.5 minutes; step 6 took 165 s, step 5 took 28 s), and the `-Quick` run passed 6 and skipped 2. The invite-log check was shown failing on a deliberately wrong expectation (`-ExpectMatches 1`: "holds the random invite value 0 time(s); expected 1", exit 1) before it was shown passing. `npm audit` reported 0 vulnerabilities.
+
 
 ### `scripts\check-gateway.ps1`
 
@@ -151,4 +161,4 @@ On 2026-10-19, with Groq `openai/gpt-oss-120b` and no fallback, through the brow
 
 ## 6. Not yet in place
 
-`scripts/smoke-test.ps1`, NetworkPolicy probes and `npm audit` (Phase 5), the complete strategy and a coverage statement (Phase 6). Gaps noted in Phase 4 reviews and deferred: no unit tests for the Overview page, the responsive table's card branch, theme persistence or the status badge labels (the Playwright mobile run covers the cards); no test that counts internal-token mints per loopback request; the `useChat` race guards (double send, reset mid-turn, unmount) and the 4,000-character clipping are untested; the audit filters do not reject a `from` later than `to`.
+The complete strategy and a coverage statement (Phase 6). Gaps noted in Phase 4 reviews and deferred: no unit tests for the Overview page, the responsive table's card branch, theme persistence or the status badge labels (the Playwright mobile run covers the cards); no test that counts internal-token mints per loopback request; the `useChat` race guards (double send, reset mid-turn, unmount) and the 4,000-character clipping are untested; the audit filters do not reject a `from` later than `to`.

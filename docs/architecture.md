@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status (end of Phase 4).** The local k3d cluster, the Helm chart, the **store**, the three **MCP servers** (WooCommerce, Notes, Utilities; namespace `mcp`, internal only), the **gateway** and its **Postgres** database (namespace `gateway`; `/api` and `/mcp` on `app.localhost`), the **dashboard** (`app.localhost/`) and the **chat agent** with its LLM integration (Groq) are **built and verified**. The **NetworkPolicies** are **not built** (Phase 5). Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today), the [Phase 1 store details](#the-store-built-in-phase-1), the [Phase 2 MCP server details](#the-woocommerce-mcp-server-built-in-phase-2), the [Phase 3 gateway details](#the-gateway-built-in-phase-3) and the [Phase 4 dashboard and chat details](#the-dashboard-and-the-chat-agent-built-in-phase-4).
+> **Status (end of Phase 5).** The local k3d cluster, the Helm chart, the **store**, the three **MCP servers** (WooCommerce, Notes, Utilities; namespace `mcp`, internal only), the **gateway** and its **Postgres** database (namespace `gateway`; `/api` and `/mcp` on `app.localhost`), the **dashboard** (`app.localhost/`) and the **chat agent** with its LLM integration (Groq) are **built and verified**. Phase 5 added the protective layers around them: **default-deny NetworkPolicies**, **Pod Security `restricted`**, a **loopback-only** local cluster and the **production values** (TLS, redirect, HSTS), described in [the Phase 5 layers](#the-protective-layers-added-in-phase-5). Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today), the [Phase 1 store details](#the-store-built-in-phase-1), the [Phase 2 MCP server details](#the-woocommerce-mcp-server-built-in-phase-2), the [Phase 3 gateway details](#the-gateway-built-in-phase-3) and the [Phase 4 dashboard and chat details](#the-dashboard-and-the-chat-agent-built-in-phase-4).
 
 ## Purpose
 
@@ -36,7 +36,7 @@ flowchart LR
 
   LLM[(Groq / OpenRouter<br/>LLM API)]
 
-  B -- store.localhost --> T --> WP
+  B -- "store.localhost (127.0.0.1:80/443 only)" --> T --> WP
   B -- app.localhost / --> T --> D
   B -- app.localhost /api --> T --> G
   X -- app.localhost /mcp + API key --> T --> G
@@ -50,7 +50,36 @@ flowchart LR
 
 **Reading the diagram.** There are two kinds of client. A *browser* user visits the storefront at `store.localhost` (routed by Traefik to WordPress/WooCommerce, backed by MariaDB and prepared by the one-off `store-setup` Job) and the dashboard at `app.localhost` (static files from the `dashboard` pod; its `/api` calls go to the `gateway`). An *external MCP client* such as Claude Code, Cursor or the MCP Inspector sends MCP requests to `app.localhost/mcp` with an API key; only the gateway receives them. The gateway stores its state in Postgres, authenticates the caller, then forwards tool calls over Streamable HTTP to the right upstream MCP server (`mcp-woocommerce`, `mcp-notes`, `mcp-utilities`) using a separate upstream credential. `mcp-woocommerce` in turn calls the WooCommerce REST API (v3, OAuth1 signed). For the chat feature the gateway calls an external LLM API (Groq, with OpenRouter as a fallback).
 
-**Key rule:** the only path to an upstream MCP server is *through the gateway*. MCP servers have no Ingress, and NetworkPolicies only admit traffic from gateway pods **(planned, Phase 5)**.
+**Key rule:** the only path to an upstream MCP server is *through the gateway*. MCP servers have no Ingress, and since Phase 5 the NetworkPolicies admit traffic to them only from gateway pods (and, for `mcp-woocommerce`, its own path to WordPress); the probe script proves it with 13 allowed/blocked checks ([security.md](security.md#15-networkpolicies-phase-5)).
+
+
+## The protective layers added in Phase 5
+
+Phase 5 changed no component; it changed what each one is allowed to do and who can reach it. Verified on the freshly recreated local cluster on 2026-10-23 ([security.md](security.md#16-the-real-client-ip-the-loopback-only-cluster-and-production-secrets-phase-5)).
+
+```mermaid
+flowchart TB
+  subgraph host["This computer"]
+    B["Browser / MCP client"]
+  end
+  B -- "127.0.0.1:80 and :443 only (LAN closed)" --> K3D["k3d load balancer"]
+  K3D --> T["Traefik<br/>(prod: redirect to https + HSTS)"]
+  subgraph cluster["Cluster: every pod in store, mcp and gateway is Pod Security restricted"]
+    T --> WP["wordpress"]
+    T --> D["dashboard"]
+    T --> G["gateway"]
+    G --> M["mcp-woocommerce / notes / utilities"]
+    G --> PG[("postgres")]
+    M -- "woocommerce only" --> WP
+    WP --> DB[("mariadb")]
+  end
+  NP["Default-deny NetworkPolicy in each namespace<br/>plus the allow matrix (security.md section 15)"] -.-> cluster
+```
+
+- **Network layer.** A default-deny ingress and egress policy in each of `store`, `mcp` and `gateway`, with explicit allows (Traefik to the three public services, the gateway to its upstreams and Postgres, WordPress to MariaDB, DNS, and public internet only for the gateway, WordPress and the store-setup Job). `scripts/test-network-policies.ps1` proves it.
+- **Pod layer.** The three namespaces enforce Pod Security `restricted`: non-root, no privilege escalation, all capabilities dropped, seccomp `RuntimeDefault`, bounded `/tmp` volumes per workload. A brand-new cluster admitted every pod.
+- **Edge.** The local cluster publishes only `127.0.0.1:80` and `:443`. In production values Traefik redirects http to https, adds HSTS, and the gateway's session cookie is `Secure`; this path was rehearsed on a second k3d cluster, not on a VPS ([deployment.md](deployment.md#rehearsal-results-2026-10-23)).
+- **Startup.** The gateway waits up to 180 s (90 tries, 2 s apart) for Postgres, and serialises migrations with a Postgres advisory lock, so a cold first install (Postgres image pull) no longer restarts it.
 
 ## Components and responsibilities
 

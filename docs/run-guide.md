@@ -185,6 +185,14 @@ This runs `k3d cluster stop urumi`, which frees the RAM. **Data survives a stop 
 
 Start Docker Desktop, wait for "Engine running", then run `up.ps1` again. The k3d containers use the Docker restart policy `unless-stopped`, so after a reboot the cluster may already be running or may be stopped (expected; not tested across a reboot). `up.ps1` handles both and keeps your data.
 
+### The cluster listens on this computer only (Phase 5)
+
+Since 2026-10-23 `deploy/k3d-config.yaml` publishes the cluster's ports as `127.0.0.1:80` and `127.0.0.1:443`, so only programs on this computer can reach the store, the dashboard and the gateway. Before, k3d published them on every network interface, so another device on the same Wi-Fi could open `http://<this computer's address>/` with a `Host: store.localhost` header. **Verified 2026-10-23:** `curl.exe -m 5 http://127.0.0.1/ -H "Host: store.localhost"` answers `200`; the same request to this computer's Wi-Fi address (192.168.1.7) gets no answer (curl exit 7, connection refused); `docker port k3d-urumi-serverlb` lists `80/tcp -> 127.0.0.1:80` and `443/tcp -> 127.0.0.1:443`. One more port stays open: the Kubernetes API (`6443/tcp -> 0.0.0.0:<random port>`), which needs the cluster's client certificate (see [security.md](security.md#8-residual-risks), risk 9).
+
+The browser, `curl` and all scripts use `localhost` names, so nothing changes in daily use. A device on your network can no longer open the store; to show it to someone else use a screen share, or the production path in [deployment.md](deployment.md#production-k3s-vps).
+
+**Recreating the cluster loses all local data.** The cluster was deleted and recreated on 2026-10-23 to apply this setting (the owner agreed): products, orders, customers, gateway users, API keys and the audit log are gone, and **new passwords were generated** (store admin, database, gateway admin). Fetch them again with the commands in [section 5](#5-passwords-and-secrets); the AI keys come back by running `scripts\create-secrets.ps1` once (it reads `.env` itself). Any API key you created before the recreation no longer works; any MCP client that stored one needs a new key. To check the whole platform after such a recreation run `scripts\smoke-test.ps1` (below, section 12).
+
 ## 4. URLs
 
 With the default settings (host port 80, **verified**):
@@ -1063,11 +1071,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerc
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-woo-api.ps1                       # WooCommerce REST key check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1            # register, order, see it in My Account
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1 -CheckGuestLinking   # also checks guest-order linking
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policies.ps1               # NetworkPolicies: 12 allowed/blocked probes (Phase 5)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1                         # everything in one command: pods, 4 checks, dashboard, policies, invite log, npm audit (Phase 5; -Quick skips the dashboard and npm audit)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invite-log.ps1                   # the dashboard log must hold no invite token (Phase 5; also run by check-dashboard.ps1)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policies.ps1               # NetworkPolicies: 13 allowed/blocked probes (Phase 5)
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1                    # chart schema and render rules, deploy.ps1 guards, .env parser, kubeconform (Phase 5): hostnames, timezone, TLS scheme, Pod Security labels, emptyDir limits (Phase 5, no cluster needed)
 ```
 
-**NetworkPolicy probe script (Phase 5).** `scripts\test-network-policies.ps1` starts twelve short-lived `curlimages/curl:8.22.0` pods (labelled like the pod they impersonate) and checks that each flow is allowed or blocked as designed. It takes about 3 minutes because each probe waits 10 s (`-SettleSeconds`) for the network controller to program the new pod. It prints a table and ends with `NetworkPolicies behave as designed (12 probes)` or exits 1. It runs against the current kube context and refuses any context other than `k3d-urumi` and `k3d-urumi-prod`. List the policies with `kubectl get networkpolicy -A`.
+**NetworkPolicy probe script (Phase 5).** `scripts\test-network-policies.ps1` starts thirteen short-lived `curlimages/curl:8.22.0` pods (labelled like the pod they impersonate) and checks that each flow is allowed or blocked as designed. It takes about 3 minutes because each probe waits 10 s (`-SettleSeconds`) for the network controller to program the new pod. It prints a table and ends with `NetworkPolicies behave as designed (13 probes)` or exits 1. It runs against the current kube context and refuses any context other than `k3d-urumi` and `k3d-urumi-prod`. List the policies with `kubectl get networkpolicy -A`.
+
+**The smoke test (Phase 5).** `scripts\smoke-test.ps1` runs, in this order, one step each: (1) all pods ready, (2) `check-woo-api`, (3) `check-mcp-woocommerce`, (4) `check-gateway -Write`, (5) `check-dashboard` (a real browser, and one live chat turn when the AI key is set, which spends free-tier tokens), (6) `test-network-policies` (about 3 minutes), (7) the invite-log check and (8) `npm audit --omit=dev --audit-level=high`. Each step runs in its own PowerShell process and only its last output line is shown; the run ends with a PASS/FAIL table and exit code 0 only if nothing failed. `-Quick` skips steps 5 and 8 (no browser, no chat turn, no network). The scripts never print a password or key. Result on a fresh cluster, 2026-10-23: all 8 rows PASS (full run), and 6 PASS with 2 SKIPPED for `-Quick`.
 
 The smoke test leaves a demo customer and order in the store (users like `smoke+<timestamp>@example.com`). It never prints the password it generates.
 
@@ -1077,7 +1089,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 |---|---|---|
 | Remove the store but keep the data | `helm uninstall urumi --namespace urumi-system` | The data volumes and namespace are kept; a later `up.ps1` reinstalls and the data comes back (verified, see [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept)). |
 | Wipe all store data | 1. `helm uninstall urumi --namespace urumi-system`<br>2. `kubectl delete ns store mcp gateway --wait=true --timeout=300s`<br>3. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` | **Destroys all data**: products, orders, users and passwords. Do the uninstall first: if the Helm release stays installed while its namespace is gone, `up.ps1` now notices the missing `store` namespace and redeploys (expected; this exact combination was not re-run after the up.ps1 change), but the clean sequence below is the one verified in Phase 1. After all three steps `up.ps1` builds a brand-new store with new passwords (same sequence as [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept), verified in Phase 1). |
-| Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch. |
+| Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch with **new passwords**; run `scripts\create-secrets.ps1` afterwards to put the AI keys back, then `scripts\smoke-test.ps1`. |
 
 ## 14. Troubleshooting pointers
 

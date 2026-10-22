@@ -2,7 +2,7 @@
 
 A WooCommerce store running on Kubernetes, paired with a team MCP gateway. Platform admins register MCP servers once; team members then use all of their tools through a single gateway endpoint and a dashboard chat agent. The whole platform is deployed with one Helm chart to a local k3d cluster or a single-node k3s VPS.
 
-> **Status: under construction (the store, three MCP servers, the team MCP gateway, the web dashboard and the chat agent run on Kubernetes; network policies and production deployment come in Phase 5, the complete README in Phase 6).** See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: under construction (the store, three MCP servers, the team MCP gateway, the web dashboard and the chat agent run on Kubernetes, hardened in Phase 5 with default-deny NetworkPolicies, Pod Security `restricted` and a loopback-only local cluster; the production values were rehearsed on a second k3d cluster, not on a VPS; the complete README comes in Phase 6).** Verify a running cluster with `scripts\smoke-test.ps1`; the end-to-end demo is [docs/demo-script.md](docs/demo-script.md). See the [implementation plan](docs/superpowers/plans/2026-10-18-mcp-gateway-implementation-plan.md) for the current phase status, and the [design spec](docs/superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 ## 1. Project Name and Overview
 
@@ -82,6 +82,8 @@ Check the MCP server end to end with `powershell -NoProfile -ExecutionPolicy Byp
 
 **The AI chat (quick start).** Get a free key at <https://console.groq.com/keys>, copy `.env.example` to `.env`, put the key after `GROQ_API_KEY=`, and run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\create-secrets.ps1` (it stores the key in the cluster and prints only `set` or `empty`). Then open <http://app.localhost/chat>. Step by step for beginners: [Set up the AI chat](docs/run-guide.md#set-up-the-ai-chat).
 
+**Check everything in one command.** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1` runs the pod check, the WooCommerce, MCP and gateway checks, the dashboard in a browser, the network-policy probes, the invite-log check and `npm audit`, then prints a PASS/FAIL table (`-Quick` skips the browser and the audit). The local cluster listens on `127.0.0.1` only; recreating it deletes all data and generates new passwords ([run guide](docs/run-guide.md#the-cluster-listens-on-this-computer-only-phase-5)).
+
 Pause with `scripts\stop.ps1` (keeps your data). The complete beginner guide (daily use, customer accounts, viewing the database, resetting) is the [run guide](docs/run-guide.md).
 
 Something wrong? See [docs/troubleshooting.md](docs/troubleshooting.md). To start over completely: [docs/deployment.md](docs/deployment.md#step-9-uninstall-and-what-is-kept).
@@ -134,4 +136,4 @@ See the [documentation map](docs/README.md) for an index of all project document
 
 ## 22. Known Limitations, Assumptions, and Future Improvements
 
-*(the full section is written in Phase 6)* Known today: no NetworkPolicies yet (Phase 5); one gateway replica; the chat shares one free provider key across the whole team, so heavy use hits Groq's per-minute limit; chat messages and tool results are sent to the AI provider; prompt injection through tool output is a documented residual risk ([security.md](docs/security.md#12-untrusted-data-and-prompt-injection)); Claude Code and Cursor are not tested against the gateway; the production (VPS) deployment is documented and render-validated but has not been run on a real VPS ([deployment guide](docs/deployment.md#production-k3s-vps)).
+*(the full section is written in Phase 6)* Known today: one gateway replica; the local cluster is reachable from this computer only (a design choice since 2026-10-23, see [security.md](docs/security.md#16-the-real-client-ip-the-loopback-only-cluster-and-production-secrets-phase-5)) and k3d still publishes its Kubernetes API on all interfaces; the chat shares one free provider key across the whole team, so heavy use hits Groq's per-minute limit; chat messages and tool results are sent to the AI provider; prompt injection through tool output is a documented residual risk ([security.md](docs/security.md#12-untrusted-data-and-prompt-injection)); Claude Code and Cursor are not tested against the gateway; the production (VPS) deployment is documented and render-validated but has not been run on a real VPS ([deployment guide](docs/deployment.md#production-k3s-vps)).

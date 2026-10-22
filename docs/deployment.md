@@ -353,7 +353,7 @@ Settings that differ from production (`deploy/values-prod-test.yaml`): hosts `st
 
 Known leftovers from the rehearsal:
 
-- A **fresh install can restart the gateway once or twice** while Postgres initialises (it gives up after 30 tries, 2 s apart). It recovers by itself and `helm --wait` still succeeded; on a slow VPS pulling the Postgres image it may take longer.
+- A **fresh install restarted the gateway once or twice** while Postgres initialised. Root cause (found on the local fresh install of 2026-10-23): the Postgres image pull took 1m51s, longer than the gateway's 30 x 2 s database wait and the 60 x 2 s startup probe. Fixed in commit `027d43e` (90 x 2 s wait, 110 x 2 s startup probe); the next fresh install had 0 gateway restarts ([troubleshooting](troubleshooting.md#the-gateway-restarted-once-or-twice-on-a-first-install)). The rehearsal itself was not re-run with the fix.
 - The self-signed certificates are not trusted by browsers, and `curl` needs `-k`.
 
 ### 1. Choose a server
