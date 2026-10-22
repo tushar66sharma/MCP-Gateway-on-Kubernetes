@@ -35,9 +35,10 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, storageState: STORAGE_STATE },
     },
     {
-      // The chat turn costs real LLM tokens (free-tier limits), so it runs once, on desktop.
+      // The chat turn costs real LLM tokens (free-tier limits), so it runs once, on desktop. The phone-width
+      // chat check (chat-layout) only opens the page and never sends.
       name: 'mobile',
-      testMatch: /smoke\.spec\.ts$/,
+      testMatch: /(smoke|chat-layout)\.spec\.ts$/,
       dependencies: ['setup'],
       use: {
         ...devices['Desktop Chrome'],
