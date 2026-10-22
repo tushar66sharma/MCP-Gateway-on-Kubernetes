@@ -64,6 +64,9 @@ try {
   Pop-Location
 }
 if ($code -ne 0) { Write-Host "ERROR: Dashboard end-to-end check failed (Playwright exit code $code)." -ForegroundColor Red; exit $code }
+# The Phase 4 open item: opening /invite/<token> must leave no trace of the token in the dashboard log.
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'check-invite-log.ps1') -Base $Base
+if ($LASTEXITCODE -ne 0) { Write-Host 'ERROR: Invite-log check failed.' -ForegroundColor Red; exit 1 }
 $scope = if ($Project) { $Project } else { 'desktop and mobile' }
 Write-Host "Dashboard works end to end in Chromium ($scope)." -ForegroundColor Green
 exit 0
