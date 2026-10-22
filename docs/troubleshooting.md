@@ -76,6 +76,7 @@ helm status urumi -n urumi-system
 - [The Vite dev server gives 403 `CSRF_REJECTED`](#the-vite-dev-server-gives-403-csrf_rejected)
 - [The dashboard pod is in `ErrImagePull` (image tag not found)](#the-dashboard-pod-is-in-errimagepull-image-tag-not-found)
 - [`npm ci` prints `EBADENGINE` warnings for jsdom](#npm-ci-prints-ebadengine-warnings-for-jsdom)
+- [A pod cannot reach X after Phase 5](#a-pod-cannot-reach-x-after-phase-5)
 
 ---
 
@@ -818,3 +819,23 @@ Other failures of this script: `app.localhost does not resolve` (run `scripts\se
 **Symptom.** `npm ci` or `npm install` prints `npm warn EBADENGINE Unsupported engine` for `jsdom@30.1.3` and some `@asamuzakjp/*` packages, naming `node: '^22.22.2 || ^24.15.0 || >=26'`.
 
 **Cause and fix.** jsdom 30 (the dashboard's test environment) declares Node 24.15 or newer; the reference machine has Node 24.0.1. The warnings are harmless there (all 113 dashboard tests pass), and the Docker images use a newer `node:24-alpine`. To silence them, update Node to 24.15 or newer (`winget upgrade OpenJS.NodeJS.LTS`, **expected**, not run here).
+
+
+## A pod cannot reach X after Phase 5
+
+**Symptom.** A connection from one pod to another pod or to the internet fails with `Connection refused` (curl exit 7) or hangs until a timeout (exit 28), although the target is running and its Service has endpoints. A new feature that calls a new host or port fails from inside the cluster.
+
+**Cause.** The `store`, `mcp` and `gateway` namespaces are default-deny for ingress and egress ([ADR-016](decisions/ADR-016-default-deny-network-policies.md)). Only the flows in the allow matrix ([security.md, section 15](security.md#15-networkpolicies-phase-5)) are open: Traefik to wordpress, gateway and dashboard; gateway to the MCP servers and Postgres; mcp-woocommerce to WordPress; WordPress and store-setup to MariaDB; and 443/80 to public IPs from the gateway, WordPress and store-setup. DNS is open for all pods. Private ranges (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`, `127/8`) are never reachable through the internet rules.
+
+**Fix.**
+
+```powershell
+kubectl get networkpolicy -A                          # the policies in force
+kubectl -n gateway describe networkpolicy gateway     # one policy: selectors, ports
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policies.ps1   # is the designed behaviour intact?
+```
+
+- If the flow is meant to exist, add one rule for it in `charts/urumi-platform/templates/network/` (pod labels are `app.kubernetes.io/instance` plus `app.kubernetes.io/name`) and redeploy; also add the row to the allow matrix and the probe script.
+- Only to confirm that a policy is the cause, redeploy with `--set networkPolicies.enabled=false` (local use only), then turn it back on.
+- A **brand-new pod** can behave oddly for its first 3 to 6 seconds: kube-router programs its rules a little after it starts, so an allowed call may be refused and a blocked one may succeed. Wait a few seconds and retry; the probe script does the same.
+- `kubectl port-forward`, `exec` and kubelet probes are not affected by NetworkPolicies.

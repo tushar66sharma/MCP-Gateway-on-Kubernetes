@@ -41,7 +41,7 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 | Chat turn sequence (tool loop, retries, fallback) | Dashboard chat, the per-user refusals, the loopback MCP client with a token per request, LLM retries and the one-shot fallback, audited tool calls | [workflows.md](../workflows.md#15-a-chat-turn-tool-loop-retries-and-fallback) | Available (Phase 4; the success path run live with Groq, failure paths unit-tested, fallback not tested live) |
 | The LLM layer | Route, service, agent, registry, the one OpenAI-compatible adapter configured for Groq and OpenRouter | [ai-integration.md](../ai-integration.md#1-the-layer) | Available (Phase 4) |
 | Admin edits a server sequence | The form's origin check, `PATCH` with SSRF and the origin rule, encryption, upsert and health check | [workflows.md](../workflows.md#16-an-admin-edits-a-server-and-the-url-origin-rule) | Available (Phase 4; component and API tests, not run live) |
-| NetworkPolicy map | Which pods may talk to which | Planned | (planned) — Phase 5 |
+| NetworkPolicy map | Which pods may talk to which | [network-policies.md](network-policies.md) | Available (Phase 5, Task 5.3; verified live by `scripts/test-network-policies.ps1` on 2026-10-22) |
 | Helm / Kubernetes resource map | Resources created by the chart per namespace | Planned | (planned) — Phases 5-6 |
 
 Planned diagrams will be added to this directory (or to the relevant document) in the phase shown, and this index updated at the same time.

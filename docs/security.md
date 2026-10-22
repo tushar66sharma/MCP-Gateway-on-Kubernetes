@@ -108,7 +108,7 @@ Known, accepted for Phase 3, not fixed. The Phase 5 hardening item is named wher
 5. **Notes are kept in memory** by `mcp-notes`: they are lost on restart and not shared between replicas. They are not a secure store.
 6. **Internal chat tokens cannot be revoked individually;** they expire after 5 minutes. A disabled user's token is refused on the next use because the user is re-read, and the chat mints a new token for every request anyway.
 7. **Invite links are bearer secrets until used.** Anyone who gets the link within 72 hours can claim the account. Mitigations: single use, expiry, only the hash is stored, the path is redacted in the gateway's log and in the dashboard's nginx access log (case-insensitive, including the `/invite/<token>` page path; see section 6), and the admin can cancel a link (`DELETE /api/invites/:id`, **live**: the link then answered `404 INVITE_INVALID`).
-8. **Nothing limits which pods can reach the gateway or the upstreams** until NetworkPolicies exist (Phase 5). Any pod in the cluster can reach `mcp-woocommerce`, but needs its bearer token.
+8. **Pod-to-pod traffic is now restricted by NetworkPolicies (Phase 5, Task 5.3; [section 15](#15-networkpolicies-phase-5)).** Only the flows in the allow matrix are open. Two limits remain: a new pod is unrestricted for a few seconds until kube-router programs it, and the internet rule allows any public IP on 80 and 443.
 9. **`COOKIE_SECURE` is false locally** (plain http on `app.localhost`), and k3d publishes ports 80 and 443 without a host IP, so the gateway may be reachable from the local network (**not verified**). Stop the cluster on untrusted networks.
 10. **The login limiter may see one address for everyone** behind k3s ServiceLB (see `TRUST_PROXY` above; expected, not tested). Phase 5.
 
@@ -122,7 +122,7 @@ Added in Phase 4:
 
 ## 9. Not yet covered
 
-NetworkPolicies and pod hardening review (Phase 5), production TLS and secrets handling (Phase 5), the threat model including malicious tool descriptions and compromised upstreams (Phase 6).
+Pod hardening review (Phase 5), production TLS and secrets handling (Phase 5), the threat model including malicious tool descriptions and compromised upstreams (Phase 6).
 
 ## 10. Browser headers and the dashboard
 
@@ -175,3 +175,60 @@ Chat route hardening (2026-10-22, **tested**): the 512 KB chat body is parsed on
 - The plaintext is held in component state only: the create call is a plain function rather than a cached mutation, nothing is written to `localStorage` or `sessionStorage`, and after the dialog closes the page holds no trace of it (**tested** in `KeyCreatedDialog.test.tsx`; the Playwright smoke checks the key's shape inside the page and returns only true/false, so a failing test cannot print it).
 - The same rules apply to the invite link (shown once in its own dialog) and to a credential typed into the server form (sent only in the request body, cleared when the dialog closes). The invite token is part of the invite page's preview query key in memory (garbage-collected immediately when the page closes; a deferred minor notes it).
 - The Playwright configuration records nothing (`screenshot`, `trace` and `video` are off), and the documentation screenshots were taken of pages that show no key, link or password.
+
+
+## 15. NetworkPolicies (Phase 5)
+
+Since Task 5.3 each of the namespaces `store`, `mcp` and `gateway` has a default-deny policy for ingress and egress, plus the allow rules below (`charts/urumi-platform/templates/network/`, `networkPolicies.enabled`, default true). Decision: [ADR-016](decisions/ADR-016-default-deny-network-policies.md). Map: [diagrams/network-policies.md](diagrams/network-policies.md).
+
+```mermaid
+flowchart LR
+  T["Traefik"] --> WP["wordpress"]
+  T --> G["gateway"]
+  T --> D["dashboard"]
+  G --> M["mcp-woocommerce / notes / utilities"]
+  G --> PG[("postgres")]
+  M -- "woocommerce only" --> WP
+  WP --> DB[("mariadb")]
+  SS["store-setup"] --> DB
+  G --> NET(["public internet"])
+  WP --> NET
+  SS --> NET
+```
+
+**Allow matrix (every row is one rule; every other flow is denied):**
+
+| From | To | Port | Why |
+|---|---|---|---|
+| Traefik (`kube-system`, `app.kubernetes.io/name=traefik`) | wordpress | 80 | public store |
+| Traefik | gateway | 3000 | `/api`, `/mcp` |
+| Traefik | dashboard | 8080 | `/` |
+| wordpress, store-setup | mariadb | 3306 | database |
+| mcp-woocommerce | wordpress (namespace `store`) | 80 | WooCommerce REST |
+| gateway | mcp-woocommerce, mcp-notes, mcp-utilities | 3001, 3002, 3003 | upstream MCP |
+| gateway | postgres | 5432 | database |
+| gateway | internet (`0.0.0.0/0` except the private ranges) | 443, 80 | LLM providers, admin-added external MCP servers (the SSRF guard still applies) |
+| wordpress | internet (except private ranges) | 443, 80 | wp-admin update and marketplace checks (without it wp-admin pages hang) |
+| store-setup | internet (except private ranges) | 443, 80 | WooCommerce download |
+| every pod in the 3 namespaces | kube-dns (`kube-system`, `k8s-app=kube-dns`) | 53 UDP+TCP | DNS |
+
+Private ranges never reachable through the internet rules: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`, `127.0.0.0/8`. `mcp-notes` and `mcp-utilities` get DNS only (no outbound `fetch(` in `apps/mcp-utilities/src`).
+
+**Verified live on 2026-10-22** (k3d context `k3d-urumi`, k3s v1.35.5, embedded kube-router):
+
+| Check | Result |
+|---|---|
+| `helm lint` with `values-local.yaml` and `values-prod.yaml` | both pass; `helm template` renders 15 NetworkPolicies (3 default-deny, 3 DNS, 3 store, 3 mcp, 3 gateway) and none with `--set networkPolicies.enabled=false` |
+| `scripts\test-network-policies.ps1` before the policies (RED) | 8 of 12 probes failed (every "blocked" row except the metadata address, which k3d does not route anyway) |
+| same script after `up.ps1 -Redeploy` (GREEN) | `NetworkPolicies behave as designed (12 probes)`: default namespace to mcp-woocommerce, postgres, mariadb blocked; pod labelled mcp-notes to wordpress, postgres, `https://example.com` blocked; gateway to mcp-woocommerce `/mcp` 401, to `https://api.groq.com` reachable, to mariadb and `169.254.169.254` blocked; mcp-woocommerce to wordpress `/wp-login.php` 200; dashboard to gateway blocked |
+| Pods after redeploy | all 1/1; no restarts over about 3 minutes (kubelet probes work under the policies) |
+| `check-gateway.ps1 -Write`, `check-mcp-woocommerce.ps1 -Write`, `check-woo-api.ps1`, `check-dashboard.ps1` | all pass (the dashboard check includes one chat turn that called the LLM and answered 42: LLM egress works) |
+| wp-admin | `GET /wp-admin/` (logged out, 302 to login) and `/wp-login.php` answered in 0.05 to 1.1 s (limit 5 s) |
+| `kubectl -n store delete job store-setup`, then `up.ps1 -Redeploy` | the Job completed (27 s; the first redeploy under the policies took 35 s). The WooCommerce plugin was already installed at the right version, so the Job skipped the download: its internet and database reach was checked separately with a pod carrying the `store-setup` labels (downloads.wordpress.org answered 200, MariaDB reachable, WordPress blocked) |
+
+**Residual risks and limits:**
+
+- **A new pod is unprotected for a few seconds.** kube-router programmed a fresh pod's rules 3 to 6 s after it started (observed 2026-10-22: the first 2 to 3 curls from a new `mcp-notes`-labelled pod to the internet succeeded, then were refused; a new allowed flow failed for the first ~6 s). Until then blocked flows are open and allowed flows are cut. The probe pods in the test script wait 10 s. Not tested on a VPS.
+- Blocked connections are normally refused (curl exit 7), not timed out.
+- Any public host on 80 and 443 is reachable from the gateway, WordPress and the Job; FQDN allow-lists need a different CNI.
+- The ranges `10/8`, `172.16/12`, `192.168/16`, `100.64/10` and `127/8` were not each probed; only `169.254.169.254` was. Production (`k3d-urumi-prod`, a real VPS with ServiceLB or hairpin to its own public IP) is **not tested** yet.

@@ -1061,7 +1061,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerc
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-woo-api.ps1                       # WooCommerce REST key check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1            # register, order, see it in My Account
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1 -CheckGuestLinking   # also checks guest-order linking
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policies.ps1               # NetworkPolicies: 12 allowed/blocked probes (Phase 5)
 ```
+
+**NetworkPolicy probe script (Phase 5).** `scripts\test-network-policies.ps1` starts twelve short-lived `curlimages/curl:8.22.0` pods (labelled like the pod they impersonate) and checks that each flow is allowed or blocked as designed. It takes about 3 minutes because each probe waits 10 s (`-SettleSeconds`) for the network controller to program the new pod. It prints a table and ends with `NetworkPolicies behave as designed (12 probes)` or exits 1. It runs against the current kube context and refuses any context other than `k3d-urumi` and `k3d-urumi-prod`. List the policies with `kubectl get networkpolicy -A`.
 
 The smoke test leaves a demo customer and order in the store (users like `smoke+<timestamp>@example.com`). It never prints the password it generates.
 
