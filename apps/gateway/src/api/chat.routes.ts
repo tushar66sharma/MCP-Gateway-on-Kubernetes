@@ -40,7 +40,7 @@ export function createChatRouter(deps: GatewayDeps, mcpUrl: () => string): expre
     res.json(chat.status());
   });
 
-  router.post('/chat', session, async (req, res) => {
+  router.post('/chat', session, express.json({ limit: '512kb' }), async (req, res) => {
     const { messages } = parseBody(chatBody, req.body);
     // The client went away before the reply was written: stop the turn. (`req`'s own 'close' fires as soon
     // as the body has been read on current Node, so the response's 'close' is the one that means it.)
