@@ -106,6 +106,9 @@ $hsts = $prodDocs | Where-Object { $_ -match '(?m)^kind: Middleware' -and $_ -ma
 Report 'HSTS is 31536000 s without includeSubdomains' ([bool]($hsts -and $hsts -match 'stsSeconds: 31536000' -and $hsts -match 'stsIncludeSubdomains: false'))
 $redir = $prodDocs | Where-Object { $_ -match '(?m)^kind: Middleware' -and $_ -match '(?m)^  name: redirect-https\s*$' } | Select-Object -First 1
 Report 'redirect-https is a permanent redirectScheme to https' ([bool]($redir -and $redir -match 'scheme: https' -and $redir -match 'permanent: true'))
+$rpt = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $prod, '--set', 'global.publicPort=8443')
+Report 'redirect-https keeps a non-default public port (port: "8443")' ($rpt.Out -match '(?m)^    port: "8443"\r?$')
+Report 'redirect-https has no port at the default 443' ($redir -notmatch '(?m)^    port:')
 Report 'local values render no Middleware and no router.middlewares annotation' (($r.Out -notmatch '(?m)^kind: Middleware') -and ($r.Out -notmatch 'router\.middlewares'))
 Report 'prod values use customerRegistration false' ($rp.Out -match 'name: CUSTOMER_REGISTRATION, value: "false"')
 

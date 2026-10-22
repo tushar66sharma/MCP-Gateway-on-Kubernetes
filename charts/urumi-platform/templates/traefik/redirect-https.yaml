@@ -19,5 +19,9 @@ spec:
   redirectScheme:
     scheme: https
     permanent: true
+    {{- if ne (int $.Values.global.publicPort) 443 }}
+    # Without a port Traefik rewrites https://host:8443 to https://host (port dropped) and loops. Keep the public port.
+    port: {{ $.Values.global.publicPort | toString | quote }}
+    {{- end }}
 {{- end }}
 {{- end }}
