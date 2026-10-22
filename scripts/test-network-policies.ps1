@@ -1,6 +1,7 @@
 # Probes the NetworkPolicies from short-lived pods (curlimages/curl) in the CURRENT kube context.
 # "Blocked" = curl exit code 7 (refused) or 28 (timeout) and no HTTP code. Prints a table and exits 1
 # on any mismatch. Probe pods comply with Pod Security "restricted" (non-root, seccomp, no caps, no token).
+param([int]$SettleSeconds = 10)
 $ErrorActionPreference = 'Stop'
 function Stop-WithError([string]$Message) { Write-Host "ERROR: $Message" -ForegroundColor Red; exit 1 }
 if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) { Stop-WithError "'kubectl' not found on PATH." }
@@ -13,6 +14,9 @@ $image = 'curlimages/curl:8.22.0'
 $inst = 'app.kubernetes.io/instance=urumi'
 function Labels([string]$name) { "$inst,app.kubernetes.io/name=$name" }
 
+# kube-router programs a NEW pod's rules a few seconds after it starts (observed 3 to 6 s on 2026-10-22): until then
+# a pod is unrestricted for rows that should be blocked and cut off for rows that should be allowed. Each probe
+# therefore sleeps -SettleSeconds before it curls.
 # Each row: from, namespace, pod labels ('' = none), url, expected (blocked | any | <http code>), optional extra curl args
 $matrix = @(
   @('default namespace',        'default', '',                       'http://mcp-woocommerce.mcp.svc:3001/mcp',        'blocked'),
@@ -59,7 +63,7 @@ foreach ($m in $matrix) {
   $n++
   $from, $ns, $labels, $url, $expected, $extra = $m
   $pod = "np-$n"
-  $shell = "curl -s -o /dev/null -w code=%{http_code} -m 5 $extra $url; echo rc=`$?"
+  $shell = "sleep $SettleSeconds; curl -s -o /dev/null -w code=%{http_code} -m 5 $extra $url; echo rc=`$?"
   $line = "run $pod -n $ns --rm -i --restart=Never --image=$image"
   if ($labels) { $line += " --labels=$labels" }
   $line += " `"--overrides=$(Get-Overrides $pod $shell)`""
