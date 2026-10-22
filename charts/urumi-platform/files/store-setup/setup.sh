@@ -8,6 +8,10 @@ fail() { echo "[store-setup] ERROR: $*" >&2; exit 1; }
 
 WP="wp --path=/var/www/html"
 
+# Refuse an empty admin password before any WP-CLI call: an empty value would make the install
+# prompt for (or generate) a password nobody knows.
+[ -n "${ADMIN_PASSWORD:-}" ] || fail "ADMIN_PASSWORD is empty"
+
 log "waiting for wp-config.php (written by the WordPress container on first start)"
 i=0
 until [ -f /var/www/html/wp-config.php ]; do
@@ -16,20 +20,35 @@ until [ -f /var/www/html/wp-config.php ]; do
 done
 
 log "waiting for the database"
+# Keep the last error (at most 5 lines) so a failure says why. WP-CLI database errors do not contain the password.
 i=0
-until $WP db query "SELECT 1" >/dev/null 2>&1; do
-  i=$((i + 1)); [ "$i" -gt 60 ] && fail "database not reachable within 300s"
-  sleep 5
+until db_err=$($WP db query "SELECT 1" 2>&1); do
+  i=$((i + 1))
+  if [ "$i" -gt "${DB_WAIT_TRIES:-60}" ]; then
+    fail "database not reachable within $((i * ${DB_WAIT_SLEEP:-5}))s; last error: $(printf '%s\n' "$db_err" | tail -n 5)"
+  fi
+  sleep "${DB_WAIT_SLEEP:-5}"
 done
 
 if $WP core is-installed >/dev/null 2>&1; then
   log "WordPress already installed"
 else
   log "installing WordPress"
-  $WP core install --url="$WP_URL" --title="$SITE_TITLE" \
-    --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" \
-    --admin_email="$ADMIN_EMAIL" --skip-email
+  # The password goes in on stdin (--prompt), never as an argument, so it is not visible in the process
+  # list. With piped input WP-CLI echoes the prompt and the equivalent command line (password included)
+  # on stdout, so stdout is discarded; errors go to stderr and do not contain the password.
+  printf '%s\n' "$ADMIN_PASSWORD" | $WP core install --url="$WP_URL" --title="$SITE_TITLE" \
+    --admin_user="$ADMIN_USER" --admin_email="$ADMIN_EMAIL" --skip-email --prompt=admin_password >/dev/null
 fi
+
+# Keep the stored site address in step with the configured public URL (e.g. after a host change).
+for opt in home siteurl; do
+  current_url=$($WP option get "$opt")
+  if [ "$current_url" != "$WP_URL" ]; then
+    log "updating $opt: $current_url -> $WP_URL"
+    $WP option update "$opt" "$WP_URL"
+  fi
+done
 
 current_woo=""
 if $WP plugin is-installed woocommerce >/dev/null 2>&1; then
