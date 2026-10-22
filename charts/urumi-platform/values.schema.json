@@ -125,6 +125,11 @@
         "resources": { "type": "object" }
       }
     },
+    "networkPolicies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    },
     "dashboard": {
       "type": "object",
       "required": ["enabled", "port"],

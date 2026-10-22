@@ -154,3 +154,8 @@ dashboard:
   resources:
     requests: { cpu: 10m, memory: 16Mi }
     limits: { cpu: 100m, memory: 64Mi }
+
+# Default-deny NetworkPolicies for the three app namespaces plus explicit allow rules (ADR-016).
+# Needs a CNI that enforces them (k3s: the embedded kube-router controller).
+networkPolicies:
+  enabled: true
