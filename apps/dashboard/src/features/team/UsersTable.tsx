@@ -91,7 +91,9 @@ interface RoleSelectProps {
  */
 function RoleSelect({ user: u, self, onRole }: RoleSelectProps) {
   const selectRef = useRef<HTMLSelectElement>(null);
+  // `proposed` outlives the dialog so its text does not change while it closes.
   const [proposed, setProposed] = useState<Role | null>(null);
+  const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const confirm = async () => {
@@ -116,14 +118,14 @@ function RoleSelect({ user: u, self, onRole }: RoleSelectProps) {
         className="w-32"
         onChange={(e) => {
           const next = e.target.value as Role;
-          if (next !== u.role) setProposed(next);
+          if (next === u.role) return;
+          setProposed(next);
+          setOpen(true);
         }}
       />
       <ConfirmDialog
-        open={proposed !== null}
-        onOpenChange={(open) => {
-          if (!open) setProposed(null);
-        }}
+        open={open}
+        onOpenChange={setOpen}
         returnFocusTo={selectRef}
         tone="default"
         title={proposed === 'admin' ? `Make ${u.name} an admin?` : `Make ${u.name} a member?`}
