@@ -285,6 +285,11 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 - **The WordPress image tag pins only the first core copy** into the `wordpress-data` volume (the `copy-wordpress` initContainer copies core once). Later core updates are not applied by changing the tag.
 - `helm lint` rejects hostnames that are not lower-case DNS names, an empty or malformed `storeSetup.timezone`, and `tls.enabled: true` with `publicScheme: http`. Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1` to check the rules.
 
+### Image pull limits and the WooCommerce download (Phase 5)
+
+- **Docker Hub anonymous pull limits.** Most images (wordpress, mariadb, postgres, the WP-CLI image) come from Docker Hub. Anonymous pulls are rate limited per source IP (check Docker's current limits page for the numbers). A fresh cluster on a shared or NATed address can hit `429 Too Many Requests` and pods stay in `ImagePullBackOff`. Locally the images are pulled once and cached; on a VPS, log in to Docker Hub for the node's containerd or mirror the images to your own registry. Not tested here.
+- **Fresh installs depend on `downloads.wordpress.org`.** The store-setup Job downloads `woocommerce.11.2.1.zip` from it (the NetworkPolicy allows the Job out on 80 and 443 for this). If it is unreachable the Job fails and retries (`backoffLimit: 3`); see [troubleshooting](troubleshooting.md#the-store-setup-job-failed). A redeploy that finds WooCommerce already at or above `woocommerceVersion` downloads nothing.
+
 ### Local limitations
 
 - Single node, single replica for every component; no backups and no high availability.

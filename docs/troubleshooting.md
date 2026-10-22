@@ -282,6 +282,10 @@ A healthy fresh install shows exactly one Pod, `Completed`, and `kubectl -n stor
 
 **Common causes and fixes.**
 
+- **`ERROR: ADMIN_PASSWORD is empty`:** the `store-admin` Secret has no `password` value (for example a pre-created Secret with an empty key). Set a non-empty `password` in the Secret (never print its value), then re-run the deploy.
+- **`database not reachable within ...s; last error: ...`:** the message carries the last 5 lines WP-CLI printed, for example a MariaDB connection error. It never contains a password. Fix MariaDB or the connection first.
+- **`WooCommerce X is newer than Y; not downgrading`** in the log is informational: `woocommerceVersion` is older than what is installed, and the Job leaves the plugin alone.
+- **The Register form is missing on My Account:** `storeSetup.customerRegistration` is `false` (the production default). Set it to `true` and redeploy if you want it.
 - **WooCommerce download fails** (`downloads.wordpress.org` unreachable): the Job needs internet to fetch `woocommerce.11.2.1.zip`. Check your connection, DNS, VPN or proxy, then run `scripts\deploy.ps1` again; the Job restarts from scratch and is safe to repeat.
 - **Out of memory** (`OOMKilled` in `describe pod`; limit 768 Mi): free memory or raise `storeSetup.resources.limits.memory`.
 - **`database not reachable within 300s` / `wp-config.php did not appear within 300s`:** WordPress or MariaDB is not healthy; fix that first (entries above), then re-run `deploy.ps1`.
