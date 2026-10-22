@@ -87,6 +87,7 @@ spec:
             - { name: STORE_CURRENCY, value: {{ .Values.storeSetup.currency | quote }} }
             - { name: STORE_COUNTRY, value: {{ .Values.storeSetup.country | quote }} }
             - { name: STORE_TIMEZONE, value: {{ .Values.storeSetup.timezone | quote }} }
+            - { name: CUSTOMER_REGISTRATION, value: {{ .Values.storeSetup.customerRegistration | quote }} }
             - { name: SEED_PRODUCTS, value: {{ .Values.storeSetup.seedProducts | quote }} }
             - name: WOO_CONSUMER_KEY
               valueFrom: { secretKeyRef: { name: {{ $wooSecret }}, key: consumer-key } }

@@ -36,6 +36,7 @@
     "storeSetup": {
       "type": "object",
       "properties": {
+        "customerRegistration": { "type": "boolean" },
         "timezone": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$" }
       }
     },

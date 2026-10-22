@@ -71,6 +71,9 @@ storeSetup:
   country: "US:CA"
   timezone: Asia/Kolkata
   seedProducts: true
+  # Let shoppers create accounts (My Account and checkout). There is no CAPTCHA or email verification,
+  # so production sets this to false.
+  customerRegistration: true
   # Must be shorter than deploy.ps1's --timeout (10m) so a stuck Job fails the release with a clear reason.
   activeDeadlineSeconds: 480
   resources:

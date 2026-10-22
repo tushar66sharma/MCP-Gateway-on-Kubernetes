@@ -93,11 +93,18 @@ $WP option update woocommerce_cod_settings \
   --format=json
 
 # DEMO-STORE SETTING: open registration has no email verification and no CAPTCHA, so anyone who can
-# reach the store can create accounts (and, with COD guest checkout, fake orders). A values toggle
-# (storeSetup.customerRegistration, off or with anti-spam for production) is planned for Phase 5.
-log "enabling customer accounts (register on My Account and at checkout; customers choose their own password because no mail server is configured)"
-$WP option update woocommerce_enable_myaccount_registration yes
-$WP option update woocommerce_enable_signup_and_login_from_checkout yes
+# reach the store can create accounts (and, with COD guest checkout, fake orders). The values toggle
+# storeSetup.customerRegistration (CUSTOMER_REGISTRATION here) defaults to true for the local demo;
+# production sets it to false. There is no CAPTCHA, so registration stays off wherever the store is public.
+if [ "${CUSTOMER_REGISTRATION:-true}" = "true" ]; then
+  log "enabling customer accounts (register on My Account and at checkout; customers choose their own password because no mail server is configured)"
+  registration=yes
+else
+  log "customer registration is disabled (storeSetup.customerRegistration=false)"
+  registration=no
+fi
+$WP option update woocommerce_enable_myaccount_registration "$registration"
+$WP option update woocommerce_enable_signup_and_login_from_checkout "$registration"
 $WP option update woocommerce_enable_checkout_login_reminder yes
 $WP option update woocommerce_registration_generate_username yes
 $WP option update woocommerce_registration_generate_password no

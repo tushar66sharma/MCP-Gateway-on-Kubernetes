@@ -35,6 +35,7 @@ Case-Lint 'appHost with upper case is rejected' "global:`n  appHost: `"App.Examp
 Case-Lint 'tls.enabled with publicScheme http is rejected' "global:`n  publicScheme: http`n  tls:`n    enabled: true`n" $false
 Case-Lint 'empty storeSetup.timezone is rejected' "storeSetup:`n  timezone: `"`"`n" $false
 Case-Lint 'timezone with a quote is rejected' "storeSetup:`n  timezone: `"UTC'; x`"`n" $false
+Case-Lint 'non-boolean storeSetup.customerRegistration is rejected' "storeSetup:`n  customerRegistration: ""nope""`n" $false
 Case-Lint 'unknown podSecurity.level is rejected' "podSecurity:`n  level: strict`n" $false
 Case-Lint 'valid hostnames and timezone are accepted' "global:`n  storeHost: shop.example.com`n  appHost: app-1.example.com`nstoreSetup:`n  timezone: America/Argentina/Buenos_Aires`n" $true
 
@@ -81,6 +82,13 @@ for ($i = 0; $i -lt $lines.Count; $i++) {
   if (-not $hasLimit) { $bad += ($i + 1) }
 }
 Report "every emptyDir has a sizeLimit key directly under it ($total emptyDirs, $($bad.Count) without)" (($total -gt 0) -and ($bad.Count -eq 0))
+
+# store-setup ConfigMap ships lib.sh; the toggle reaches the Job; the password is never an argument.
+Report 'store-setup ConfigMap ships lib.sh' ($r.Out -match '(?m)^  lib\.sh: \|-')
+Report 'customerRegistration true renders CUSTOMER_REGISTRATION true' ($r.Out -match 'name: CUSTOMER_REGISTRATION, value: "true"')
+$r2 = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '--set', 'storeSetup.customerRegistration=false')
+Report 'customerRegistration false renders CUSTOMER_REGISTRATION false' ($r2.Out -match 'name: CUSTOMER_REGISTRATION, value: "false"')
+Report 'rendered setup script has no --admin_password= argument' ($r.Out -notmatch '--admin_password=')
 
 Remove-Item -Recurse -Force $tmp
 if ($script:fail -gt 0) { Write-Host "`n$($script:fail) check(s) FAILED"; exit 1 }
