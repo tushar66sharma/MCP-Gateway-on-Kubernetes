@@ -7,6 +7,7 @@ log() { echo "[store-setup] $(date -u +%H:%M:%S) $*"; }
 fail() { echo "[store-setup] ERROR: $*" >&2; exit 1; }
 
 WP="wp --path=/var/www/html"
+. "$(dirname "$0")/lib.sh"
 
 # Refuse an empty admin password before any WP-CLI call: an empty value would make the install
 # prompt for (or generate) a password nobody knows.
@@ -54,11 +55,24 @@ current_woo=""
 if $WP plugin is-installed woocommerce >/dev/null 2>&1; then
   current_woo=$($WP plugin get woocommerce --field=version)
 fi
-if [ "$current_woo" != "$WOO_VERSION" ]; then
-  log "installing WooCommerce $WOO_VERSION (found: ${current_woo:-none})"
-  $WP plugin install woocommerce --version="$WOO_VERSION" --force
-fi
+# Install when WooCommerce is absent or older than WOO_VERSION; never downgrade a newer one.
+woo_changed=false
+case "$(woo_version_cmp "$current_woo" "$WOO_VERSION")" in
+  older)
+    log "installing WooCommerce $WOO_VERSION (found: ${current_woo:-none})"
+    $WP plugin install woocommerce --version="$WOO_VERSION" --force
+    woo_changed=true
+    ;;
+  newer)
+    log "WooCommerce $current_woo is newer than $WOO_VERSION; not downgrading"
+    ;;
+esac
 $WP plugin is-active woocommerce >/dev/null 2>&1 || $WP plugin activate woocommerce
+# After an install or upgrade, run WooCommerce's database update now instead of waiting for an admin visit.
+if [ "$woo_changed" = "true" ]; then
+  log "running the WooCommerce database update"
+  $WP wc update
+fi
 
 log "configuring store options"
 $WP option update timezone_string "$STORE_TIMEZONE"

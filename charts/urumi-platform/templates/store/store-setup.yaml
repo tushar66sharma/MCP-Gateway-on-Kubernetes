@@ -13,6 +13,8 @@ metadata:
 data:
   setup.sh: |-
     {{- .Files.Get "files/store-setup/setup.sh" | nindent 4 }}
+  lib.sh: |-
+    {{- .Files.Get "files/store-setup/lib.sh" | nindent 4 }}
   upsert-api-key.php: |-
     {{- .Files.Get "files/store-setup/upsert-api-key.php" | nindent 4 }}
 ---

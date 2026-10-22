@@ -14,7 +14,7 @@ function Report([string]$name, [bool]$ok, [string]$detail = '') {
 # Runs a shell snippet in the container with the scripts mounted read-only at /s. Returns exit code and merged output.
 function Invoke-Container([string]$snippet, [string[]]$extra = @()) {
   $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-  $out = & docker run --rm --user 0 -e HOME=/tmp -v "${dir}:/s:ro" @extra $image sh -c $snippet 2>&1 | Out-String
+  $out = & docker run --rm --user 0 -e HOME=/tmp -e WP_CLI_ALLOW_ROOT=1 -v "${dir}:/s:ro" @extra $image sh -c $snippet 2>&1 | Out-String
   $code = $LASTEXITCODE
   $ErrorActionPreference = $old
   return @{ Code = $code; Out = $out }
@@ -42,6 +42,8 @@ Report 'version none vs 11.2.1 is older' ((Cmp '' '11.2.1') -eq 'older')
 
 # 3. DB wait loop: wrong host fails with the last error output and without the password.
 $dbCase = @'
+# Real WordPress files are needed, otherwise WP-CLI fails with a not-a-WordPress-installation error instead of a DB error.
+php -d memory_limit=512M /usr/local/bin/wp core download --path=/var/www/html >/dev/null
 cat > /var/www/html/wp-config.php <<'PHP'
 <?php
 define('DB_NAME','wp'); define('DB_USER','wpuser'); define('DB_PASSWORD','Dummy-Db-Pass-9f3k'); define('DB_HOST','127.0.0.1:1');
@@ -51,7 +53,7 @@ PHP
 sh /s/setup.sh
 '@
 $r = Invoke-Container $dbCase ($baseEnv + @('-e','ADMIN_PASSWORD=Dummy-Admin-Pass-7q2m','-e','DB_WAIT_TRIES=2','-e','DB_WAIT_SLEEP=1'))
-Report 'wrong DB host fails with the last error' (($r.Code -ne 0) -and ($r.Out -match 'database not reachable') -and ($r.Out -match 'Error')) "(exit $($r.Code))"
+Report 'wrong DB host fails with the last error' (($r.Code -ne 0) -and ($r.Out -match 'database not reachable') -and ($r.Out -match 'last error: .*(Error|ERROR|connect)') -and ($r.Out -notmatch 'YIKES')) "(exit $($r.Code))"
 Report 'DB failure output has no password' (($r.Out -notmatch 'Dummy-Db-Pass') -and ($r.Out -notmatch 'Dummy-Admin-Pass')) 
 $lines = ($r.Out -split "`n" | Where-Object { $_ -match '\S' }).Count
 Report 'DB failure output stays short' ($lines -le 15) "($lines lines)"
