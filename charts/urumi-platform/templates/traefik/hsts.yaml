@@ -1,0 +1,23 @@
+{{- if .Values.global.tls.enabled }}
+{{- $namespaces := list (dict "ns" .Values.namespaces.store "name" "wordpress" "component" "store") -}}
+{{- if .Values.gateway.enabled -}}
+{{- $namespaces = append $namespaces (dict "ns" .Values.namespaces.gateway "name" "gateway" "component" "gateway") -}}
+{{- end }}
+{{- range $namespaces }}
+---
+# HSTS for one year. Subdomains are not included: only the two hosts this chart serves are covered, and
+# "preload" is deliberately not set (it cannot be undone quickly).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  namespace: {{ .ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" .name "component" .component) | nindent 4 }}
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: false
+    stsPreload: false
+{{- end }}
+{{- end }}
