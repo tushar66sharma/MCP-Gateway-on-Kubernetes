@@ -128,15 +128,16 @@ The namespaces `store`, `mcp` and `gateway` carry `pod-security.kubernetes.io/en
 
 | Workload | uid | Read-only root | emptyDir `sizeLimit` | PSA level |
 |---|---|---|---|---|
-| wordpress (and its `copy-wordpress` initContainer) | 33 | no (Apache and the volume need writes) | `/tmp` 16Mi | restricted |
-| store-setup Job | 33 | no | `/tmp` 16Mi | restricted |
-| mariadb | 999 | no (data volume) | `/run` 16Mi, `/tmp` 16Mi | restricted |
+| wordpress (and its `copy-wordpress` initContainer) | 33 | no (Apache and the volume need writes) | `/tmp` 128Mi (uploads pass through it) | restricted |
+| store-setup Job | 33 | no | `/tmp` 256Mi (the WooCommerce 11.2.1 zip is 18,060,641 bytes) | restricted |
+| mariadb | 999 | no (data volume) | `/run` 16Mi, `/tmp` 512Mi (temp tables, filesort, ALTER TABLE) | restricted |
 | mcp-woocommerce | 1000 | yes | `/tmp` 16Mi | restricted |
 | mcp-notes, mcp-utilities | 1000 | yes | `/tmp` 16Mi | restricted |
-| postgres | 999 | no (data volume) | `/run` 16Mi, `/tmp` 16Mi | restricted |
+| postgres | 999 | no (data volume) | `/run` 16Mi, `/tmp` 64Mi | restricted |
 | gateway | 1000 | yes | `/tmp` 16Mi | restricted |
 | dashboard (nginx-unprivileged) | 101 | yes | `/tmp` 16Mi | restricted |
 
+- The limits are per workload because an `emptyDir` that grows past its `sizeLimit` evicts the pod: the first cut (16Mi everywhere) was too small for the store-setup download, MariaDB's tmpdir and WordPress uploads. Size of the WooCommerce 11.2.1 zip measured 2026-10-22 from the `Content-Length` of downloads.wordpress.org. Eviction under real load was **not tested**.
 - WordPress sets the namespaced sysctl `net.ipv4.ip_unprivileged_port_start=0` so uid 33 can bind port 80; it is in the Pod Security safe set, so `restricted` allows it.
 - **Refusal tested live (2026-10-22):** `kubectl run psa-test -n mcp --image=curlimages/curl:8.22.0 --restart=Never -- sleep 1` was refused with `violates PodSecurity "restricted:latest"` (privilege escalation, capabilities, runAsNonRoot, seccomp); no pod was created. The NetworkPolicy probe pods set a restricted-compliant `securityContext`, and the probe script still passed (13 probes).
 - `DISALLOW_FILE_MODS` is set in WordPress, so plugins and themes cannot be installed, updated or deleted from wp-admin. Verified: the constant prints `true`, and for administrator user 1 `current_user_can('install_plugins')` and `update_core` are `false` (the "Add New" button depends on that capability; the page itself was **not** viewed in a browser).

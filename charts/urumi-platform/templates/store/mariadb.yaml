@@ -107,7 +107,8 @@ spec:
             sizeLimit: 16Mi
         - name: tmp
           emptyDir:
-            sizeLimit: 16Mi
+            # MariaDB tmpdir: on-disk temp tables, filesort and ALTER TABLE; exceeding the limit evicts the database pod.
+            sizeLimit: 512Mi
   # PVCs created from volumeClaimTemplates are not Helm-managed objects: they survive
   # `helm uninstall` without any annotation and are deleted only manually.
   volumeClaimTemplates:

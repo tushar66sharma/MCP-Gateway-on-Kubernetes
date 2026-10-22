@@ -17,7 +17,7 @@ Every workload already ran as non-root with seccomp `RuntimeDefault`, all capabi
 - The chart's `namespaces.yaml` labels the three namespaces `pod-security.kubernetes.io/enforce`, `warn` and `audit` with `podSecurity.level` (default `restricted`; schema enum `restricted | baseline | privileged`), each with `-version: latest`.
 - Non-compliant workloads are fixed, not exempted: no namespace exemptions and no lowered level. Before enforcing, the server-side dry run `kubectl label --dry-run=server` must print no warnings.
 - The values schema validates the inputs that reach PHP and the shell: hostnames must be lower-case RFC 1123 names (`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$` with `maxLength: 253`), the store time zone must match `^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$`, and `tls.enabled` requires `publicScheme: https`. `scripts/validate-chart.ps1` pins these rules.
-- Related pod hardening in the same task: every `emptyDir` has `sizeLimit: 16Mi`; WordPress sets `DISALLOW_FILE_MODS`; MariaDB sets `MARIADB_ROOT_HOST=localhost`; the WordPress liveness probe is a TCP check; the dashboard image uses `worker_processes 2;`.
+- Related pod hardening in the same task: every `emptyDir` has a `sizeLimit`, sized per workload (16Mi for the Node pods, the nginx dashboard and the `run` socket dirs; 64Mi Postgres `/tmp`; 128Mi WordPress `/tmp`; 256Mi store-setup `/tmp`, because it downloads the 18 MB WooCommerce zip; 512Mi MariaDB `/tmp`, its tmpdir, because eviction would take the database down); WordPress sets `DISALLOW_FILE_MODS`; MariaDB sets `MARIADB_ROOT_HOST=localhost`; the WordPress liveness probe is a TCP check; the dashboard image uses `worker_processes 2;`.
 
 ## Alternatives considered
 

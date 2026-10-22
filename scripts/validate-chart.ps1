@@ -61,15 +61,26 @@ foreach ($ns in 'store', 'mcp', 'gateway') {
   Report "namespace $ns has enforce/warn/audit restricted + -version latest" $ok
 }
 
-$empty = 0; $bounded = 0
-foreach ($d in $docs) {
-  foreach ($m in [regex]::Matches($d, '(?m)^(\s*)emptyDir:(.*)$')) {
-    if ($m.Groups[2].Value.Trim() -eq '{}') { $empty++ }
+# Parse every emptyDir block in the rendered output: the block's direct children (lines indented deeper
+# than the emptyDir key, up to the next line at the same or lower indent) must include a sizeLimit key.
+$lines = $r.Out -split "`r?`n"
+$total = 0; $bad = @()
+for ($i = 0; $i -lt $lines.Count; $i++) {
+  if ($lines[$i] -notmatch '^(\s*)emptyDir:(.*)$') { continue }
+  $total++
+  $indent = $Matches[1].Length
+  $childIndent = -1; $hasLimit = $false
+  for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+    $l = $lines[$j]
+    if ($l.Trim() -eq '' -or $l.TrimStart().StartsWith('#')) { continue }
+    $ind = $l.Length - $l.TrimStart().Length
+    if ($ind -le $indent) { break }
+    if ($childIndent -lt 0) { $childIndent = $ind }
+    if ($ind -eq $childIndent -and $l.Trim() -match '^sizeLimit:\s*\S+') { $hasLimit = $true }
   }
-  $bounded += ([regex]::Matches($d, '(?m)^\s*sizeLimit: 16Mi\s*$')).Count
+  if (-not $hasLimit) { $bad += ($i + 1) }
 }
-$total = ([regex]::Matches($r.Out, '(?m)^\s*emptyDir:')).Count
-Report "every emptyDir has a sizeLimit ($total emptyDirs, $bounded bounded, $empty unbounded)" (($total -gt 0) -and ($empty -eq 0) -and ($bounded -eq $total))
+Report "every emptyDir has a sizeLimit key directly under it ($total emptyDirs, $($bad.Count) without)" (($total -gt 0) -and ($bad.Count -eq 0))
 
 Remove-Item -Recurse -Force $tmp
 if ($script:fail -gt 0) { Write-Host "`n$($script:fail) check(s) FAILED"; exit 1 }

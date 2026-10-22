@@ -145,4 +145,5 @@ spec:
             claimName: wordpress-data
         - name: tmp
           emptyDir:
-            sizeLimit: 16Mi
+            # PHP and WooCommerce uploads pass through /tmp; exceeding the limit would evict the storefront.
+            sizeLimit: 128Mi
