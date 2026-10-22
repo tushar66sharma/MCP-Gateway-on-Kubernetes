@@ -104,5 +104,6 @@ spec:
           configMap:
             name: store-setup-scripts
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi
 {{- end }}

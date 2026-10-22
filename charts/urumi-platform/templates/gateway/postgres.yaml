@@ -85,9 +85,11 @@ spec:
               mountPath: /tmp
       volumes:
         - name: run
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi
   # PVCs created from volumeClaimTemplates are not Helm-managed: they survive `helm uninstall`.
   volumeClaimTemplates:
     - metadata:

@@ -110,6 +110,7 @@ spec:
                 define('WP_HOME', '{{ $storeUrl }}');
                 define('WP_SITEURL', '{{ $storeUrl }}');
                 define('DISALLOW_FILE_EDIT', true);
+                define('DISALLOW_FILE_MODS', true);
                 define('FS_METHOD', 'direct');
           ports:
             - name: http
@@ -125,8 +126,9 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          # TCP only: a PHP or database stall must not restart Apache (readiness and startup still use /wp-login.php).
           livenessProbe:
-            httpGet: { path: /wp-login.php, port: http }
+            tcpSocket: { port: http }
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 6
@@ -142,4 +144,5 @@ spec:
           persistentVolumeClaim:
             claimName: wordpress-data
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi

@@ -65,6 +65,9 @@ spec:
           env:
             - name: MARIADB_ROOT_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: root-password } }
+            # Applies only on the first initialisation of an empty data directory: root may log in from localhost only.
+            - name: MARIADB_ROOT_HOST
+              value: localhost
             - name: MARIADB_DATABASE
               value: {{ .Values.mariadb.database | quote }}
             - name: MARIADB_USER
@@ -100,9 +103,11 @@ spec:
               mountPath: /tmp
       volumes:
         - name: run
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi
   # PVCs created from volumeClaimTemplates are not Helm-managed objects: they survive
   # `helm uninstall` without any annotation and are deleted only manually.
   volumeClaimTemplates:
