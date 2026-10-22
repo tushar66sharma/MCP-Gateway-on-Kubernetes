@@ -28,7 +28,7 @@ export interface AgentToolTrace {
 export interface AgentTurnResult {
   reply: string;
   toolCalls: AgentToolTrace[];
-  stoppedReason: 'final' | 'max_steps' | 'timeout';
+  stoppedReason: 'final' | 'max_steps' | 'timeout' | 'client_closed';
   usage: Usage;
   provider: string;
   model: string;

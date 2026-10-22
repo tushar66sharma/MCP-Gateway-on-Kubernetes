@@ -45,7 +45,7 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
       let mcp: McpToolClient | undefined;
       try {
         mcp = await connectLoopback(mcpUrl(), mintToken);
-        const out = await runAgentTurn({
+        const turn = await runAgentTurn({
           history: messages,
           llm,
           mcp,
@@ -56,6 +56,8 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
           signal,
           deadline,
         });
+        // The turn ends as `timeout` when its signal aborts; if the browser disconnected, that is the reason.
+        const out: AgentTurnResult = turn.stoppedReason === 'timeout' && clientSignal.aborted ? { ...turn, stoppedReason: 'client_closed' } : turn;
         logger.info(
           { userId: user.id, steps: out.steps, tools: toolNames(out.toolCalls), stoppedReason: out.stoppedReason, durationMs: Date.now() - started, usage: out.usage, provider: out.provider, model: out.model },
           'chat turn',

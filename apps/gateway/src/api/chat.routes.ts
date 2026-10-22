@@ -41,15 +41,22 @@ export function createChatRouter(deps: GatewayDeps, mcpUrl: () => string): expre
   });
 
   router.post('/chat', session, express.json({ limit: '512kb' }), async (req, res) => {
-    const { messages } = parseBody(chatBody, req.body);
     // The client went away before the reply was written: stop the turn. (`req`'s own 'close' fires as soon
     // as the body has been read on current Node, so the response's 'close' is the one that means it.)
+    // Registered before anything is awaited, so no disconnect can slip past it.
     const client = new AbortController();
     const onClose = () => {
       if (!res.writableEnded) client.abort();
     };
     res.on('close', onClose);
+    // Already gone (the 'close' fired before this handler ran): nobody can read a reply, so no turn is
+    // started and no in-flight slot is taken.
+    if (req.socket.destroyed || res.closed) {
+      res.off('close', onClose);
+      return;
+    }
     try {
+      const { messages } = parseBody(chatBody, req.body);
       const out = await chat.runTurn(currentUser(res), messages, client.signal);
       res.json({ reply: out.reply, toolCalls: out.toolCalls, stoppedReason: out.stoppedReason, provider: out.provider, model: out.model, usage: out.usage });
     } catch (err) {
