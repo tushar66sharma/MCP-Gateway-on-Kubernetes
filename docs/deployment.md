@@ -331,7 +331,7 @@ Settings that differ from production (`deploy/values-prod-test.yaml`): hosts `st
 
 | Check | Result |
 |---|---|
-| `helm upgrade --install` with `values-prod.yaml` + `values-prod-test.yaml` (`--wait --timeout 15m`) | passed. First install: the gateway restarted twice because its database was not ready within about 60 s (Postgres was still starting on the new cluster; the exact cause was not investigated), then became ready by itself. |
+| `helm upgrade --install` with `values-prod.yaml` + `values-prod-test.yaml` (`--wait --timeout 15m`) | passed. First install: the gateway restarted twice because its database was not ready within about 60 s (Postgres was still pulling its image on the new cluster; root cause found in Task 5.8 and fixed by lengthening the database wait to 90 x 2 s and the startup probe to 110 x 2 s), then became ready by itself. |
 | All 8 long-running pods in `store`, `mcp`, `gateway` ready, namespaces enforce `restricted` | PASS (8 running, 3 of 3 namespaces `restricted`) |
 | `kubectl get certificate -A` | PASS: `gateway/urumi-tls-app` and `store/urumi-tls-store` both `Ready=True` (self-signed) |
 | `http://store.prod.localhost:8081/` and `http://app.prod.localhost:8081/` | PASS: `301` to `https://store.prod.localhost:8443/` and `https://app.prod.localhost:8443/` (after the fix below) |

@@ -29,10 +29,10 @@ function fail(step: string, err: unknown): never {
   process.exit(1);
 }
 
-// 2. Postgres: open + ping + migrate, 30 attempts 2 s apart; /mcp is never served on an unmigrated DB.
+// 2. Postgres: open + ping + migrate, 90 attempts 2 s apart; /mcp is never served on an unmigrated DB.
 let db: DbHandle;
 try {
-  db = await connectWithRetry(() => Promise.resolve(createPostgresHandle(logger)), { attempts: 30, delayMs: 2000, logger });
+  db = await connectWithRetry(() => Promise.resolve(createPostgresHandle(logger)), { attempts: 90, delayMs: 2000, logger });
 } catch (err) {
   fail('database', err);
 }

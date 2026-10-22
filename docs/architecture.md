@@ -214,7 +214,7 @@ flowchart LR
 
 - **Client and server at once.** The gateway is an MCP server to your tools and an MCP client to the upstreams; the two credentials never meet ([security.md](security.md#1-two-credentials-that-never-meet)).
 - **Cached catalog** ([ADR-014](decisions/ADR-014-cached-tool-catalog.md)): `tools/list` reads memory; a 15 s health loop keeps it true; a dead upstream only loses its own tools.
-- **Own database** ([ADR-004](decisions/ADR-004-own-database-templates.md), run guide section 10): users, hashed keys, invites, sessions, the registry and the audit log in Postgres, migrated at every start (up to 30 attempts while Postgres starts).
+- **Own database** ([ADR-004](decisions/ADR-004-own-database-templates.md), run guide section 10): users, hashed keys, invites, sessions, the registry and the audit log in Postgres, migrated at every start (up to 90 attempts while Postgres starts).
 - **Probes:** `/healthz` (process) and `/readyz` (Postgres answers). Upstreams do not affect readiness.
 - **Behind Traefik** with `TRUST_PROXY=1`, so the login rate limit sees real client addresses.
 - **No LLM configuration in Phase 3.** The chat agent and its keys arrived in Phase 4 (next section).

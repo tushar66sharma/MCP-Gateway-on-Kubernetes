@@ -795,7 +795,7 @@ kubectl -n gateway logs deploy/gateway | Select-String "<request id>"
 
 `kubectl logs` shows only the current pod's log. A redeploy or restart starts a new, empty log; add `--previous` to read the pod's last crashed run. Tool calls, rejected keys and their users are also kept permanently in the **Audit log** page and in the `audit_logs` table ([section 10](#10-viewing-the-gateway-database-postgres)).
 
-Invite links appear in the log only as `/api/invites/:token`. Everything about failures is in [error-handling.md](error-handling.md); common problems are in [troubleshooting.md](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts).
+Invite links appear in the log only as `/api/invites/:token`. Everything about failures is in [error-handling.md](error-handling.md); common problems are in [troubleshooting.md](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-90-attempts).
 
 ## 10. Viewing the gateway database (Postgres)
 
@@ -1093,7 +1093,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 - The MCP server answers 401: [troubleshooting](troubleshooting.md#the-mcp-server-answers-401-unauthorized); 403 Invalid Host: [troubleshooting](troubleshooting.md#the-mcp-server-answers-403-invalid-host); a tool says WooCommerce 401 Invalid signature: [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature); a tool times out: [troubleshooting](troubleshooting.md#an-mcp-tool-times-out); port 13001 busy: [troubleshooting](troubleshooting.md#the-port-forward-port-13001-is-already-in-use); Inspector oddities: [libuv assertion](troubleshooting.md#inspector-prints-a-libuv-assertion-at-the-end-windows); a price is refused: [troubleshooting](troubleshooting.md#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
 - `check-mcp-woocommerce.ps1` says `Dependencies not installed`, or Node says `Cannot find package '@modelcontextprotocol/client'`: [troubleshooting](troubleshooting.md#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
 - The store-setup Job fails with `missing urumi_managed_key_owner marker`: [troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
-- Gateway pod in `CrashLoopBackOff` with `database not ready after 30 attempts`: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts); with an environment message: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-with-an-invalid-environment-message)
+- Gateway pod in `CrashLoopBackOff` with `database not ready after 90 attempts`: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-90-attempts); with an environment message: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-with-an-invalid-environment-message)
 - `/mcp` answers 401: [troubleshooting](troubleshooting.md#mcp-answers-401-on-the-gateway); `/api` answers 403 `CSRF_REJECTED`: [troubleshooting](troubleshooting.md#api-answers-403-csrf_rejected); login answers 429: [troubleshooting](troubleshooting.md#login-answers-429-too-many-attempts)
 - A server shows `unreachable`: [troubleshooting](troubleshooting.md#a-server-shows-unreachable-in-the-gateway)
 - Postgres will not start (`PGDATA` permissions): [troubleshooting](troubleshooting.md#postgres-does-not-start-pgdata-permission-errors)

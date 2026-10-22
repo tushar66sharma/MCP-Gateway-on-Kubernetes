@@ -689,7 +689,7 @@ sequenceDiagram
 | `HTTP 302 from upstream (redirects are not followed)` | The URL redirects; the gateway never follows redirects | Use the final URL |
 | `blocked by SSRF guard (<reason>)` | The name now resolves to a forbidden address | Check what the name resolves to; the allow-list is `SSRF_ALLOWED_INTERNAL_HOSTS` |
 | Tools never return after the pod is back | A check is still running or the server is `disabled` | Wait 20 s; `GET /api/servers`; check `enabled` |
-| The gateway itself is down | `/mcp` and `/api` fail; Kubernetes restarts the pod | [Troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts) |
+| The gateway itself is down | `/mcp` and `/api` fail; Kubernetes restarts the pod | [Troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-90-attempts) |
 
 ---
 

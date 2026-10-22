@@ -53,7 +53,7 @@ A missing or invalid variable stops the process at start with a message that lis
 ## Startup order (`src/main.ts`)
 
 1. Load and validate the configuration, and build the LLM provider: it logs `llm configured: <provider>/<model>` or warns `llm not configured: chat is disabled (no API key for the provider)` (names only, never a key).
-2. Connect to Postgres, ping and run the migrations in `drizzle/`, up to 30 attempts 2 s apart. If all fail the process exits non-zero (Kubernetes restarts it). `/mcp` is never served on an unmigrated database.
+2. Connect to Postgres, ping and run the migrations in `drizzle/`, up to 90 attempts 2 s apart. If all fail the process exits non-zero (Kubernetes restarts it). `/mcp` is never served on an unmigrated database.
 3. Create the bootstrap admin if there are no users.
 4. Insert each seed server whose slug is in neither `upstream_servers` nor `seeded_slugs`, recording the slug in `seeded_slugs` in the same transaction. A seed never overwrites a row, so admin edits survive restarts, and a deleted built-in server stays deleted (re-add it with `POST /api/servers`).
 5. Run one health check per server, then start the 15 s interval.

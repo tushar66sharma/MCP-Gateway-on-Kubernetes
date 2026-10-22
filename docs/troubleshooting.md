@@ -56,7 +56,7 @@ helm status urumi -n urumi-system
 - [Inspector says `Invalid header format: Bearer`](#inspector-says-invalid-header-format-bearer)
 - [`create_product` says `regular_price must be non-negative with at most 2 decimals`](#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
 - [The MCP check says `Dependencies not installed` or `Cannot find package '@modelcontextprotocol/client'`](#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
-- [The gateway pod is in CrashLoopBackOff: `database not ready after 30 attempts`](#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts)
+- [The gateway pod is in CrashLoopBackOff: `database not ready after 90 attempts`](#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-90-attempts)
 - [The gateway pod is in CrashLoopBackOff with an `Invalid environment` message](#the-gateway-pod-is-in-crashloopbackoff-with-an-invalid-environment-message)
 - [`/mcp` answers 401 on the gateway](#mcp-answers-401-on-the-gateway)
 - [`/api` answers 403 `CSRF_REJECTED`](#api-answers-403-csrf_rejected)
@@ -583,9 +583,9 @@ npm ci
 
 Run the check again.
 
-## The gateway pod is in CrashLoopBackOff: `database not ready after 30 attempts`
+## The gateway pod is in CrashLoopBackOff: `database not ready after 90 attempts`
 
-**Symptom.** `kubectl -n gateway get pods` shows `gateway-...` in `CrashLoopBackOff` (or restarting), and `kubectl -n gateway logs deploy/gateway --previous` shows 30 warnings `database not ready` (one every 2 s, each with `attempt`, `attempts` and a `reason` code), followed by `gateway startup failed` with `"step":"database"`. The gateway deliberately exits after about 60 s, so Kubernetes restarts it; it never serves `/mcp` on an unmigrated database. (The exit message itself is `database not ready after 30 attempts`; the log line carries only the error class, so the numbered warnings are what you see.)
+**Symptom.** `kubectl -n gateway get pods` shows `gateway-...` in `CrashLoopBackOff` (or restarting), and `kubectl -n gateway logs deploy/gateway --previous` shows 90 warnings `database not ready` (one every 2 s, each with `attempt`, `attempts` and a `reason` code), followed by `gateway startup failed` with `"step":"database"`. The gateway deliberately exits after about 180 s (long enough for a cold pull of the Postgres image on a first install, which took about 2 minutes on 2026-10-23), so Kubernetes restarts it; it never serves `/mcp` on an unmigrated database. (The exit message itself is `database not ready after 90 attempts`; the log line carries only the error class, so the numbered warnings are what you see.)
 
 **Diagnose.**
 

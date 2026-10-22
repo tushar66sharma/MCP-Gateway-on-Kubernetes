@@ -169,11 +169,11 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
-          # 60 x 2 s covers the 30 x 2 s database retry at startup.
+          # 110 x 2 s (220 s) covers the 90 x 2 s (180 s) database retry at startup, which in turn covers a cold pull of the Postgres image on a first install (about 2 min seen on 2026-10-23).
           startupProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 2
-            failureThreshold: 60
+            failureThreshold: 110
           resources:
             {{- toYaml $g.resources | nindent 12 }}
           volumeMounts:
