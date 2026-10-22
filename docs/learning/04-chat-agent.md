@@ -155,7 +155,7 @@ Response (`200`, 468 ms, `x-ratelimit-remaining-tokens: 4529`):
 |---|---|---|
 | Tool steps per turn | 8 (`CHAT_MAX_STEPS`) | A confused model cannot loop forever or burn the daily token budget. |
 | Turn timeout | 60 s (`CHAT_TURN_TIMEOUT_MS`) | The browser waits for one HTTP response; a rollout drains requests for at most 25 s anyway. |
-| One model request | 30 s (`LLM_TIMEOUT_MS`), 2 retries | A hung provider fails fast; retries never sleep past the turn deadline. |
+| One model request | 30 s (`LLM_TIMEOUT_MS`), 2 retries | A hung provider fails fast; retries never sleep past the turn deadline, and a provider `retry-after` over 20 s is not waited for at all (the fallback is tried at once). |
 | Tool result to the model | 6,000 characters | Protects the 8K tokens-per-minute budget. |
 | Trace preview to the browser | 500 characters | The trace is for a human glance, not the full data. |
 | Tool description to the model | 300 characters | Same token reason; today's longest is 137. |
@@ -167,7 +167,7 @@ Response (`200`, 468 ms, `x-ratelimit-remaining-tokens: 4529`):
 - **Why a token per request and not per turn?** The token lives 5 minutes; minting per request means no turn can outlive it, and each request re-checks the user. It costs one HMAC per request.
 - **Why not give the model the user's API key?** The model never needs a credential; the gateway calls the tools. Keys would also leak into prompts and provider logs.
 - **How do you stop prompt injection?** You cannot fully. Tool output is wrapped and declared untrusted, the wrapper cannot be closed by the data, the client cannot send `system` or `tool` messages, and every action runs with the user's own rights and is audited. A model can still be talked into a call; that residual risk is documented in [security.md](../security.md).
-- **What happens if the provider fails after a tool already ran?** The error response carries the executed tool calls, and the Chat page shows "These actions already ran", so the user does not retry blindly and create a duplicate product. Tool calls are never retried by the gateway.
+- **What happens if the provider fails after a tool already ran?** The error response carries the executed tool calls, and the Chat page shows "These actions already ran", so the user does not retry blindly and create a duplicate product. The page also tells the model: later requests carry a fixed note naming the calls that already ran, and Retry asks it to continue rather than start over. Tool calls are never retried by the gateway.
 - **How would you switch to another provider?** Change `gateway.llm.provider` (and the key) and redeploy; a different wire format needs one class implementing `LlmProvider`. Nothing in the agent or the dashboard changes.
 
 ## 7. Try it yourself
