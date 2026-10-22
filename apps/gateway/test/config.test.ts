@@ -161,6 +161,17 @@ describe('loadConfig', () => {
     }
   });
 
+  it('LLM_BASE_URL accepts only http(s) or empty, naming the variable only', () => {
+    for (const bad of ['ftp://x', 'file:///etc/passwd', 'javascript:alert(1)']) {
+      const err = errorOf(validEnv({ LLM_BASE_URL: bad }));
+      expect(err.message).toContain('LLM_BASE_URL');
+      expect(err.message).not.toContain(bad);
+    }
+    expect(loadConfig(validEnv({ LLM_BASE_URL: 'https://llm.example.com/v1' })).LLM_BASE_URL).toBe('https://llm.example.com/v1');
+    expect(loadConfig(validEnv({ LLM_BASE_URL: 'http://127.0.0.1:11434/v1' })).LLM_BASE_URL).toBe('http://127.0.0.1:11434/v1');
+    expect(loadConfig(validEnv({ LLM_BASE_URL: '' })).LLM_BASE_URL).toBe('');
+  });
+
   it('invalid STORE_TIMEZONE names the variable only', () => {
     const err = errorOf(validEnv({ STORE_TIMEZONE: 'Mars/Olympus_Mons' }));
     expect(err.message).toContain('STORE_TIMEZONE');

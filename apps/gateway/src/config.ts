@@ -156,7 +156,8 @@ const appFields = z.object({
   TRUST_PROXY: intRange(0, 0, 5),
   LLM_PROVIDER: providerId.default('groq'),
   LLM_MODEL: z.string().trim().default(''),
-  LLM_BASE_URL: z.union([z.literal(''), z.url()]).default(''),
+  // http(s) only: any other scheme is refused (the API key would be sent to it).
+  LLM_BASE_URL: z.union([z.literal(''), z.url({ protocol: /^https?$/ })]).default(''),
   LLM_FALLBACK_PROVIDER: z.union([z.literal(''), providerId]).default(''),
   LLM_FALLBACK_MODEL: z.string().trim().default(''),
   GROQ_API_KEY: z.string().trim().default(''),
