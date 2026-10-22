@@ -152,10 +152,10 @@ $certsReady = @($certs | Where-Object { @($_.status.conditions | Where-Object { 
 Row 'certificates Ready=True' (($certs.Count -ge 2) -and ($certsReady -eq $certs.Count)) "ready=$certsReady/$($certs.Count): $(($certs | ForEach-Object { $_.metadata.namespace + '/' + $_.metadata.name }) -join ', ')"
 
 # 3. http -> https redirect (the exact answer is recorded; a :443 target instead of :8443 is a port-mapping artefact)
-$r = curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://store.prod.localhost:8080/
+$r = curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://store.prod.localhost:8081/
 Write-Host "      redirect store: $r"
 Row 'http->https redirect (store): 301 to https' ($r -match '^301 https://') $r
-$r2 = curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://app.prod.localhost:8080/
+$r2 = curl.exe -s -o NUL -w "%{http_code} %{redirect_url}" http://app.prod.localhost:8081/
 Write-Host "      redirect app:   $r2"
 Row 'http->https redirect (app): 301 to https' ($r2 -match '^301 https://') $r2
 

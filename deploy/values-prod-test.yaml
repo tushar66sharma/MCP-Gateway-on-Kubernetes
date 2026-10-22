@@ -2,7 +2,7 @@
 #   helm upgrade --install urumi charts/urumi-platform -n urumi-system --create-namespace \
 #     -f deploy/values-prod.yaml -f deploy/values-prod-test.yaml -f deploy/.images.urumi-prod.yaml
 # deploy/.images.urumi-prod.yaml (global.imageTag) is written by scripts\build-images.ps1 -Cluster urumi-prod.
-# Host ports 8080/8443 reach Traefik's 80/443 (deploy/k3d-prod-test.yaml); *.localhost resolves to 127.0.0.1.
+# Host ports 8081/8443 reach Traefik's 80/443 (deploy/k3d-prod-test.yaml); *.localhost resolves to 127.0.0.1.
 global:
   imageRegistry: ""             # the images are imported into the cluster, nothing is pulled from GHCR
   storeHost: store.prod.localhost
