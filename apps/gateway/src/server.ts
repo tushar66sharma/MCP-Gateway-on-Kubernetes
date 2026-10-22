@@ -1,7 +1,7 @@
 import { startMcpHttpServer, type Logger, type RunningMcpHttpServer } from '@urumi/shared';
 import { createApiRouter } from './api/router.js';
 import { AuditWriter } from './audit/writer.js';
-import type { LoginRateLimiter } from './auth/rateLimit.js';
+import type { FixedWindowLimiter } from './auth/rateLimit.js';
 import type { LlmProvider } from './chat/llm/types.js';
 import { ssrfOptionsOf, type Config } from './config.js';
 import type { DbHandle } from './db/client.js';
@@ -16,7 +16,9 @@ export interface GatewayDeps {
   logger: Logger;
   db: DbHandle;
   clock: () => Date;
-  rateLimiter: LoginRateLimiter;
+  rateLimiter: FixedWindowLimiter;
+  /** Recognised /mcp authentication failures per client IP (MCP_AUTH_FAILURE_LIMIT_PER_MIN a minute). */
+  mcpAuthLimiter: FixedWindowLimiter;
   upstreams: UpstreamManager;
   audit: AuditWriter;
   repo: UpstreamRepository;

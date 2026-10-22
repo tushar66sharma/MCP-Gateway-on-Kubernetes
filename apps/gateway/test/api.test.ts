@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { apiErrorHandler } from '../src/api/errors.js';
 import { parseBody } from '../src/api/validate.js';
-import { LoginRateLimiter } from '../src/auth/rateLimit.js';
+import { FixedWindowLimiter } from '../src/auth/rateLimit.js';
 import { loadConfig } from '../src/config.js';
 import { createUpstreamServices, sanitizeLogPath, startGateway } from '../src/server.js';
 import { createTestDb } from './helpers/testDb.js';
@@ -72,7 +72,7 @@ describe('request log path redaction', () => {
       PGPASSWORD: 'pw',
     });
     running = await startGateway(
-      { config, logger, db, clock: () => new Date(), rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }), ...createUpstreamServices(config, logger, db), llm: null },
+      { config, logger, db, clock: () => new Date(), rateLimiter: new FixedWindowLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }), mcpAuthLimiter: new FixedWindowLimiter({ max: 30, windowMs: 60_000, clock: () => new Date() }), ...createUpstreamServices(config, logger, db), llm: null },
       { port: 0, host: '127.0.0.1' },
     );
     const base = `http://127.0.0.1:${running.port}`;

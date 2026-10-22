@@ -4,7 +4,7 @@ import request from 'supertest';
 import { vi } from 'vitest';
 import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { ensureBootstrapAdmin } from '../../src/auth/bootstrap.js';
-import { LoginRateLimiter } from '../../src/auth/rateLimit.js';
+import { FixedWindowLimiter } from '../../src/auth/rateLimit.js';
 import { createUser as insertUser, type AuthUser, type Role } from '../../src/auth/users.js';
 import type { LlmProvider } from '../../src/chat/llm/types.js';
 import { loadConfig } from '../../src/config.js';
@@ -88,7 +88,8 @@ export async function startHarness(
     logger,
     db,
     clock,
-    rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock }),
+    rateLimiter: new FixedWindowLimiter({ max: 10, windowMs: 60_000, clock }),
+    mcpAuthLimiter: new FixedWindowLimiter({ max: config.MCP_AUTH_FAILURE_LIMIT_PER_MIN, windowMs: 60_000, clock }),
     upstreams,
     audit,
     repo,

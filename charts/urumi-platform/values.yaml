@@ -125,6 +125,7 @@ gateway:
   healthIntervalMs: 15000
   healthTimeoutMs: 5000
   callTimeoutMs: 20000    # must stay greater than mcpWoocommerce.timeoutMs (10000)
+  mcpAuthFailureLimitPerMin: 30   # audited /mcp auth failures per client IP per minute, then 429
   # AI chat model. Names only: the API keys live in the llm-api-keys Secret (secrets.existing.llmApiKeys).
   llm:
     provider: groq          # groq | openrouter

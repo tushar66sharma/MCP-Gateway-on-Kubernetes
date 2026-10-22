@@ -1,6 +1,6 @@
 import { EnvValidationError, createLogger, type RunningMcpHttpServer } from '@urumi/shared';
 import { ensureBootstrapAdmin } from './auth/bootstrap.js';
-import { LoginRateLimiter } from './auth/rateLimit.js';
+import { FixedWindowLimiter } from './auth/rateLimit.js';
 import { createLlmFromConfig, llmStatusOf } from './chat/llm/registry.js';
 import { loadConfig, type Config } from './config.js';
 import { connectWithRetry, createPostgresHandle, type DbHandle } from './db/client.js';
@@ -54,7 +54,7 @@ try {
   await services.upstreams.start();
   // 6. Listen.
   server = await startGateway(
-    { config, logger, db, clock, rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock }), ...services, llm },
+    { config, logger, db, clock, rateLimiter: new FixedWindowLimiter({ max: 10, windowMs: 60_000, clock }), mcpAuthLimiter: new FixedWindowLimiter({ max: config.MCP_AUTH_FAILURE_LIMIT_PER_MIN, windowMs: 60_000, clock }), ...services, llm },
     { port: config.PORT },
   );
   // 7. No secrets: port, slugs and counts only.

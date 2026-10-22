@@ -1,6 +1,6 @@
 import { ApiError } from '../api/errors.js';
 import { mintInternalToken } from '../auth/internalToken.js';
-import { LoginRateLimiter } from '../auth/rateLimit.js';
+import { FixedWindowLimiter } from '../auth/rateLimit.js';
 import type { AuthUser } from '../auth/users.js';
 import type { GatewayDeps } from '../server.js';
 import { AgentLlmError, runAgentTurn, type AgentToolTrace, type AgentTurnResult } from './agent.js';
@@ -23,7 +23,7 @@ const toolNames = (traces: AgentToolTrace[]): string[] => traces.map((t) => t.na
  */
 export function createChatService(deps: GatewayDeps, mcpUrl: () => string): ChatService {
   const { config, logger } = deps;
-  const limiter = new LoginRateLimiter({ max: config.CHAT_RATE_LIMIT_PER_MIN, windowMs: 60_000, clock: deps.clock });
+  const limiter = new FixedWindowLimiter({ max: config.CHAT_RATE_LIMIT_PER_MIN, windowMs: 60_000, clock: deps.clock });
   const inFlight = new Set<string>();
 
   return {

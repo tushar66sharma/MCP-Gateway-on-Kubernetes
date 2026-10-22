@@ -87,6 +87,8 @@ spec:
             # Traefik is the single proxy hop in front of the gateway.
             - name: TRUST_PROXY
               value: "1"
+            - name: MCP_AUTH_FAILURE_LIMIT_PER_MIN
+              value: {{ $g.mcpAuthFailureLimitPerMin | quote }}
             - name: SSRF_ALLOWED_INTERNAL_HOSTS
               value: {{ printf "*.%s.svc.cluster.local" .Values.namespaces.mcp | quote }}
             - name: GATEWAY_ENCRYPTION_KEY

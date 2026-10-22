@@ -97,6 +97,7 @@
         "healthIntervalMs": { "type": "integer", "minimum": 1000 },
         "healthTimeoutMs": { "type": "integer", "minimum": 500 },
         "callTimeoutMs": { "type": "integer", "minimum": 11000, "maximum": 120000 },
+        "mcpAuthFailureLimitPerMin": { "type": "integer", "minimum": 1, "maximum": 1000 },
         "llm": {
           "type": "object",
           "additionalProperties": false,

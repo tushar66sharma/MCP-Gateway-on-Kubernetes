@@ -47,6 +47,12 @@ describe('loadConfig', () => {
     expect(c.UPSTREAM_CALL_TIMEOUT_MS).toBe(20000);
   });
 
+  it('defaults MCP_AUTH_FAILURE_LIMIT_PER_MIN to 30 and rejects 0 and 1001', () => {
+    expect(loadConfig(validEnv()).MCP_AUTH_FAILURE_LIMIT_PER_MIN).toBe(30);
+    expect(loadConfig(validEnv({ MCP_AUTH_FAILURE_LIMIT_PER_MIN: '1000' })).MCP_AUTH_FAILURE_LIMIT_PER_MIN).toBe(1000);
+    for (const bad of ['0', '1001']) expect(errorOf(validEnv({ MCP_AUTH_FAILURE_LIMIT_PER_MIN: bad })).message).toContain('MCP_AUTH_FAILURE_LIMIT_PER_MIN');
+  });
+
   it('rejects an encryption key that is not 32 bytes, naming the variable but not the value', () => {
     const bad = Buffer.alloc(16, 9).toString('base64');
     const err = errorOf(validEnv({ GATEWAY_ENCRYPTION_KEY: bad }));
