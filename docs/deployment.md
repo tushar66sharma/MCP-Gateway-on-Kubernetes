@@ -315,6 +315,47 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 | The official WordPress image already trusts `X-Forwarded-Proto` ([step 9](#9-verify-the-site)) | verified in the running pod |
 | A real install on a VPS, DNS, a real certificate, the redirect and HSTS headers on the wire, GHCR pushes, multi-arch images, restores | **not executed** |
 
+### Rehearsal results (2026-10-23)
+
+The production values were installed into a **temporary second k3d cluster** (`urumi-prod`, one node) with `scripts\prod-rehearsal.ps1`. This is a rehearsal, not a VPS: it proves the chart, `values-prod.yaml`, the Secrets script, cert-manager wiring, Pod Security `restricted`, the NetworkPolicies and the TLS Middlewares work together on a brand-new cluster. It does **not** prove anything about DNS, Let's Encrypt, a public IP, GHCR pulls, multi-arch images, `externalTrafficPolicy: Local` with a real client IP, or resource pressure on a 2 OCPU VM.
+
+How it was run (the local cluster `urumi` was stopped meanwhile and started again afterwards; its data was not touched):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prod-rehearsal.ps1 -Up       # stop urumi, create urumi-prod, cert-manager v1.21.2, Secrets, images, helm install
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prod-rehearsal.ps1 -Verify   # PASS/FAIL rows
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prod-rehearsal.ps1 -Down     # delete urumi-prod, start urumi
+```
+
+Settings that differ from production (`deploy/values-prod-test.yaml`): hosts `store.prod.localhost` / `app.prod.localhost`, `publicPort: 8443`, the `selfsigned` ClusterIssuer, `imageRegistry: ""` with the images built from the repository and imported (`scripts\build-images.ps1 -Cluster urumi-prod`), smaller requests and volumes. The cluster maps host `127.0.0.1:8081 -> 80` and `127.0.0.1:8443 -> 443`. **Port 8080 was planned but an Apache `httpd` already listened on it**, so the first `k3d cluster create` failed and the plan was changed to 8081.
+
+| Check | Result |
+|---|---|
+| `helm upgrade --install` with `values-prod.yaml` + `values-prod-test.yaml` (`--wait --timeout 15m`) | passed. First install: the gateway restarted twice because its database was not ready within about 60 s (Postgres was still starting on the new cluster; the exact cause was not investigated), then became ready by itself. |
+| All 8 long-running pods in `store`, `mcp`, `gateway` ready, namespaces enforce `restricted` | PASS (8 running, 3 of 3 namespaces `restricted`) |
+| `kubectl get certificate -A` | PASS: `gateway/urumi-tls-app` and `store/urumi-tls-store` both `Ready=True` (self-signed) |
+| `http://store.prod.localhost:8081/` and `http://app.prod.localhost:8081/` | PASS: `301` to `https://store.prod.localhost:8443/` and `https://app.prod.localhost:8443/` (after the fix below) |
+| `https://store.prod.localhost:8443/` | PASS: `200` with `Strict-Transport-Security: max-age=31536000`; the dashboard also sends HSTS |
+| `GET /api/auth/me` without a login | PASS: `401` JSON (`UNAUTHENTICATED`) |
+| Store HTML over https | PASS: 0 occurrences of `http://store.prod`, 44 lines with `https://store.prod.localhost:8443` (no mixed content) |
+| Login through the API with the bootstrap admin (password read from the Secret, never printed) | PASS: `200`, the one `Set-Cookie` has `Secure` (and `HttpOnly`) |
+| `GET /api/chat/status` after login | PASS: `configured:false` (no LLM key Secret was created) |
+| `scripts\test-network-policies.ps1` on the rehearsal cluster | PASS: 13 of 13 probes (after the probe fix below) |
+| `scripts\check-gateway.ps1 -Base https://app.prod.localhost:8443` with `NODE_EXTRA_CA_CERTS` set to the app certificate | PASS: login, API key, 15 tools, revoked key `401`, audit rows. Node resolved `*.prod.localhost` itself. |
+| `scripts\check-dashboard.ps1`, `check-mcp-woocommerce.ps1`, `-Write` / `-Isolation` variants, a browser against the self-signed certificate | **not run** on the rehearsal cluster (they target `http://*.localhost` on the local cluster) |
+| Let's Encrypt issuance, a real domain, GHCR image pulls, multi-arch images, real client IP, backups and restores on the rehearsal | **not run** (needs a VPS or was out of scope) |
+
+**Failures found and fixed** (each one its own commit):
+
+1. **`fix(helm): https redirect keeps a non-default public port`.** The `redirect-https` Middleware had no port, so Traefik answered even an https request on `:8443` with `301 https://host/` (it rewrites the URL without the port), and every page, API call and login became a redirect to a port that is not published. Production on 443 was never affected; any `publicPort` other than 443 was. The Middleware now carries `port: "<publicPort>"` when that is not 443, and `scripts\validate-chart.ps1` checks both cases. Because of this fix the plain-http redirect on the rehearsal cluster goes to `https://store.prod.localhost:8443/` (before it, Traefik returned `301 https://store.prod.localhost/` with no port).
+2. **`fix: network policy probe sends X-Forwarded-Proto ...`.** With TLS on, WordPress answers a plain-http `wp-login.php` with `302` (to https) instead of `200`, so the "mcp-woocommerce can reach WordPress" probe failed although the path was open. The probe now sends `X-Forwarded-Proto: https`, as Traefik would, and still expects `200`. The same probe still passes on the local cluster.
+3. `fix: rehearsal cluster maps http to host port 8081 (8080 was in use)`: see above.
+
+Known leftovers from the rehearsal:
+
+- A **fresh install can restart the gateway once or twice** while Postgres initialises (it gives up after 30 tries, 2 s apart). It recovers by itself and `helm --wait` still succeeded; on a slow VPS pulling the Postgres image it may take longer.
+- The self-signed certificates are not trusted by browsers, and `curl` needs `-k`.
+
 ### 1. Choose a server
 
 You need one Linux server with a public IPv4 address, **2 CPU cores and 8 GB of memory or more** (this stack's memory limits add up to about 3.5 GiB; k3s, Traefik and cert-manager need more), 30 GB of disk, and ports 22, 80 and 443 reachable from the internet.

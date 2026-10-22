@@ -38,3 +38,4 @@ The project owner currently has no VPS, so an actual production deployment is no
 
 - The owner gets a VPS (then deploy and record the actual results, superseding the "render-validated only" part).
 - The assignment drops the Kubernetes/k3s requirement.
+- Update 2026-10-23: the "render-validated only" statement is no longer the whole story. The production values were also **rehearsed in a temporary second k3d cluster** (Task 5.7; results and gaps in `docs/deployment.md`, "Rehearsal results"). That found and fixed a real fault (the https redirect dropped a non-443 public port), but it is still not a VPS: DNS, Let's Encrypt, GHCR pulls, multi-arch images and the real client IP stay untested. Revisit again when a VPS exists.
