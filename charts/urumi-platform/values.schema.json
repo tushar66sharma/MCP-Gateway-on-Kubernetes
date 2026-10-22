@@ -2,13 +2,15 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "required": ["global", "namespaces"],
+  "if": { "properties": { "global": { "properties": { "tls": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["tls"] } }, "required": ["global"] },
+  "then": { "properties": { "global": { "properties": { "publicScheme": { "const": "https" } } } } },
   "properties": {
     "global": {
       "type": "object",
       "required": ["storeHost", "appHost", "publicScheme", "publicPort", "ingressClassName"],
       "properties": {
-        "storeHost": { "type": "string", "minLength": 1 },
-        "appHost": { "type": "string", "minLength": 1 },
+        "storeHost": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" },
+        "appHost": { "type": "string", "minLength": 1, "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$" },
         "publicScheme": { "type": "string", "enum": ["http", "https"] },
         "publicPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "ingressClassName": { "type": "string", "minLength": 1 },
@@ -24,6 +26,17 @@
             "secretNamePrefix": { "type": "string" }
           }
         }
+      }
+    },
+    "podSecurity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "level": { "type": "string", "enum": ["restricted", "baseline", "privileged"] } }
+    },
+    "storeSetup": {
+      "type": "object",
+      "properties": {
+        "timezone": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z_]+(/[A-Za-z0-9_+-]+)*$" }
       }
     },
     "namespaces": {
