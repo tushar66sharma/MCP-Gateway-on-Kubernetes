@@ -751,6 +751,48 @@ kubectl -n gateway logs postgres-0 --tail=20
 kubectl -n gateway get pods
 ```
 
+The gateway writes one JSON line per event. The `msg` field says what kind:
+
+| `msg` | Written when | Main fields |
+|---|---|---|
+| `request` | Every HTTP call, including every click in the dashboard (login, create or revoke a key, invite, role change, disable…) | `method`, `path`, `status`, `durationMs`, `requestId` |
+| `tool call` | Every tool call, from an MCP client or the chat | `tool`, `server`, `outcome`, `durationMs`, `userId`, `source` (`mcp` or `chat`) |
+| `chat turn` | Every chat message (Phase 4) | `steps`, `tools`, `stoppedReason`, `durationMs`, `usage` (tokens), `provider`, `model`; **never** the text |
+| `mcp auth rejected` | A recognisable key that is revoked, unknown or belongs to a disabled user | the reason |
+| `upstream status` | An MCP server changes state (connected, unreachable, disabled) | the server and its status |
+
+Kubernetes checks `/healthz` and `/readyz` every few seconds, so most `request` lines are those probes. The commands below hide them (all verified 2026-10-22 in Windows PowerShell 5.1).
+
+Readable, one line per event, last 300 lines (local time, kind, method, path, status, tool, outcome, source):
+
+```powershell
+kubectl -n gateway logs deploy/gateway --tail=300 | Select-String -NotMatch 'healthz|readyz' | ForEach-Object { try { $j = $_.Line | ConvertFrom-Json; "{0:HH:mm:ss}  {1,-15} {2,-6} {3,-30} {4,-4} {5} {6} {7}" -f ([DateTimeOffset]::FromUnixTimeMilliseconds($j.time).LocalDateTime), $j.msg, $j.method, $j.path, $j.status, $j.tool, $j.outcome, $j.source } catch { $_.Line } }
+```
+
+It prints lines such as `18:41:44  request         POST   /api/auth/login                200`.
+
+Watch it live while you click through the dashboard. Leave it running in a second PowerShell window; Ctrl+C stops it:
+
+```powershell
+kubectl -n gateway logs deploy/gateway -f --tail=0 | Select-String -NotMatch 'healthz|readyz'
+```
+
+Only one kind of event:
+
+```powershell
+kubectl -n gateway logs deploy/gateway | Select-String '"msg":"tool call"'           # every tool call (source mcp or chat)
+kubectl -n gateway logs deploy/gateway | Select-String '"msg":"chat turn"'           # every chat turn: tools, tokens, outcome
+kubectl -n gateway logs deploy/gateway | Select-String 'auth rejected|upstream status' # rejected keys and server state changes
+```
+
+Find the log lines of one error. Every error box in the dashboard, and every API error body, shows a request id; search for it:
+
+```powershell
+kubectl -n gateway logs deploy/gateway | Select-String "<request id>"
+```
+
+`kubectl logs` shows only the current pod's log. A redeploy or restart starts a new, empty log; add `--previous` to read the pod's last crashed run. Tool calls, rejected keys and their users are also kept permanently in the **Audit log** page and in the `audit_logs` table ([section 10](#10-viewing-the-gateway-database-postgres)).
+
 Invite links appear in the log only as `/api/invites/:token`. Everything about failures is in [error-handling.md](error-handling.md); common problems are in [troubleshooting.md](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts).
 
 ## 10. Viewing the gateway database (Postgres)
@@ -916,7 +958,7 @@ kubectl -n gateway logs deploy/dashboard --tail=20 # nginx access log: one line 
 
 The nginx log holds request paths, client addresses and browser names, never cookies, keys, passwords or referrers. Invite links are logged as `/invite/:token` and query strings are dropped, so the log never holds an invite token (verified 2026-10-22: after opening `http://app.localhost/invite/test-token-123`, `kubectl -n gateway logs deploy/dashboard` showed `/invite/:token` and no `test-token`; see [security.md](security.md#8-residual-risks)).
 
-What the page does is in the gateway log (`kubectl -n gateway logs deploy/gateway`), because the dashboard only calls `/api`. Problems: [blank page or 404 on refresh](troubleshooting.md#the-dashboard-is-blank-or-a-refresh-gives-404), [Playwright browsers missing](troubleshooting.md#check-dashboardps1-says-playwright-chromium-is-not-installed), [the dashboard image is not found](troubleshooting.md#the-dashboard-pod-is-in-errimagepull-image-tag-not-found). The design rules (colours, spacing, accessibility) and the code layout are in [apps/dashboard/README.md](../apps/dashboard/README.md).
+What the page does is in the gateway log (`kubectl -n gateway logs deploy/gateway`), because the dashboard only calls `/api`: every click is a `request` line, and every tool call (also from the chat) a `tool call` line. Readable and live views of that log: [Logs and health](#logs-and-health). Problems: [blank page or 404 on refresh](troubleshooting.md#the-dashboard-is-blank-or-a-refresh-gives-404), [Playwright browsers missing](troubleshooting.md#check-dashboardps1-says-playwright-chromium-is-not-installed), [the dashboard image is not found](troubleshooting.md#the-dashboard-pod-is-in-errimagepull-image-tag-not-found). The design rules (colours, spacing, accessibility) and the code layout are in [apps/dashboard/README.md](../apps/dashboard/README.md).
 
 ## Set up the AI chat
 
