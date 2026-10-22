@@ -118,7 +118,7 @@ Never paste a key into a chat, an issue or a commit. Details, switching provider
 
 ## 18. Deployment Instructions
 
-*(written in Phase 6)*
+Local (k3d): above. Production (one k3s VPS with TLS, backups, upgrade and rollback): the beginner guide [Production (k3s VPS)](docs/deployment.md#production-k3s-vps). Its cluster-side steps were checked on 2026-10-23 as that guide states; no real VPS, domain or certificate has been used. The full section is written in Phase 6.
 
 ## 19. Security Considerations and Secret Management
 
@@ -134,4 +134,4 @@ See the [documentation map](docs/README.md) for an index of all project document
 
 ## 22. Known Limitations, Assumptions, and Future Improvements
 
-*(the full section is written in Phase 6)* Known today: no NetworkPolicies yet (Phase 5); one gateway replica; the chat shares one free provider key across the whole team, so heavy use hits Groq's per-minute limit; chat messages and tool results are sent to the AI provider; prompt injection through tool output is a documented residual risk ([security.md](docs/security.md#12-untrusted-data-and-prompt-injection)); Claude Code and Cursor are not tested against the gateway; the production (VPS) deployment is not built yet.
+*(the full section is written in Phase 6)* Known today: no NetworkPolicies yet (Phase 5); one gateway replica; the chat shares one free provider key across the whole team, so heavy use hits Groq's per-minute limit; chat messages and tool results are sent to the AI provider; prompt injection through tool output is a documented residual risk ([security.md](docs/security.md#12-untrusted-data-and-prompt-injection)); Claude Code and Cursor are not tested against the gateway; the production (VPS) deployment is documented and render-validated but has not been run on a real VPS ([deployment guide](docs/deployment.md#production-k3s-vps)).

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Phase 5 (2026-10-23): the production values, scripts and guide exist and are render-validated; the rehearsal on a second k3d cluster is Task 5.7 (its result is added here). No real VPS has been used.
 
 ## Date
 

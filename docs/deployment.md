@@ -1,6 +1,6 @@
 # Deployment guide
 
-> **Status (end of Phase 4).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. Phase 2 added the **WooCommerce MCP server** to the chart (namespace `mcp`, internal only) and the image build step that `up.ps1` now runs before every deploy. Phase 3 added the **gateway**, its **Postgres** database, the **Notes** and **Utilities** MCP servers and the `app.localhost` Ingress (`/api` and `/mcp`); `scripts\up.ps1 -Redeploy` deployed them and the checks passed (2026-10-19). Phase 4 added the **dashboard** (its own nginx pod at `app.localhost/`), the chat agent's **LLM settings** and the optional Secret **`llm-api-keys`** (pushed by `scripts\create-secrets.ps1`); deployed with `up.ps1 -Redeploy` and checked with `scripts\check-dashboard.ps1` (2026-10-19). The **production (k3s VPS)** section is **(planned, Phase 5)**; nothing about production below has been run.
+> **Status (end of Phase 4).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. Phase 2 added the **WooCommerce MCP server** to the chart (namespace `mcp`, internal only) and the image build step that `up.ps1` now runs before every deploy. Phase 3 added the **gateway**, its **Postgres** database, the **Notes** and **Utilities** MCP servers and the `app.localhost` Ingress (`/api` and `/mcp`); `scripts\up.ps1 -Redeploy` deployed them and the checks passed (2026-10-19). Phase 4 added the **dashboard** (its own nginx pod at `app.localhost/`), the chat agent's **LLM settings** and the optional Secret **`llm-api-keys`** (pushed by `scripts\create-secrets.ps1`); deployed with `up.ps1 -Redeploy` and checked with `scripts\check-dashboard.ps1` (2026-10-19). The **production (k3s VPS)** section was written in Phase 5 (2026-10-23): the Helm values, scripts and backup commands were checked as described there, but no real VPS, domain or certificate has been used.
 
 Cost: the local deployment uses no paid service and no cloud account; everything runs on your machine in Docker. (The reason production is a VPS and not Vercel/Render is in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md).)
 
@@ -245,7 +245,7 @@ kubectl -n store create secret generic store-admin --from-literal=password=<your
 
 The chart renders the generated copies identically in both namespaces (checked with `helm template`). The pre-created variant for the gateway was **not tested** on a cluster (there is no production cluster yet). For production, the dashboard needs nothing extra: its image is pulled from the registry like the others (`<registry>/urumi/dashboard:<tag>`) and it is served on the same host as the API (`global.appHost`), which keeps the cookie and CSRF model unchanged ([ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md)). This is **not tested on a VPS** (Phase 5).
 
-`deploy/values-prod.yaml` already names these Secrets and points to this procedure. It also has two placeholders for our own images, `global.imageRegistry` and `global.imageTag` (both `CHANGE-ME`): production pulls `<registry>/urumi/mcp-woocommerce:<tag>` from a real registry instead of importing it. Pushing images to a registry is **(planned, Phase 5)**; the local import workflow is the only one exercised.
+`deploy/values-prod.yaml` already names these Secrets and points to this procedure. It also has two placeholders for our own images, `global.imageRegistry` and `global.imageTag` (both `CHANGE-ME`): production pulls `<registry>/urumi/mcp-woocommerce:<tag>` from a real registry instead of importing it. Building and pushing the images is described in [Production, step 6](#6-build-and-push-multi-arch-images-not-executed) and is **not executed**; the local import workflow is the one exercised. `scripts/prod/create-prod-secrets.sh` creates all these Secrets for you.
 
 The WooCommerce key owner is the `urumi-mcp` shop manager that the setup Job creates; see [run guide, section 8](run-guide.md#who-owns-the-woocommerce-api-key-security-note). **Upgrade note:** a store upgraded from Phase 1 (`main`) never had a `urumi-mcp` user (the key was owned by `admin` then), so the Job creates and marks the user and the upgrade needs nothing from you. Only a store installed from the intermediate Phase 2 commit that predates the key-owner fix has an unmarked `urumi-mcp` user, and there the setup Job refuses to reuse it until you add the marker ([troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)).
 
@@ -297,6 +297,199 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 - No TLS locally (plain HTTP), and no mail server, so WooCommerce e-mails are not delivered.
 - The cluster needs internet access for image pulls and for downloading WooCommerce 11.2.1 during setup, and the gateway needs it for the AI chat (Groq's free plan: about 8,000 tokens per minute, roughly two chat questions a minute for the whole team; see [ai-integration.md](ai-integration.md#5-limits-and-token-budget)).
 
-## Production (k3s VPS) — (planned, Phase 5)
+## Production (k3s VPS)
 
-Not built yet. The planned approach is one k3s node on a VPS with the same chart and `deploy/values-prod.yaml` (currently a stub with placeholder hostnames, TLS settings and pre-created Secret names, including the optional `llm-api-keys`); see [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) for why a VPS is used instead of Vercel/Render, and [ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md) for why the dashboard is not put on a separate static host.
+> **Status (2026-10-23).** This guide installs the same chart on one k3s server with TLS. **No real VPS, domain or Let's Encrypt certificate has been used.** What *was* run is marked **verified**; everything else is **not executed** (it needs your cloud account, domain or registry) or **expected** (taken from the tools' documentation). Task 5.7 of Phase 5 rehearses the cluster side on a second local k3d cluster with a self-signed issuer; its results are recorded in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) and the [testing guide](testing.md).
+
+**Contents:** [Verified so far](#verified-so-far) · [1. Choose a server](#1-choose-a-server) · [2. Install k3s](#2-install-k3s) · [3. DNS](#3-dns-records) · [4. Traefik settings](#4-traefik-keep-the-real-client-ip) · [5. cert-manager and the issuer](#5-cert-manager-and-the-certificate-issuer) · [6. Build and push images](#6-build-and-push-multi-arch-images-not-executed) · [7. Create the Secrets](#7-create-the-secrets) · [8. Install](#8-install-the-chart) · [9. Verify](#9-verify-the-site) · [10. Logs](#10-logs) · [11. Upgrade and roll back](#11-upgrade-and-roll-back) · [12. Backups](#12-backups) · [13. Helm release Secret exposure](#13-the-helm-release-secret-note)
+
+### Verified so far
+
+| What | Result (2026-10-23) |
+|---|---|
+| `helm lint` with `deploy/values-prod.yaml` | passes |
+| `helm template -f deploy/values-prod.yaml` through `kubeconform` v0.8.0 (`-strict -ignore-missing-schemas -kubernetes-version 1.35.0`, run by `scripts\validate-chart.ps1`) | 44 resources: 40 valid, 0 invalid, 0 errors, 4 skipped. The 4 skipped are the Traefik `Middleware` objects: **kubeconform has no schema for custom resource kinds, so they are skipped, not validated.** The local values: 52 resources, all valid. |
+| The prod render contains a `redirect-https` and an `hsts` Middleware in `store` and in `gateway`, and both Ingresses carry the `router.middlewares` annotation; the local render has neither | passes (`validate-chart.ps1`) |
+| `scripts/prod/create-prod-secrets.sh` on a throw-away k3d cluster (from Git Bash): creates the namespaces with Helm ownership metadata and all Secrets; a second run reports every Secret `kept`; a deleted `mcp` copy is re-created byte-identical to the `gateway` copy; the WooCommerce key and secret are 43 characters; the encryption key decodes to 32 bytes; nothing secret is printed. `shellcheck` v0.11.0 is clean. | passes |
+| The backup commands in [12. Backups](#12-backups) against the **local** cluster | both produce a non-empty dump (sizes there) |
+| The official WordPress image already trusts `X-Forwarded-Proto` ([step 9](#9-verify-the-site)) | verified in the running pod |
+| A real install on a VPS, DNS, a real certificate, the redirect and HSTS headers on the wire, GHCR pushes, multi-arch images, restores | **not executed** |
+
+### 1. Choose a server
+
+You need one Linux server with a public IPv4 address, **2 CPU cores and 8 GB of memory or more** (this stack's memory limits add up to about 3.5 GiB; k3s, Traefik and cert-manager need more), 30 GB of disk, and ports 22, 80 and 443 reachable from the internet.
+
+**Oracle Cloud "Always Free" (a free option; facts from Oracle's documentation, [Always Free Resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm), checked 2026-10-22):**
+
+| Resource | Always Free allowance | What it means for us |
+|---|---|---|
+| Ampere A1 compute (arm64) | 1,500 OCPU-hours and 9,000 GB-hours per month, i.e. **2 OCPUs and 12 GB of memory** running all month | One VM of 2 OCPU / 12 GB fits this stack. The CPU is **arm64**, so the images must be built for `linux/arm64` (step 6). |
+| AMD micro VM | 1 GB of memory each | Too small. |
+| Block storage | 200 GB in total | Plenty: the values use 10 + 10 + 5 GiB of volumes. |
+| Outbound traffic | 10 TB per month | Plenty. |
+
+Things to know, none of which this project can control: Oracle asks for a credit card to verify the account; capacity for A1 machines is not guaranteed in every region ("out of capacity" errors are common); and **idle reclamation**: Oracle may reclaim an Always Free instance when, over 7 days, the 95th percentile of CPU, network and (for A1) memory use are all below 20 %. A quiet demo store can match that, so check the instance regularly or accept that it may be stopped.
+
+**Other options (not verified; prices and limits change, check the provider):** any VPS with 2 vCPU / 4 GB or more from Hetzner, DigitalOcean, Vultr, Linode or similar (x86-64, so `linux/amd64` images are enough), or a home server with a public IP. The steps below are the same.
+
+### 2. Install k3s
+
+On the server (Ubuntu or Debian assumed). **Not executed.**
+
+```bash
+curl -sfL https://get.k3s.io | sh -          # installs k3s as a service; includes Traefik, local-path storage, ServiceLB
+sudo k3s kubectl get nodes                    # expected: one node, Ready
+mkdir -p ~/.kube && sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config && sudo chown "$USER" ~/.kube/config
+export KUBECONFIG=~/.kube/config              # then plain "kubectl" works
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash   # Helm
+git clone <your fork of this repository> && cd MCP-Gateway-on-Kubernetes
+```
+
+**Why:** k3s is a small, certified Kubernetes in one binary, so the server runs the same kind of cluster as k3d does locally. The firewall must allow 22, 80 and 443 (on Oracle that is both the subnet's security list and, on Ubuntu images, `iptables`/`ufw`). The NetworkPolicies of this chart are enforced by k3s's built-in controller (checked on the k3s v1.35 used locally, 2026-10-22).
+
+### 3. DNS records
+
+At your domain's DNS provider create two **A records** pointing at the server's public IPv4 address: for example `store.yourdomain.com` and `app.yourdomain.com`. Check with `nslookup store.yourdomain.com`. Let's Encrypt can only issue a certificate when both names resolve to the server **before** you install (step 8).
+
+### 4. Traefik: keep the real client IP
+
+```bash
+sudo cp deploy/prod/traefik-config.yaml /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+```
+
+**Why:** k3s lets you customise its packaged Traefik with a `HelmChartConfig` placed in `/var/lib/rancher/k3s/server/manifests`. Ours sets the Traefik Service's `externalTrafficPolicy: Local`, which stops Kubernetes from replacing the visitor's IP with the node's. The gateway rate-limits failed `/mcp` logins per IP, so it needs the real one. **Do not set `node-external-ip`** in the k3s configuration when you do this (k3s networking documentation, checked 2026-10-22). Expected: Traefik restarts with the new setting within a minute. **Not executed.**
+
+### 5. cert-manager and the certificate issuer
+
+cert-manager asks Let's Encrypt for a certificate for each Ingress that names a ClusterIssuer, proves you own the host over plain HTTP (the "HTTP-01" challenge, answered through Traefik) and renews it automatically.
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml
+kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
+```
+
+Edit `deploy/prod/cluster-issuer-letsencrypt.yaml` and replace `CHANGE-ME@example.com` with your real email, then:
+
+```bash
+kubectl apply -f deploy/prod/cluster-issuer-letsencrypt.yaml
+kubectl get clusterissuer letsencrypt-prod      # expected: READY True
+```
+
+**Not executed** (it needs a real domain). For a rehearsal without DNS, `deploy/prod/cluster-issuer-selfsigned.yaml` creates an issuer named `selfsigned`; set `global.tls.clusterIssuer: selfsigned` to use it. Browsers warn about its certificates. Let's Encrypt has rate limits, so while testing repeatedly use its staging server first.
+
+### 6. Build and push multi-arch images (not executed)
+
+> **Not executed:** this publishes images to *your* GitHub account, so it was not run for this project.
+
+The chart pulls `<registry>/urumi/<app>:<tag>` for five apps: `mcp-woocommerce`, `mcp-notes`, `mcp-utilities`, `gateway` (all built from `docker/node-app.Dockerfile` with `--build-arg APP=<app>`) and `dashboard` (`docker/dashboard.Dockerfile`). An Oracle A1 server is arm64, so build for both architectures:
+
+```bash
+# a classic token with the write:packages scope: GitHub > Settings > Developer settings > Tokens (classic)
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+docker buildx create --use                                    # once; a builder that can do multi-arch
+TAG=$(git rev-parse --short HEAD)
+for APP in mcp-woocommerce mcp-notes mcp-utilities gateway; do
+  docker buildx build --platform linux/amd64,linux/arm64 -f docker/node-app.Dockerfile \
+    --build-arg APP=$APP -t ghcr.io/<github-user>/urumi/$APP:$TAG --push .
+done
+docker buildx build --platform linux/amd64,linux/arm64 -f docker/dashboard.Dockerfile \
+  -t ghcr.io/<github-user>/urumi/dashboard:$TAG --push .
+```
+
+Then make each of the five packages **public** (GitHub > your profile > Packages > the package > Package settings > Change visibility), because **the chart has no imagePullSecrets**: a private package fails with `ImagePullBackOff`. (If you must keep them private, k3s can authenticate through `/etc/rancher/k3s/registries.yaml`; expected to work, not tested.) Building the arm64 half on an x86 PC uses emulation and is slow.
+
+### 7. Create the Secrets
+
+```bash
+./scripts/prod/create-prod-secrets.sh you@yourdomain.com
+```
+
+**Why:** `deploy/values-prod.yaml` names pre-created Secrets, so passwords are generated on the server and never appear in a file, in Git or on a command line. The script creates the three namespaces **with the Helm ownership labels and annotations** (otherwise `helm install` refuses to adopt them), generates every Secret with `openssl rand` in the same shapes the chart uses, makes the copies shared by two namespaces byte-identical, and offers to store the optional AI keys (typed hidden; skipped when not in a terminal). The email becomes the gateway admin login. It never prints a value and is safe to repeat: an existing Secret is reported `kept` and not changed. It refuses to run on the local `k3d-urumi` context. It ends by printing the *commands* that read each password, for example:
+
+```bash
+kubectl -n store get secret store-admin -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+**Verified** on a throw-away k3d cluster from Git Bash on Windows (2026-10-23, see the table above). These Secrets are the only copy of the database passwords, so back them up.
+
+### 8. Install the chart
+
+Edit `deploy/values-prod.yaml`: replace every `CHANGE-ME` (registry user, image tag, the WordPress admin email) and both `example.com` hostnames. Then check and install:
+
+```bash
+helm lint charts/urumi-platform -f deploy/values-prod.yaml
+helm upgrade --install urumi charts/urumi-platform --namespace urumi-system --create-namespace \
+  -f deploy/values-prod.yaml --wait --timeout 15m
+```
+
+On a Windows machine whose kube context points at the server you can use `scripts\deploy.ps1 -ValuesFile deploy\values-prod.yaml`, which refuses to run on the local `k3d-urumi` context (and refuses the local values on any other context). `scripts\validate-chart.ps1` warns while placeholders remain. The first install downloads WooCommerce, so allow several minutes. **Not executed on a VPS.**
+
+### 9. Verify the site
+
+```bash
+kubectl get pods -A                                  # expected: everything Running 1/1 (store-setup: Completed)
+kubectl get certificate -A                           # expected: urumi-tls-store (store) and urumi-tls-app (gateway), READY True
+curl -sI http://store.yourdomain.com | head -5       # expected: 301 Moved Permanently, Location: https://store.yourdomain.com/
+curl -sI https://store.yourdomain.com | grep -i strict-transport-security
+                                                     # expected: max-age=31536000 (no includeSubDomains)
+```
+
+Open `https://store.yourdomain.com` and `https://app.yourdomain.com`. The redirect and HSTS come from two Traefik `Middleware` objects per namespace (`redirect-https`, `hsts`) that the chart creates only when `global.tls.enabled` is true and that the two Ingresses reference by annotation. The HSTS header lasts one year and does not cover subdomains. If a certificate stays `READY False`, look at `kubectl describe certificate -A` and `kubectl get challenges -A`, and see [troubleshooting](troubleshooting.md). **Expected; not executed on a real domain.**
+
+**WordPress behind TLS (verified 2026-10-23):** TLS ends at Traefik, so WordPress itself receives plain HTTP with an `X-Forwarded-Proto: https` header. The official `wordpress` image already handles this. In the running pod, `grep -n HTTP_X_FORWARDED_PROTO /var/www/html/wp-config.php` shows, at line 122:
+
+```php
+if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false) {
+	$_SERVER['HTTPS'] = 'on';
+}
+```
+
+so no extra configuration was added. Task 5.7 checks that the store's HTML over https contains no `http://` asset URLs.
+
+### 10. Logs
+
+```bash
+kubectl -n gateway logs deploy/gateway --tail=100
+kubectl -n store logs job/store-setup
+kubectl -n store logs deploy/wordpress -c wordpress --tail=100
+kubectl -n cert-manager logs deploy/cert-manager --tail=100     # certificate problems
+kubectl -n kube-system logs deploy/traefik --tail=100
+```
+
+### 11. Upgrade and roll back
+
+```bash
+git pull
+helm upgrade urumi charts/urumi-platform -n urumi-system -f deploy/values-prod.yaml --wait --timeout 15m
+helm history urumi -n urumi-system
+helm rollback urumi <revision> -n urumi-system --wait
+```
+
+An upgrade with a new image tag re-pulls the images (build and push them first, step 6). `helm rollback` re-applies an earlier revision's manifests; it does **not** undo database changes, so take a backup (next section) before a risky upgrade. The Secrets and data volumes are kept across upgrades and rollbacks. The upgrade command was exercised on the local cluster in earlier phases ([Step 7](#step-7-upgrade-change-settings-or-the-chart)); rollback commands are documented at [Step 8](#step-8-roll-back). On a VPS they are **expected** to behave the same.
+
+### 12. Backups
+
+The data lives in two databases. Dump them with `kubectl exec`; the password is read **inside** the container from its environment, so it never appears on your command line. Run these from your own computer or the server, then keep the files somewhere else (they contain customer and account data and are not encrypted).
+
+```bash
+# WordPress/WooCommerce (MariaDB): all databases, consistent snapshot
+kubectl -n store exec mariadb-0 -c mariadb -- sh -c 'mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --single-transaction --routines --all-databases' | gzip > store-$(date +%F).sql.gz
+
+# Gateway (Postgres): users, keys (encrypted), servers, audit log, chats
+kubectl -n gateway exec postgres-0 -c postgres -- sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U gateway -h 127.0.0.1 gateway' | gzip > gateway-$(date +%F).sql.gz
+```
+
+**Verified on the local cluster, 2026-10-23** (redirected to a scratch folder without `gzip`; only sizes and table counts were checked, then the files were deleted): the MariaDB dump was 41,827 lines / 5.1 MB with 78 `CREATE TABLE` statements; the Postgres dump was 796 lines / 69 KB with 8 `CREATE TABLE` statements.
+
+**Not tested: restoring.** The expected restore is the reverse, into an empty database; rehearse it before you depend on it:
+
+```bash
+gunzip -c store-DATE.sql.gz | kubectl -n store exec -i mariadb-0 -c mariadb -- sh -c 'mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"'
+gunzip -c gateway-DATE.sql.gz | kubectl -n gateway exec -i postgres-0 -c postgres -- sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U gateway -h 127.0.0.1 gateway'
+```
+
+The `wp-content` volume (uploads, plugins) is **not** in the dump: copy it with `kubectl cp` or snapshot the VM's disk. Also keep a copy of the Secrets you created; the gateway's `encryption-key` decrypts the stored provider keys, and without it those keys are lost.
+
+### 13. The Helm release Secret note
+
+Helm stores each release's manifests and values in a Secret named `sh.helm.release.v1.urumi.vN` in `urumi-system`. Because every password here lives in a pre-created Secret and not in the values, **none of them is inside the release Secret** (a reason to prefer `create-prod-secrets.sh` over chart-generated Secrets in production). Anyone who can read Secrets in `urumi-system` still sees the rendered manifests and your values, so keep cluster-admin access to people you trust. Encrypting Secrets at rest and restricting that access belongs to Phase 6 of the master plan.
