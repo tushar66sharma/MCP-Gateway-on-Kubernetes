@@ -18,6 +18,12 @@ function Labels([string]$name) { "$inst,app.kubernetes.io/name=$name" }
 # a pod is unrestricted for rows that should be blocked and cut off for rows that should be allowed. Each probe
 # therefore sleeps -SettleSeconds before it curls.
 # Each row: from, namespace, pod labels ('' = none), url, expected (blocked | any | <http code>), optional extra curl args
+# A private address that IS reachable without any policy (the node's own IP; Traefik answers on 80), so the
+# private-range 'except' is really tested. The 169.254.169.254 row alone would pass vacuously on k3d (no route).
+$nodeJson = kubectl get nodes -o json
+if ($LASTEXITCODE -ne 0) { Stop-WithError 'Could not list the nodes.' }
+$nodeIp = (($nodeJson | ConvertFrom-Json).items[0].status.addresses | Where-Object { $_.type -eq 'InternalIP' } | Select-Object -First 1).address
+if (-not $nodeIp) { Stop-WithError 'Could not read the node InternalIP.' }
 $matrix = @(
   @('default namespace',        'default', '',                       'http://mcp-woocommerce.mcp.svc:3001/mcp',        'blocked'),
   @('default namespace',        'default', '',                       'http://postgres.gateway.svc:5432',               'blocked'),
@@ -29,22 +35,33 @@ $matrix = @(
   @('gateway (gateway)',        'gateway', (Labels 'gateway'),       'https://api.groq.com',                           'any'),
   @('gateway (gateway)',        'gateway', (Labels 'gateway'),       'http://mariadb.store.svc:3306',                  'blocked'),
   @('gateway (gateway)',        'gateway', (Labels 'gateway'),       'http://169.254.169.254',                         'blocked'),
+  @('gateway (gateway)',        'gateway', (Labels 'gateway'),       "http://$nodeIp",                                  'blocked'),
   @('mcp-woocommerce (mcp)',    'mcp',     (Labels 'mcp-woocommerce'), 'http://wordpress.store.svc/wp-login.php',      '200'),
   @('dashboard (gateway)',      'gateway', (Labels 'dashboard'),     'http://gateway.gateway.svc:3000/healthz',        'blocked')
 )
 
 # Runs kubectl with a hand-built command line: Windows PowerShell 5.1 mangles arguments that contain both
 # spaces and double quotes (the --overrides JSON), so the process is started directly.
-function Invoke-Kubectl([string]$ArgumentLine) {
+function Invoke-Kubectl([string]$ArgumentLine, [int]$TimeoutSeconds = 120) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = (Get-Command kubectl).Source
   $psi.Arguments = $ArgumentLine
   $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.UseShellExecute = $false
   $p = [System.Diagnostics.Process]::Start($psi)
   $errTask = $p.StandardError.ReadToEndAsync()
-  $out = $p.StandardOutput.ReadToEnd()
+  $outTask = $p.StandardOutput.ReadToEndAsync()
+  if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
+    try { $p.Kill() } catch { }
+    return 'TIMEOUT'
+  }
   $p.WaitForExit()
-  $out + $errTask.Result
+  $outTask.Result + $errTask.Result
+}
+# Removes probe pods left behind by an interrupted or hung run (--rm only fires on a normal exit).
+function Remove-ProbePods {
+  $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  kubectl delete pods -A -l urumi-np-probe=true --now --ignore-not-found 2>&1 | Out-Null
+  $ErrorActionPreference = $prev
 }
 function Get-Overrides([string]$podName, [string]$shell) {
   $o = [ordered]@{ spec = [ordered]@{
@@ -59,20 +76,24 @@ function Get-Overrides([string]$podName, [string]$shell) {
 }
 
 $rows = @(); $failed = 0; $n = 0
+Remove-ProbePods
+try {
 foreach ($m in $matrix) {
   $n++
   $from, $ns, $labels, $url, $expected, $extra = $m
   $pod = "np-$n"
   $shell = "sleep $SettleSeconds; curl -s -o /dev/null -w code=%{http_code} -m 5 $extra $url; echo rc=`$?"
   $line = "run $pod -n $ns --rm -i --restart=Never --image=$image"
-  if ($labels) { $line += " --labels=$labels" }
+  $line += " --labels=urumi-np-probe=true"
+  if ($labels) { $line += ",$labels" }
   $line += " `"--overrides=$(Get-Overrides $pod $shell)`""
-  $out = Invoke-Kubectl $line
-  if ($out -notmatch "rc=\d+") { Start-Sleep -Seconds 3; $out = Invoke-Kubectl $line }  # one retry if the pod itself failed to run
+  $timeout = $SettleSeconds + 90
+  $out = Invoke-Kubectl $line $timeout
+  if ($out -notmatch "rc=\d+") { Remove-ProbePods; Start-Sleep -Seconds 3; $out = Invoke-Kubectl $line $timeout }  # one retry if the pod itself failed to run
   $code = if ($out -match 'code=(\d+)') { $Matches[1] } else { '' }
   $rc = if ($out -match 'rc=(\d+)') { [int]$Matches[1] } else { -1 }
   $isBlocked = ($rc -in 7, 28) -and ($code -eq '000' -or $code -eq '')
-  $actual = if ($rc -eq -1) { 'no result (probe pod failed)' } elseif ($isBlocked) { "blocked (curl exit $rc)" } else { "reachable (HTTP $code, curl exit $rc)" }
+  $actual = if ($rc -eq -1) { $(if ($out -eq 'TIMEOUT') { 'no result (probe timed out)' } else { 'no result (probe pod failed)' }) } elseif ($isBlocked) { "blocked (curl exit $rc)" } else { "reachable (HTTP $code, curl exit $rc)" }
   $ok = switch ($expected) {
     'blocked' { $isBlocked }
     'any'     { ($rc -ne -1) -and (-not $isBlocked) -and $code -ne '000' }
@@ -82,6 +103,7 @@ foreach ($m in $matrix) {
   $exp = switch ($expected) { 'blocked' { 'blocked' } 'any' { 'reachable, any HTTP code' } default { "reachable, $expected" } }
   $rows += [pscustomobject]@{ From = $from; To = $url; Expected = $exp; Actual = $actual; Result = $(if ($ok) { 'PASS' } else { 'FAIL' }) }
 }
+} finally { Remove-ProbePods }
 $rows | Format-Table -AutoSize -Wrap | Out-String -Width 220 | Write-Host
 if ($failed -gt 0) { Stop-WithError "$failed of $n probes did not behave as designed." }
 Write-Host "NetworkPolicies behave as designed ($n probes)" -ForegroundColor Green
