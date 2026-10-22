@@ -2,14 +2,17 @@
 # then restarts the gateway so it reads them.
 #   powershell -ExecutionPolicy Bypass -File scripts\create-secrets.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\create-secrets.ps1 -NoRestart
-#   powershell -ExecutionPolicy Bypass -File scripts\create-secrets.ps1 -EnvFile C:\path\to\.env -Namespace gateway
+#   powershell -ExecutionPolicy Bypass -File scripts\create-secrets.ps1 -EnvFile C:\path\to\.env -Namespace gateway -SecretName llm-api-keys
+#   powershell -ExecutionPolicy Bypass -File scripts\create-secrets.ps1 -EnvFile scripts\dev\fixtures\parse-set.env -ParseOnly   # parser test: prints names and set/empty only
 # Reads only GROQ_API_KEY and OPENROUTER_API_KEY. The keys never reach the command line, a temp file or the
 # output: the Secret is built in memory and piped to kubectl, and only "set" / "empty" is printed.
 [CmdletBinding()]
 param(
   [string]$EnvFile = '',
   [string]$Namespace = 'gateway',
-  [switch]$NoRestart
+  [string]$SecretName = 'llm-api-keys',   # must match secrets.existing.llmApiKeys (the chart's "" means llm-api-keys)
+  [switch]$NoRestart,
+  [switch]$ParseOnly
 )
 $ErrorActionPreference = 'Stop'
 
@@ -18,7 +21,7 @@ function Stop-WithError([string]$Message) {
   exit 1
 }
 
-if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
+if (-not $ParseOnly -and -not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
   Stop-WithError "'kubectl' was not found on PATH. Install it (docs/run-guide.md) or open a NEW terminal so PATH refreshes."
 }
 
@@ -38,13 +41,13 @@ foreach ($line in (Get-Content -LiteralPath $EnvFile)) {
   $name = $Matches[1]
   if ($wanted -notcontains $name) { continue }
   $value = $Matches[2].Trim()
-  if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
-    $value = $value.Substring(1, $value.Length - 2).Trim()
+  if ($value -match '^"([^"]*)"' -or $value -match "^'([^']*)'") {
+    # One pair of surrounding quotes is removed; whatever follows the closing quote (such as a comment) is ignored.
+    $value = $Matches[1].Trim()
   }
   else {
-    # An unquoted value ends at an inline " #" comment.
-    $hash = $value.IndexOf(' #')
-    if ($hash -ge 0) { $value = $value.Substring(0, $hash).Trim() }
+    # An unquoted value ends at an inline comment: a space or tab followed by "#" (or a value that is only "#...").
+    $value = ($value -replace '(^|[ \t])#.*$', '').Trim()
   }
   $keys[$name] = $value
 }
@@ -53,6 +56,7 @@ foreach ($name in $wanted) {
   $state = if ($keys[$name]) { 'set' } else { 'empty' }
   Write-Host "${name}: $state"
 }
+if ($ParseOnly) { exit 0 }
 if (-not $keys['GROQ_API_KEY'] -and -not $keys['OPENROUTER_API_KEY']) {
   Stop-WithError "Both GROQ_API_KEY and OPENROUTER_API_KEY are empty in $EnvFile. Add at least one key (see .env.example); nothing was changed."
 }
@@ -68,10 +72,10 @@ $secret = [ordered]@{
   kind       = 'Secret'
   type       = 'Opaque'
   metadata   = [ordered]@{
-    name      = 'llm-api-keys'
+    name      = $SecretName
     namespace = $Namespace
     labels    = [ordered]@{
-      'app.kubernetes.io/name'       = 'llm-api-keys'
+      'app.kubernetes.io/name'       = $SecretName
       'app.kubernetes.io/part-of'    = 'urumi-platform'
       'app.kubernetes.io/managed-by' = 'create-secrets.ps1'
     }
@@ -98,8 +102,8 @@ finally {
   $OutputEncoding = $prevEncoding
   $json = $null
 }
-if (-not $applyOk) { Stop-WithError "kubectl apply of Secret $Namespace/llm-api-keys failed (see above)." }
-Write-Host "Secret $Namespace/llm-api-keys is up to date."
+if (-not $applyOk) { Stop-WithError "kubectl apply of Secret $Namespace/$SecretName failed (see above)." }
+Write-Host "Secret $Namespace/$SecretName is up to date."
 
 if ($NoRestart) {
   Write-Host "Skipped the gateway restart (-NoRestart). The gateway reads the keys at start: kubectl -n $Namespace rollout restart deploy/gateway"

@@ -29,6 +29,9 @@ if ($LASTEXITCODE -ne 0) { Stop-WithError 'No current kube context. Run scripts\
 if ($valuesPath -like '*values-local.yaml' -and $context -ne 'k3d-urumi') {
   Stop-WithError "Refusing to deploy local values to context '$context'. Run: kubectl config use-context k3d-urumi"
 }
+if ($valuesPath -notlike '*values-local.yaml' -and $context -eq 'k3d-urumi') {
+  Stop-WithError "Refusing to deploy '$ValuesFile' to the local development cluster (context k3d-urumi): only deploy/values-local.yaml belongs there. Switch context first for a real or rehearsal cluster."
+}
 
 $helmArgs = @('-f', $valuesPath)
 if ($valuesPath -like '*values-local.yaml') {
