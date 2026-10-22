@@ -28,13 +28,13 @@ If you are new to the project, read in this order:
 | [error-handling.md](error-handling.md) | Failure scenarios, retries, timeouts, fallbacks, user-facing errors | Partial: the gateway, the upstreams and Postgres (Phase 3); the chat and the dashboard (Phase 4); complete in Phase 6 |
 | [security.md](security.md) | Authentication, authorization, secrets, input validation, hardening | Partial: credentials, auth, CSRF, SSRF, logging, roles, residual risks (Phase 3); browser headers, the chat acting as the user, prompt injection, LLM keys (Phase 4); NetworkPolicies and Pod Security Phase 5; threat model Phase 6 |
 | [testing.md](testing.md) | Test strategy, commands and verification procedures | Partial: test layers, commands, counts, cluster and browser checks as of Phase 4; completed in Phase 6 |
-| [decisions/](decisions/README.md) | Architecture decision records (ADR-001 to ADR-015) | Available |
+| [decisions/](decisions/README.md) | Architecture decision records (ADR-001 to ADR-017) | Available |
 | [troubleshooting.md](troubleshooting.md) | Common development, configuration and deployment problems with fixes | Available (store problems from Phase 1, MCP server problems from Phase 2, gateway and Postgres problems from Phase 3, dashboard and chat problems from Phase 4; complete in Phase 6) |
 | [deployment.md](deployment.md) | Beginner-friendly deployment guide (local k3d and k3s on a VPS) | Available (local k3d from Phase 1, image build and MCP server from Phase 2, gateway and Postgres from Phase 3, dashboard and the AI key Secret from Phase 4; the k3s VPS section is **(planned)** for Phase 5) |
 | [screenshots/](screenshots/) | Dashboard screenshots taken from the local cluster (no keys, links or passwords shown) | Available (Phase 4) |
 | system-design-and-tradeoffs.md | Short note: architecture choices, routing and failure handling, what changes for production | (planned) — Phase 6 |
 | threat-model.md | Short note: shared upstream credentials, token passthrough, malicious tool descriptions, compromised upstreams | (planned) — Phase 6 |
-| demo-script.md | Step-by-step script for demonstrating the finished system | (planned) — Phase 5 |
+| [demo-script.md](demo-script.md) | Step-by-step definition-of-done demo (chat across servers, invite, key, MCP Inspector, revoke, disable, pod kill, audit), each step run on 2026-10-23 | Available (Phase 5) |
 | stand-out-items.md | Which stand-out items were done (with file pointers) and which were not attempted | (planned) — Phase 6 |
 | [learning/](learning/00-setup-log.md) | Interview-prep primers: [setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md), [MCP protocol](learning/02-mcp-protocol.md), [the gateway](learning/03-gateway.md) (Phase 3, with captured traffic), [the chat agent](learning/04-chat-agent.md) (Phase 4, with a captured LLM exchange); the final interview Q&A is (planned) — Phase 6 | Available (partial) |
 | [superpowers/specs/](superpowers/specs/2026-10-18-mcp-gateway-design.md) | The approved design spec | Available |
