@@ -70,7 +70,7 @@ A missing or invalid variable stops the process at start with a message that lis
 | `src/audit/` | The audit writer and the audit query. |
 | `src/mcp/` | The gateway's own MCP server factory and the `/mcp` auth middleware. |
 | `src/db/` | The Drizzle schema, the Postgres client and the migrator. |
-| `src/chat/` | The chat agent (Phase 4): `agent.ts` (the tool loop and its limits), `service.ts` (per-user limits, turn timeout, the `chat turn` log line), `mcpLoopback.ts` (`connectLoopback(mcpUrl, mintToken)`: an MCP client to the gateway's own `/mcp` with a fresh internal token per request), `systemPrompt.ts`. |
+| `src/chat/` | The chat agent (Phase 4): `agent.ts` (the tool loop and its limits), `service.ts` (per-user limits, turn timeout, the `chat turn` log line), `mcpLoopback.ts` (`connectLoopback(mcpUrl, mintToken, signal?)`: an MCP client to the gateway's own `/mcp` with a fresh internal token per request), `systemPrompt.ts`. |
 | `src/chat/llm/` | The provider-independent LLM layer: `types.ts`, `errors.ts`, `providers.ts` (Groq, OpenRouter), `openaiCompatible.ts` (the one adapter: retries, backoff, deadline), `registry.ts` (primary plus one-shot fallback). |
 | `test/` | Vitest suites on PGlite (an in-process Postgres), in-process fake upstreams and a scripted fake LLM, see [docs/testing.md](../../docs/testing.md). |
 
@@ -92,5 +92,5 @@ To run it against a throwaway local Postgres you need every required variable ab
 - `/mcp` limits only recognised failures per client IP (`MCP_AUTH_FAILURE_LIMIT_PER_MIN`); unrecognised garbage is a plain `401` and a flood of it still costs a database lookup per request; see [security.md](../../docs/security.md#8-residual-risks).
 - Migrations run under a Postgres advisory lock (`MIGRATION_LOCK_KEY`), so replicas never migrate at once.
 - The audit row for a tool call is written after the call finishes. A crash in the middle leaves no row.
-- Chat: a failure of the loopback connect or `tools/list` answers a generic `500 INTERNAL`; a client disconnect is logged as `stoppedReason: timeout`; the loopback connect has its own 10 s timeout and does not follow the turn signal. The model sees tool output as untrusted data, but prompt injection remains a residual risk ([security.md](../../docs/security.md#12-untrusted-data-and-prompt-injection)).
+- Chat: a failure of the loopback connect or `tools/list` answers a generic `500 INTERNAL`; a client disconnect is logged as `stoppedReason: client_closed`; the loopback connect has its own 10 s timeout and also follows the turn signal (an abort during the connect still ends as a generic `500` for a client that is gone anyway). The model sees tool output as untrusted data, but prompt injection remains a residual risk ([security.md](../../docs/security.md#12-untrusted-data-and-prompt-injection)).
 - `scripts/dev/llm-probe.mjs` compares models' tool calling against the captured 15-tool catalogue (`test/fixtures/gateway-tools.json`); it reads the key from `.env` and prints only `set`.

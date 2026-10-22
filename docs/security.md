@@ -154,10 +154,12 @@ Chat replies are rendered as **plain text** (no Markdown or HTML rendering), so 
 Tool output and tool descriptions are **untrusted**: they come from upstream servers (which an admin registered, but which may be compromised) and, through the store, from anything a shopper typed. The agent therefore:
 
 1. wraps every tool result as `<tool_result name="…">…</tool_result>` and cuts it to 6,000 characters;
-2. rewrites any `<tool_result` or `</tool_result` inside the result to `tool-result`, so a result cannot close its own block and open a fake one (**tested**: `a tool result cannot close its own wrapper`); the rewrite is an exact match on that tag name (a deferred minor);
+2. rewrites any `<tool_result` or `</tool_result` inside the result to `tool-result`, so a result cannot close its own block and open a fake one (**tested**: `a tool result cannot close its own wrapper`); the rewrite ignores case and allows whitespace inside the tag (`</TOOL_RESULT>`, `< /tool_result>`, `<tool_result` plus a line break `>`), **tested** as `neutralises case and whitespace variants of the tool_result tags`;
 3. keeps only `[A-Za-z0-9_-]` of the tool name inside the attribute (the model can send any name);
 4. says in the system prompt that text inside `<tool_result>` blocks and in tool descriptions is untrusted data, never instructions, and that data may be created or changed only when the user asked;
 5. cuts tool descriptions to 300 characters before they reach the model.
+
+Chat route hardening (2026-10-22, **tested**): the 512 KB chat body is parsed only after the session check, so an anonymous request is answered `401` without the body being buffered (`/api/CHAT` too); the loopback connect follows the turn signal; every internal token carries a random `jti`, so the per-request tokens of one turn are all distinct.
 
 **Residual risk (accepted, documented):** none of this makes injection impossible; a model can still be persuaded to call a tool the user did not ask for. What limits the damage: the call runs with the user's own rights, appears in the trace on the page, is audited, and the turn stops after 8 steps or 60 s. There is no human confirmation before a write tool runs. The Phase 6 threat model will revisit this.
 
