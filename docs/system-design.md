@@ -48,7 +48,7 @@ The gateway is two things at once ([learning/03-gateway.md](learning/03-gateway.
 
 ## 2. Data model
 
-Seven tables in database `gateway`, created by the migrations in `apps/gateway/drizzle/` (`0000_init.sql`, and `0001_seeded_slugs.sql` from the final-review fix wave), which run at every start.
+Seven tables in database `gateway`, created by the migrations in `apps/gateway/drizzle/` (`0000_init.sql`, and `0001_seeded_slugs.sql` from the final-review fix wave), which run at every start under a Postgres advisory lock (`MIGRATION_LOCK_KEY`), so two instances never migrate at once.
 
 ```mermaid
 erDiagram
@@ -181,7 +181,7 @@ Mounted at `/api` by `src/api/router.ts`. Order of processing: JSON body parser 
 
 - **Transport:** stateless Streamable HTTP, one JSON-RPC message per request, no session id ([learning/02-mcp-protocol.md](learning/02-mcp-protocol.md)). A new `McpServer` object is built for every request. `GET /mcp` is `405`.
 - **Order of checks:** Host header allow-list (`MCP_ALLOWED_HOSTS`), then **authentication**, then body parsing (limit 1 MB), then the MCP handler.
-- **Authentication** (`src/mcp/auth.ts`, `src/auth/bearer.ts`): `Authorization: Bearer <credential>`. A credential starting with `ugw_` is an API key (SHA-256 lookup, revoked and disabled-user checks, `last_used_at` updated). Anything else is tried as the internal chat token (HS256 JWT, audience `gateway-chat`; the user is re-read so a user disabled after minting is refused). There is **no cache**: a revoked key fails on its very next request. A failure answers `401` with `WWW-Authenticate: Bearer` and the JSON-RPC error `-32001 Unauthorized`.
+- **Authentication** (`src/mcp/auth.ts`, `src/auth/bearer.ts`): `Authorization: Bearer <credential>`. A credential starting with `ugw_` is an API key (SHA-256 lookup, revoked and disabled-user checks, `last_used_at` updated). Anything else is tried as the internal chat token (HS256 JWT, audience `gateway-chat`; the user is re-read so a user disabled after minting is refused). There is **no cache**: a revoked key fails on its very next request. A failure answers `401` with `WWW-Authenticate: Bearer` and the JSON-RPC error `-32001 Unauthorized`. Recognised failures are counted per `req.ip` (`MCP_AUTH_FAILURE_LIMIT_PER_MIN`, 30 a minute); over the limit the answer is `429` + `Retry-After` + `-32029`, with no audit row. Valid credentials and unrecognised garbage never count.
 - **`tools/list`:** the cached catalog of every server that is enabled **and** connected, sorted by name, with no network call.
 - **`tools/call`:** routed to the owning upstream (section 6), result passed through unchanged. Failures that the model can read are `isError` results, not protocol errors.
 
@@ -251,6 +251,7 @@ Audit outcomes: `success`; `error` (the upstream returned `isError`, a protocol 
 | Internal chat token | 5 min | minted fresh for every loopback HTTP request of a chat turn (Phase 4) |
 | `/api` body / `/api/chat` body / `/mcp` body | 100 kb / 512 kb / 1 MB | Express JSON parsers |
 | Chat turn / one LLM request / LLM retries | 60 s / 30 s / 2 | `CHAT_TURN_TIMEOUT_MS`, `LLM_TIMEOUT_MS`, `LLM_MAX_RETRIES` |
+| `/mcp` auth failures per IP / limiter keys | 30 a minute / 10,000 per limiter | `MCP_AUTH_FAILURE_LIMIT_PER_MIN`, `FixedWindowLimiter` `maxKeys` |
 | Chat tool steps / turns per user | 8 per turn / 10 a minute, one at a time | `CHAT_MAX_STEPS`, `CHAT_RATE_LIMIT_PER_MIN` |
 | Chat: tool result to the model / trace preview / tool description | 6,000 / 500 / 300 characters | `chat/agent.ts` |
 | Chat loopback: connect / `tools/list` | 10 s / 20 s | `chat/mcpLoopback.ts` |

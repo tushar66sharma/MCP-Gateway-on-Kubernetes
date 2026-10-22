@@ -47,6 +47,7 @@ A missing or invalid variable stops the process at start with a message that lis
 | `CHAT_TURN_TIMEOUT_MS` | no | `60000` | One whole chat turn (10000-120000). |
 | `CHAT_MAX_STEPS` | no | `8` | Tool steps per turn (1-16). |
 | `CHAT_RATE_LIMIT_PER_MIN` | no | `10` | Chat turns per user per minute (1-120); one turn per user at a time regardless. |
+| `MCP_AUTH_FAILURE_LIMIT_PER_MIN` | no | `30` | Audited `/mcp` authentication failures per client IP per minute (1-1000); over it the gateway answers `429` with `Retry-After`. A valid credential is never limited. |
 | `STORE_TIMEZONE` | no | `UTC` | IANA zone the chat's system prompt uses for "today" (validated; the chart passes `storeSetup.timezone`). |
 
 ## Startup order (`src/main.ts`)
@@ -87,8 +88,9 @@ To run it against a throwaway local Postgres you need every required variable ab
 ## Known limits
 
 - Health and catalog state is held in memory per replica, and a server edit is applied on the replica that handled it. One replica is deployed.
-- The login rate limiter is in memory per replica.
-- There is no rate limit on `/mcp` yet (Phase 5); see [security.md](../../docs/security.md#8-residual-risks).
+- The login, chat and `/mcp` failure limiters are in memory per replica, each capped at 10,000 keys (the oldest inserted key is evicted).
+- `/mcp` limits only recognised failures per client IP (`MCP_AUTH_FAILURE_LIMIT_PER_MIN`); unrecognised garbage is a plain `401` and a flood of it still costs a database lookup per request; see [security.md](../../docs/security.md#8-residual-risks).
+- Migrations run under a Postgres advisory lock (`MIGRATION_LOCK_KEY`), so replicas never migrate at once.
 - The audit row for a tool call is written after the call finishes. A crash in the middle leaves no row.
 - Chat: a failure of the loopback connect or `tools/list` answers a generic `500 INTERNAL`; a client disconnect is logged as `stoppedReason: timeout`; the loopback connect has its own 10 s timeout and does not follow the turn signal. The model sees tool output as untrusted data, but prompt injection remains a residual risk ([security.md](../../docs/security.md#12-untrusted-data-and-prompt-injection)).
 - `scripts/dev/llm-probe.mjs` compares models' tool calling against the captured 15-tool catalogue (`test/fixtures/gateway-tools.json`); it reads the key from `.env` and prints only `set`.
