@@ -6,6 +6,13 @@ metadata:
   name: {{ $ns }}
   labels:
     {{- include "urumi.labels" (dict "root" $ "name" $ns "component" "namespace") | nindent 4 }}
+    # Pod Security Admission (ADR-017): refuse, warn about and audit pods that are not at this level.
+    pod-security.kubernetes.io/enforce: {{ $.Values.podSecurity.level | quote }}
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: {{ $.Values.podSecurity.level | quote }}
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: {{ $.Values.podSecurity.level | quote }}
+    pod-security.kubernetes.io/audit-version: latest
   annotations:
     # Survive `helm uninstall` so store data (PVCs, Secrets) is never deleted by accident.
     helm.sh/resource-policy: keep

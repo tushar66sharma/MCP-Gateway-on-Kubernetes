@@ -22,6 +22,10 @@ namespaces:
   mcp: mcp
   gateway: gateway
 
+# Pod Security Admission level enforced (and warned/audited) on the three app namespaces. See ADR-017.
+podSecurity:
+  level: restricted           # restricted | baseline | privileged
+
 # Pre-created Secrets (production). Empty = the chart generates them.
 secrets:
   existing:
