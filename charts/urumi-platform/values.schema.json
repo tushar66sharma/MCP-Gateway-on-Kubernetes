@@ -48,7 +48,8 @@
             "mcpNotesToken": { "type": "string" },
             "mcpUtilitiesKey": { "type": "string" },
             "gatewaySecrets": { "type": "string" },
-            "gatewayBootstrap": { "type": "string" }
+            "gatewayBootstrap": { "type": "string" },
+            "llmApiKeys": { "type": "string" }
           }
         }
       }
@@ -96,6 +97,40 @@
         "healthIntervalMs": { "type": "integer", "minimum": 1000 },
         "healthTimeoutMs": { "type": "integer", "minimum": 500 },
         "callTimeoutMs": { "type": "integer", "minimum": 11000, "maximum": 120000 },
+        "llm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "timeoutMs", "maxRetries"],
+          "properties": {
+            "provider": { "type": "string", "enum": ["groq", "openrouter"] },
+            "model": { "type": "string" },
+            "baseUrl": { "type": "string", "pattern": "^(https?://[^ ]+)?$" },
+            "fallbackProvider": { "type": "string", "enum": ["", "groq", "openrouter"] },
+            "fallbackModel": { "type": "string" },
+            "timeoutMs": { "type": "integer", "minimum": 5000, "maximum": 120000 },
+            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 }
+          }
+        },
+        "chat": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["turnTimeoutMs", "maxSteps", "rateLimitPerMin"],
+          "properties": {
+            "turnTimeoutMs": { "type": "integer", "minimum": 10000, "maximum": 120000 },
+            "maxSteps": { "type": "integer", "minimum": 1, "maximum": 16 },
+            "rateLimitPerMin": { "type": "integer", "minimum": 1, "maximum": 120 }
+          }
+        },
+        "resources": { "type": "object" }
+      }
+    },
+    "dashboard": {
+      "type": "object",
+      "required": ["enabled", "port"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "object", "properties": { "repository": { "type": "string", "minLength": 1 }, "tag": { "type": ["string", "integer"] } } },
+        "port": { "type": "integer", "const": 8080 },
         "resources": { "type": "object" }
       }
     }

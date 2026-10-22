@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status (end of Phase 3).** The local k3d cluster, the Helm chart, the **store**, the three **MCP servers** (WooCommerce, Notes, Utilities; namespace `mcp`, internal only), the **gateway** and its **Postgres** database (namespace `gateway`; `/api` and `/mcp` on `app.localhost`) are **built and verified**. The **dashboard**, the **chat agent**, the LLM integration and the NetworkPolicies are **not built** (Phases 4-5). Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today), the [Phase 1 store details](#the-store-built-in-phase-1), the [Phase 2 MCP server details](#the-woocommerce-mcp-server-built-in-phase-2) and the [Phase 3 gateway details](#the-gateway-built-in-phase-3).
+> **Status (end of Phase 4).** The local k3d cluster, the Helm chart, the **store**, the three **MCP servers** (WooCommerce, Notes, Utilities; namespace `mcp`, internal only), the **gateway** and its **Postgres** database (namespace `gateway`; `/api` and `/mcp` on `app.localhost`), the **dashboard** (`app.localhost/`) and the **chat agent** with its LLM integration (Groq) are **built and verified**. The **NetworkPolicies** are **not built** (Phase 5). Every component marked **(planned)** below is the target design for a later phase. See [What exists today](#what-exists-today), the [Phase 1 store details](#the-store-built-in-phase-1), the [Phase 2 MCP server details](#the-woocommerce-mcp-server-built-in-phase-2), the [Phase 3 gateway details](#the-gateway-built-in-phase-3) and the [Phase 4 dashboard and chat details](#the-dashboard-and-the-chat-agent-built-in-phase-4).
 
 ## Purpose
 
@@ -56,27 +56,28 @@ flowchart LR
 
 | Component | Tech | Responsibility | Status |
 |---|---|---|---|
-| `apps/dashboard` | React 19 + Vite + TypeScript + Tailwind + Radix UI + TanStack Query + React Router | UI for servers, team, keys, audit log, chat. Talks only to `/api` on the same origin. | **(planned)** — Phase 4 |
-| `apps/gateway` | Node 24 + Express 5 + TypeScript + MCP TS SDK + Drizzle ORM + pg + pino + zod | Dashboard REST API, auth, API keys, upstream registry and health, aggregated `/mcp`, audit log, chat agent. | **Core built in Phase 3** (REST API, auth, keys, invites, registry, health, `/mcp`, audit; verified in the cluster); the chat agent is **(planned)** — Phase 4 |
+| `apps/dashboard` | React 19 + Vite 8 + TypeScript + Tailwind 4 + Radix UI + TanStack Query + React Router 8, served by nginx-unprivileged | UI for the overview, servers, team, keys, audit log and chat. Talks only to `/api` on the same origin. | **Built in Phase 4** (verified with Playwright at 1440 px and 390 px against the cluster) |
+| `apps/gateway` | Node 24 + Express 5 + TypeScript + MCP TS SDK + Drizzle ORM + pg + pino + zod | Dashboard REST API, auth, API keys, upstream registry and health, aggregated `/mcp`, audit log, chat agent. | **Core built in Phase 3** (REST API, auth, keys, invites, registry, health, `/mcp`, audit; verified in the cluster); the **chat agent and LLM layer built in Phase 4** (`POST /api/chat`, verified live with Groq) |
 | `apps/mcp-woocommerce` | Node 24 + MCP TS SDK + zod | MCP tools over the WooCommerce REST API v3. | **Built in Phase 2** (internal only; verified in the cluster) |
 | `apps/mcp-notes` | Node 24 + MCP TS SDK | Upstream #2: simple in-memory notes; bearer-token protected. | **Built in Phase 3** (internal only; verified through the gateway) |
 | `apps/mcp-utilities` | Node 24 + MCP TS SDK | Upstream #3: date ranges, current time, calculator; custom-header protected. | **Built in Phase 3** (internal only; verified through the gateway) |
 | `packages/shared` | TypeScript | Logger, env config loader, MCP HTTP server bootstrap, health endpoints, auth middleware for upstreams. | **Built in Phase 2** |
 | Store (WordPress + WooCommerce, MariaDB, `store-setup` Job) | Deployment + StatefulSet + Job | The WooCommerce store the MCP server operates on. | **Built in Phase 1** (verified: install, upgrade, uninstall/reinstall, fresh install) |
 | Postgres (StatefulSet `postgres-0`) | postgres 17.11 | The gateway's own database. | **Built in Phase 3** |
-| `charts/urumi-platform` | Helm 4 (chart `apiVersion: v2`, also installable with Helm 3.x) | Every Kubernetes resource. | **Store (Phase 1), MCP server (Phase 2), gateway, Postgres and two more MCP servers (Phase 3) built**; grows in Phases 4-5 |
+| `charts/urumi-platform` | Helm 4 (chart `apiVersion: v2`, also installable with Helm 3.x) | Every Kubernetes resource. | **Store (Phase 1), MCP server (Phase 2), gateway, Postgres and two more MCP servers (Phase 3), dashboard and LLM settings (Phase 4) built**; grows in Phase 5 |
+| LLM provider (external) | Groq (`openai/gpt-oss-120b`), optional OpenRouter fallback | Answers the chat agent's model calls over HTTPS. Keys in Secret `llm-api-keys`. | **Used since Phase 4** (Groq verified live; OpenRouter only in the model spike) |
 
 The repo is an **npm workspaces monorepo**: one `package.json` at the root, one lockfile, shared TypeScript config ([ADR-001](decisions/ADR-001-typescript-monorepo.md)).
 
 ## Namespaces and exposure
 
-One Helm release owns three namespaces ([ADR-003](decisions/ADR-003-single-helm-chart-three-namespaces.md)). Only the services behind Traefik are reachable from outside the cluster; everything else is internal. The `store` row, the `mcp` row and the `gateway` row (except `dashboard`) are built; the `dashboard` and the NetworkPolicies are **(planned)**.
+One Helm release owns three namespaces ([ADR-003](decisions/ADR-003-single-helm-chart-three-namespaces.md)). Only the services behind Traefik are reachable from outside the cluster; everything else is internal. All three rows are built; the NetworkPolicies are **(planned, Phase 5)**.
 
 | Namespace | Workloads | Public via Ingress | Internal only |
 |---|---|---|---|
 | `store` | WordPress + WooCommerce (Deployment, PVC), MariaDB (StatefulSet, PVC), `store-setup` Job | WordPress at `store.localhost` | MariaDB, the setup Job |
 | `mcp` | `mcp-woocommerce`, `mcp-notes`, `mcp-utilities` (all built) | Nothing (no Ingress; verified: the only Ingresses are `store` and `gateway`) | All three. Reachable only from gateway pods once NetworkPolicies exist (Phase 5, not built); today any pod in the cluster can reach `mcp-woocommerce`, but needs its bearer token |
-| `gateway` | `gateway` and Postgres (StatefulSet, PVC) built; `dashboard` **(planned)** | `gateway` at `app.localhost/api` and `app.localhost/mcp` (built); `dashboard` at `app.localhost/` **(planned, Phase 4)** | Postgres |
+| `gateway` | `gateway`, `dashboard` and Postgres (StatefulSet, PVC) | `gateway` at `app.localhost/api` and `app.localhost/mcp`; `dashboard` at `app.localhost/` (built in Phase 4) | Postgres |
 
 Hostnames shown are the local defaults; production uses real DNS names (see [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md)).
 
@@ -98,6 +99,7 @@ Hostnames shown are the local defaults; production uses real DNS names (see [ADR
 | k3s on a VPS as deployment target | Needs a real Kubernetes cluster; Vercel/Render offer no Kubernetes and no persistent disks on their free tiers | [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) |
 | Invite links for onboarding | No email service or temporary passwords needed | [ADR-013](decisions/ADR-013-invite-links.md) |
 | Cached, health-checked tool catalog | `tools/list` stays fast and survives dead upstreams | [ADR-014](decisions/ADR-014-cached-tool-catalog.md) |
+| Dashboard in its own nginx pod, same origin as the API | Same cookie and CSRF model, no SPA carve-outs in the gateway, read-only non-root pod | [ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md) |
 
 All records are indexed in [decisions/README.md](decisions/README.md).
 
@@ -179,7 +181,7 @@ flowchart LR
 ```mermaid
 flowchart LR
   CL["MCP client<br/>Inspector, Claude Code (not tested), Cursor (not tested)"]
-  PS["Admin with PowerShell<br/>(dashboard is Phase 4)"]
+  PS["Admin with PowerShell<br/>(or the dashboard, Phase 4)"]
   subgraph ns_gw["namespace gateway"]
     ING["Ingress gateway<br/>app.localhost /api and /mcp"]
     SVC_GW["Service gateway :3000"]
@@ -215,11 +217,47 @@ flowchart LR
 - **Own database** ([ADR-004](decisions/ADR-004-own-database-templates.md), run guide section 10): users, hashed keys, invites, sessions, the registry and the audit log in Postgres, migrated at every start (up to 30 attempts while Postgres starts).
 - **Probes:** `/healthz` (process) and `/readyz` (Postgres answers). Upstreams do not affect readiness.
 - **Behind Traefik** with `TRUST_PROXY=1`, so the login rate limit sees real client addresses.
-- **No LLM configuration in Phase 3.** The chat agent and its keys arrive in Phase 4.
+- **No LLM configuration in Phase 3.** The chat agent and its keys arrived in Phase 4 (next section).
 - **One replica.** Health state and server edits are per replica ([system-design.md](system-design.md#8-trade-offs-and-limits)).
 
 Full detail: [system-design.md](system-design.md) (components, data model, interfaces, state machine), [security.md](security.md), [error-handling.md](error-handling.md), and the workflows [7-11](workflows.md#7-register-an-upstream-and-how-it-appears-in-toolslist).
 
+## The dashboard and the chat agent (built in Phase 4)
+
+```mermaid
+flowchart LR
+  BR["Browser<br/>dashboard (React SPA)"]
+  subgraph ns_gw4["namespace gateway"]
+    ING4["Ingress gateway, host app.localhost<br/>/ to dashboard, /api and /mcp to gateway"]
+    DSH["Deployment dashboard<br/>nginx-unprivileged, uid 101, :8080<br/>read-only root FS"]
+    GW4["Deployment gateway<br/>/api, /mcp, chat agent"]
+    LK{{"Secret llm-api-keys<br/>(created by create-secrets.ps1, optional)"}}
+    PG4[("Postgres")]
+  end
+  LLM4[("Groq API<br/>(OpenRouter as optional fallback)")]
+  UP4["mcp-woocommerce, mcp-notes, mcp-utilities"]
+  BR -- "GET / and /assets (static files)" --> ING4
+  BR -- "/api with the session cookie" --> ING4
+  ING4 --> DSH
+  ING4 --> GW4
+  LK -.-> GW4
+  GW4 -- "SQL" --> PG4
+  GW4 -- "HTTPS chat/completions" --> LLM4
+  GW4 -- "loopback /mcp as the user,<br/>then MCP with upstream credentials" --> UP4
+```
+
+**Reading the diagram.** The browser loads the dashboard's static files from the `dashboard` pod and makes every data call to `/api` on the **same origin**, so the session cookie and the CSRF `Origin` check work exactly as for PowerShell ([ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md)). nginx only serves files and the SPA fallback; it knows nothing about users. The chat runs **inside the gateway**: `POST /api/chat` asks the LLM provider (the only call that leaves the cluster) and runs each requested tool through the gateway's own `/mcp` over loopback, as the logged-in user with a fresh 5-minute internal token per request, so chat tool calls are authenticated, routed and audited (source `chat`) like any other client's ([ADR-010](decisions/ADR-010-chat-agent-loopback.md)). The provider keys come from the Secret `llm-api-keys`, referenced as optional: without it the gateway still starts and the chat reports that it is not configured.
+
+### Dashboard and chat design points
+
+- **Static and same-origin.** A Vite build (one JS bundle of about 570 kB before compression, fonts self-hosted; Vite warns about the chunk size, route-level splitting is a later improvement) served with a strict CSP (`script-src 'self'`, `frame-ancestors 'none'`), `nosniff`, `Referrer-Policy: no-referrer` and a `Permissions-Policy`; `/.well-known/*` answers 404 so MCP clients probing for OAuth metadata get a clear "no" ([security.md](security.md#10-browser-headers-and-the-dashboard)).
+- **Design system** in `apps/dashboard/src/styles/tokens.css` and `components/ui/`: slate surfaces, one indigo accent, status colours always paired with a text label, Inter, a 4 px spacing scale, light and dark themes (system default plus a manual choice), the sidebar becoming a drawer below 1024 px and tables becoming cards below 640 px, WCAG AA contrast and focus-trapped dialogs ([apps/dashboard/README.md](../apps/dashboard/README.md)).
+- **One provider-independent LLM layer** (`apps/gateway/src/chat/llm/`): one OpenAI-compatible adapter configured for Groq or OpenRouter, retries with backoff that never pass the turn deadline, a one-shot fallback ([ai-integration.md](ai-integration.md), [ADR-011](decisions/ADR-011-llm-provider-abstraction.md)).
+- **Limits per turn and per user:** 8 tool steps, 60 s, tool results cut to 6,000 characters for the model, 10 turns a minute per user, one at a time.
+- **Pods:** `dashboard` 10m/16Mi requests, 100m/64Mi limits (measured: 1m CPU, 7Mi); the gateway is unchanged except for the LLM and chat environment variables.
+
+Flows: [workflows 12-16](workflows.md#12-log-in-to-the-dashboard-and-what-happens-when-the-session-ends). How to use it: the run guide's [dashboard](run-guide.md#the-dashboard-phase-4) and [Set up the AI chat](run-guide.md#set-up-the-ai-chat) sections.
+
 ## What exists today
 
-The local k3d cluster `urumi` with its scripts; the Helm chart `charts/urumi-platform` with the **store** (MariaDB, WordPress + WooCommerce, the `store-setup` hook Job, the `store.localhost` Ingress, Secrets), verified by install, upgrade, uninstall/reinstall and a destructive fresh install (see [deployment.md](deployment.md) and [workflows.md](workflows.md)); the OAuth1 check `scripts/check-woo-api.ps1`; the **WooCommerce MCP server** (`apps/mcp-woocommerce`, `packages/shared`, the image build via `scripts/build-images.ps1`, the `mcp` templates in the chart, `scripts/check-mcp-woocommerce.ps1`), verified in the cluster; and the learning and decision documents ([setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md), [MCP protocol notes](learning/02-mcp-protocol.md)). Since Phase 3 also: the **gateway** (`apps/gateway`: REST API, sessions, API keys, invites, server registry with health checks, aggregated `/mcp`, audit log), its **Postgres** database, the **notes** and **utilities** MCP servers, the `gateway` templates in the chart, `scripts/check-gateway.ps1`, and the documents [system-design.md](system-design.md), [error-handling.md](error-handling.md), [security.md](security.md) (partial), [testing.md](testing.md) and [learning/03-gateway.md](learning/03-gateway.md). The dashboard, the chat agent, the LLM integration and NetworkPolicies in the first diagram are **not built yet** (Phases 4-5).
+The local k3d cluster `urumi` with its scripts; the Helm chart `charts/urumi-platform` with the **store** (MariaDB, WordPress + WooCommerce, the `store-setup` hook Job, the `store.localhost` Ingress, Secrets), verified by install, upgrade, uninstall/reinstall and a destructive fresh install (see [deployment.md](deployment.md) and [workflows.md](workflows.md)); the OAuth1 check `scripts/check-woo-api.ps1`; the **WooCommerce MCP server** (`apps/mcp-woocommerce`, `packages/shared`, the image build via `scripts/build-images.ps1`, the `mcp` templates in the chart, `scripts/check-mcp-woocommerce.ps1`), verified in the cluster; and the learning and decision documents ([setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md), [MCP protocol notes](learning/02-mcp-protocol.md)). Since Phase 3 also: the **gateway** (`apps/gateway`: REST API, sessions, API keys, invites, server registry with health checks, aggregated `/mcp`, audit log), its **Postgres** database, the **notes** and **utilities** MCP servers, the `gateway` templates in the chart, `scripts/check-gateway.ps1`, and the documents [system-design.md](system-design.md), [error-handling.md](error-handling.md), [security.md](security.md) (partial), [testing.md](testing.md) and [learning/03-gateway.md](learning/03-gateway.md). Since Phase 4 also: the **dashboard** (`apps/dashboard`, its nginx image `docker/dashboard.Dockerfile`, the `dashboard` templates and the `/` Ingress path), the **chat agent** and its **LLM layer** in the gateway, `scripts/create-secrets.ps1`, `scripts/check-dashboard.ps1` (Playwright), and the documents [ai-integration.md](ai-integration.md), [learning/04-chat-agent.md](learning/04-chat-agent.md) and [ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md). The NetworkPolicies in the first diagram are **not built yet** (Phase 5).

@@ -23,3 +23,4 @@ secrets:
     mcpUtilitiesKey: mcp-utilities-key   # must exist in "mcp" AND "gateway" (key: key)
     gatewaySecrets: gateway-secrets      # must exist in "gateway" (keys: postgres-password, encryption-key = base64 of 32 bytes, internal-token-secret)
     gatewayBootstrap: gateway-bootstrap  # must exist in "gateway" (keys: email, password)
+    llmApiKeys: llm-api-keys             # optional, in "gateway" (keys: GROQ_API_KEY, OPENROUTER_API_KEY); without it chat is disabled

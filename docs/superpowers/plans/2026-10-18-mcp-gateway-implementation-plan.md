@@ -685,7 +685,7 @@ export function requireSession(): RequestHandler; export function requireRole(ro
 **Learning focus:** the LLM tool loop, provider abstraction, acting-as-user.
 
 ### Task 4.1: LLM provider layer (spike first, ≤ 45 min)
-- **Spike:** with the user's Groq key, call `openai/gpt-oss-120b` and `llama-3.3-70b-versatile` with 16 tool definitions and the two demo questions. Pick the model with correct tool calls and lower token use, and check the account's limits page. Record the result in `docs/ai-integration.md` and ADR-011.
+- **Spike:** with the user's Groq key, call `openai/gpt-oss-120b` and `llama-3.3-70b-versatile` with 16 tool definitions and the two demo questions. Pick the model with correct tool calls and lower token use, and check the account's limits page. Record the result in `docs/ai-integration.md` and ADR-011. **As run (2026-10-19):** Groq had shut down `llama-3.3-70b-versatile` for free accounts on 2026-08-16, so the spike compared `openai/gpt-oss-120b` with `openai/gpt-oss-20b` on the real 15-tool catalogue; both 6/6; the default is `openai/gpt-oss-120b` with `reasoning_effort: low` (see ADR-011 and `docs/ai-integration.md`).
 - **Files:** `src/chat/llm/{types,openaiCompatible,providers,registry,errors}.ts`, tests with mocked `fetch`
 - **Interfaces:**
 ```ts
@@ -892,11 +892,11 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
   - Shared `startMcpHttpServer().close({ graceMs })` drains in-flight requests; the gateway drains 25 s on SIGTERM, the pod has a 35 s grace period with a 5 s `preStop` sleep, and the Deployment uses `Recreate`. A chat turn longer than about 25 s is cut by a rollout.
 - **Phase 4 cautions from the final review:** treat a `401` from `POST /api/auth/logout` as already logged out; an SPA fallback in `extraRoutes` must exclude `/mcp`, `/api`, `/healthz` and `/readyz`; the Vite dev server must proxy `/api` and `/mcp` with an `Origin` rewrite rather than loosening the CSRF guard; add CSP, `frame-ancestors 'none'` and `X-Content-Type-Options: nosniff` when HTML ships.
 
-- [ ] **`LlmProvider` result keeps `usage?`** (spec §6.10). `AgentToolTrace.arguments` vs spec `args`: pick one and align the spec. A `ToolCall.arguments` JSON parse failure is returned to the model as a tool error.
-- [ ] **LLM retry-after sleeps must stop at the 60 s turn deadline.**
-- [ ] **nginx SPA fallback must return 404 for `/.well-known/*`** (MCP clients probe OAuth metadata after a 401).
-- [ ] **`Referrer-Policy: no-referrer`** on the invite page.
-- [ ] **Dashboard tsconfig** overrides `moduleResolution: Bundler` and adds the DOM lib.
+- [x] **`LlmProvider` result keeps `usage?`** *(Resolved → Task 4.1: `LlmChatResult.usage?` (plus `provider`, `model`); Task 4.2: the trace field is `arguments` and an unparseable `ToolCall.arguments` becomes a tool error the model sees (`invalid JSON arguments become a tool error`); Task 4.9 aligned spec §6.9 to `arguments`.)* (spec §6.10). `AgentToolTrace.arguments` vs spec `args`: pick one and align the spec. A `ToolCall.arguments` JSON parse failure is returned to the model as a tool error.
+- [x] **LLM retry-after sleeps must stop at the 60 s turn deadline.** *(Resolved → Task 4.1: `LlmChatRequest.deadline`; a wait that would reach it returns the error at once (`does not sleep past the deadline`); Task 4.2 passes the turn deadline on every call.)*
+- [x] **nginx SPA fallback must return 404 for `/.well-known/*`** *(Resolved → Task 4.7: `location ^~ /.well-known/ { return 404; }` in `apps/dashboard/nginx.conf`; verified live through Traefik.)* (MCP clients probe OAuth metadata after a 401).
+- [x] **`Referrer-Policy: no-referrer`** on the invite page. *(Resolved → Task 4.7: nginx sends it on every response; Task 4.5: the invite page also sets a no-referrer policy while mounted (tested).)*
+- [x] **Dashboard tsconfig** overrides `moduleResolution: Bundler` and adds the DOM lib. *(Resolved → Task 4.3: `module: ESNext`, `moduleResolution: Bundler`, `jsx: react-jsx`, `lib: [ES2023, DOM, DOM.Iterable]`, `noEmit`.)*
 
 ### Phase 5
 

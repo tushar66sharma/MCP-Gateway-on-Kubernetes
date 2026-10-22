@@ -42,7 +42,7 @@ The gateway exposes tools from several upstream MCP servers through one `/mcp` e
 - A tool whose prefixed name is invalid is skipped **on its own**. The manager logs a warning and lists its upstream name in `skippedTools`, which the API returns on every `ServerView` (`GET /api/servers`). The server's other tools are still served. Pinned by the manager test "skips only the tool whose prefixed name is invalid".
 - Slugs are immutable in the API: a `PATCH` containing `slug` is refused with `400 VALIDATION_FAILED` ("slug cannot be changed"). A slug that does not match `^[a-z][a-z0-9-]{1,15}$` is refused at creation; a duplicate is `409 CONFLICT`.
 - The description prefix is `[<Server name>] `; with no upstream description the prefix stands alone. The input schema and the other tool metadata are passed through unchanged.
-- Verified live (2026-10-19): the three `ping` tools coexist as `notes__ping`, `utils__ping` and `woo__ping`, and the 15 aggregated names match the pattern ([learning/03-gateway.md](../learning/03-gateway.md#51-toolslist-trimmed-from-15-tools-to-three)). The "warning on the server's detail page" is the `skippedTools` field today; the page itself is Phase 4.
+- Verified live (2026-10-19): the three `ping` tools coexist as `notes__ping`, `utils__ping` and `woo__ping`, and the 15 aggregated names match the pattern ([learning/03-gateway.md](../learning/03-gateway.md#51-toolslist-trimmed-from-15-tools-to-three)). The "warning on the server's detail page" is the `skippedTools` field, shown as a "skipped tools" warning on the dashboard's server page since Phase 4.
 
 ## Revisit if
 

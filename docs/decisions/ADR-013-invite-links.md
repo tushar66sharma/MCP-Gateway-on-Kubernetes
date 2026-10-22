@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. **Implemented in Phase 3** (2026-10-19); the web page for the link is Phase 4.
+Accepted. **Implemented in Phase 3** (2026-10-19); the web page for the link (`/invite/<token>`) and the Team page were built in Phase 4.
 
 ## Date
 
@@ -31,7 +31,7 @@ The gateway has two roles, admin and member. An admin must be able to bring team
 - The link is a bearer secret until used or expired: anyone who obtains it within 72 hours can claim the account. Mitigations are single use, short expiry and storing only the hash; the admin is responsible for sending it over a reasonable channel.
 - If the admin loses the link it cannot be re-displayed; they cancel and create a new invite.
 - The link depends on `PUBLIC_APP_URL` being correct for each environment (including a non-default local port).
-- Implemented and tested (see "As built"); the invite page in the dashboard is not built yet (Phase 4).
+- Implemented and tested (see "As built"); the dashboard's invite page was added in Phase 4 ([workflow 13](../workflows.md#13-accept-an-invite-in-the-browser)). It sends `Referrer-Policy: no-referrer`; the dashboard's nginx access log, unlike the gateway's request log, records the page path with its token ([security.md](../security.md#8-residual-risks), risk 13).
 
 ## As built (Phase 3)
 

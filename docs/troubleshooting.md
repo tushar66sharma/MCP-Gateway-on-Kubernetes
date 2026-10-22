@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Status (end of Phase 3).** Covers the local k3d cluster, the store, the MCP servers, the gateway and its Postgres database. Dashboard and chat problems are added in Phase 4.
+> **Status (end of Phase 4).** Covers the local k3d cluster, the store, the MCP servers, the gateway and its Postgres database, and the dashboard and the AI chat (the entries from [Chat says the AI provider isn't configured](#chat-says-the-ai-provider-isnt-configured) onwards).
 
 Each entry has a **symptom**, a **diagnosis** command and a **fix**. Entries marked **(observed)** happened while building Phase 1; the others are standard Kubernetes/Helm/WooCommerce behavior that follows from the chart's settings and was not deliberately triggered. Commands run from the repository root in PowerShell; refresh `PATH` first if a tool is "not found". Deployment steps: [deployment.md](deployment.md); how the flows work: [workflows.md](workflows.md).
 
@@ -67,6 +67,15 @@ helm status urumi -n urumi-system
 - [Gateway, Notes or Utilities pod in `ErrImagePull`](#gateway-notes-or-utilities-pod-in-errimagepull)
 - [Upgrade fails: `spec.strategy.rollingUpdate: Forbidden`](#upgrade-fails-specstrategyrollingupdate-forbidden)
 - [PowerShell gotchas with kubectl](#powershell-gotchas-with-kubectl)
+- [Chat says the AI provider isn't configured](#chat-says-the-ai-provider-isnt-configured)
+- [Chat says the AI provider rejected the API key (`LLM_AUTH_FAILED`)](#chat-says-the-ai-provider-rejected-the-api-key-llm_auth_failed)
+- [Chat says the AI provider is rate limited (429)](#chat-says-the-ai-provider-is-rate-limited-429)
+- [Chat says the AI provider is unavailable, or the answer was unexpected](#chat-says-the-ai-provider-is-unavailable-or-the-answer-was-unexpected)
+- [The dashboard is blank, or a refresh gives 404](#the-dashboard-is-blank-or-a-refresh-gives-404)
+- [`check-dashboard.ps1` says Playwright Chromium is not installed](#check-dashboardps1-says-playwright-chromium-is-not-installed)
+- [The Vite dev server gives 403 `CSRF_REJECTED`](#the-vite-dev-server-gives-403-csrf_rejected)
+- [The dashboard pod is in `ErrImagePull` (image tag not found)](#the-dashboard-pod-is-in-errimagepull-image-tag-not-found)
+- [`npm ci` prints `EBADENGINE` warnings for jsdom](#npm-ci-prints-ebadengine-warnings-for-jsdom)
 
 ---
 
@@ -715,3 +724,97 @@ kubectl -n gateway patch deployment gateway --type merge --patch-file "$env:TEMP
 - **`-o jsonpath` templates containing quotes** (such as `{"\n"}` for a newline) break in Windows PowerShell 5.1 because the inner double quotes are stripped when the argument is passed to `kubectl`, which then reports `unrecognized character in action` (**observed**); convert with `-o json | ConvertFrom-Json` instead.
 - **`Invoke-RestMethod` and the gateway (verified 2026-10-19).** Mutating calls need `-Headers @{ Origin = 'http://app.localhost' } -ContentType 'application/json'` every time, even `DELETE`. Assign a list response to a variable before piping it (`$keys = Invoke-RestMethod ...; $keys | Select-Object ...`); piping `Invoke-RestMethod` straight into `Select-Object`, `Where-Object` or `Format-Table` printed an empty row for `/api/users`, `/api/keys` and `/api/servers`, and `Where-Object` on the unassigned result found nothing. After a first call that used `-Headers`, a later call on the same `-WebSession` still sent the `Origin` header although it was not passed again, so a test of "missing Origin" must use a fresh session. To read an error body use `$_.ErrorDetails.Message` inside `catch`.
 - **JSON on the `curl.exe` command line.** PowerShell 5.1 strips the double quotes from a JSON string passed as an argument; write the body to a file and send `--data-binary "@file"` (run guide, section 9).
+
+## Chat says the AI provider isn't configured
+
+**Symptom.** The Chat page shows "The AI provider isn't configured" instead of the message box (or a send answers `503 LLM_NOT_CONFIGURED`). `up.ps1` prints a yellow `AI chat : not set up` line.
+
+**Diagnose.**
+
+```powershell
+kubectl -n gateway get secret llm-api-keys -o name                 # does the Secret exist? (prints only its name)
+kubectl -n gateway logs deploy/gateway | Select-String "llm "      # "llm configured: ..." or "llm not configured: chat is disabled"
+```
+
+**Causes and fixes.**
+
+1. **The Secret was never created.** Follow the run guide's [Set up the AI chat](run-guide.md#set-up-the-ai-chat): key into `.env`, then `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\create-secrets.ps1`.
+2. **The key for the configured provider is empty.** The gateway needs the key of `gateway.llm.provider` (Groq by default). `create-secrets.ps1` prints `GROQ_API_KEY: empty` in that case; fix the line in `.env` (`GROQ_API_KEY=<key>`, no spaces around `=`) and run it again. With `provider: openrouter`, `OPENROUTER_API_KEY` is the one that matters.
+3. **The gateway was not restarted after the Secret changed.** A pod reads Secret values only when it starts. The script restarts it unless you passed `-NoRestart`; otherwise run `kubectl -n gateway rollout restart deploy/gateway`.
+4. **A pre-created Secret with another name** (`secrets.existing.llmApiKeys`): `create-secrets.ps1` always writes `llm-api-keys`, so either name yours `llm-api-keys` or create yours with the keys `GROQ_API_KEY` and `OPENROUTER_API_KEY` by hand (known limitation).
+
+Verified 2026-10-19: before the Secret existed the log said `llm not configured: chat is disabled` and the pod ran normally; after `create-secrets.ps1` it said `llm configured: groq/openai/gpt-oss-120b`.
+
+## Chat says the AI provider rejected the API key (`LLM_AUTH_FAILED`)
+
+**Symptom.** "The AI provider rejected the API key. An admin needs to update it." (HTTP 502 `LLM_AUTH_FAILED`). The gateway log has a `chat turn` warning with `"code":"LLM_AUTH_FAILED"` and `"httpStatus":401` (or 403).
+
+**Cause.** The provider refused the key: it was mistyped or truncated when pasted into `.env`, revoked or deleted in the provider's console, or it belongs to another provider than `gateway.llm.provider` (an OpenRouter key in `GROQ_API_KEY`, for example). Not retried, because repeating it cannot help (**tested**; not forced live).
+
+**Fix.** Create a new key in the provider's console ([ai-integration.md](ai-integration.md#3-getting-a-free-key)), replace the line in `.env`, and run `scripts\create-secrets.ps1` again (it restarts the gateway). Never paste the key into a chat or an issue to ask for help; `create-secrets.ps1` only says `set` or `empty`, and that is enough to share.
+
+## Chat says the AI provider is rate limited (429)
+
+**Symptom.** "The AI provider is rate limited. Try again in N seconds." with a countdown; Retry is disabled until it reaches 0. The response is `429 LLM_RATE_LIMITED` with a `Retry-After` header (the provider's value, or 60 s when it gave none). Not to be confused with "You're sending messages too quickly." (`429 RATE_LIMITED`), which is the gateway's own limit of 10 messages per minute per person.
+
+**Cause.** The free plan's limits: Groq allows 30 requests and **8,000 tokens per minute**, 1,000 requests and 200,000 tokens per day for `openai/gpt-oss-120b` (2026-10-19). A one-tool question costs about 3,000 tokens (two model calls with the 15 tool schemas), so two or three quick questions within a minute can hit the per-minute limit; one shared key serves the whole team. The gateway already retried up to 2 times when the provider asked for a wait of 20 s or less, without passing the 60 s turn deadline, and tried the fallback if one is configured. A longer wait (Groq sends one when the **daily** quota is spent, often an hour or more) is not retried: the error comes back at once with the provider's full `Retry-After`, and the fallback is tried immediately if configured. A countdown of many minutes therefore means the daily quota, not the per-minute one.
+
+**Fix.** Wait for the countdown, then press Retry (check the "These actions already ran" list first, if shown). If it happens daily: keep questions narrow, configure the OpenRouter fallback (`gateway.llm.fallbackProvider: openrouter` plus `OPENROUTER_API_KEY`; not tested live through the gateway), or check your usage in the Groq console. The gateway log line shows `"httpStatus":429` and, when a fallback was tried, `fallbackProvider` and `fallbackCode`.
+
+## Chat says the AI provider is unavailable, or the answer was unexpected
+
+**Symptom.** "The AI provider is unavailable right now." (`502 LLM_UNAVAILABLE`) or "The AI returned an unexpected answer. Try rephrasing." (`502 LLM_BAD_RESPONSE`).
+
+**Causes.** *Unavailable:* no internet from the cluster, the provider is down (5xx), or one request took longer than `LLM_TIMEOUT_MS` (30 s); the gateway retried twice. *Unexpected answer:* the model produced a broken tool call (Groq `tool_use_failed`, retried once) or an answer the adapter could not read, or a `gateway.llm.model` that the provider does not know (a 400/404 is reported this way too).
+
+**Fix.** Check the cluster's internet access (`kubectl -n gateway exec deploy/gateway -- node -e "fetch('https://api.groq.com').then(r=>console.log(r.status))"`; **expected** to print a status, not run) and the provider's status page; for a bad answer, rephrase, or check `gateway.llm.model` against the provider's model list and redeploy. The log line's `httpStatus` and `providerCode` say which case it was.
+
+## The dashboard is blank, or a refresh gives 404
+
+**Symptom.** `http://app.localhost/` shows a white page, the browser's 404 page, or a "404 page not found" from Traefik; or a page works when clicked but a browser refresh on it (for example `/servers/<id>`) gives 404.
+
+**Diagnose.**
+
+```powershell
+kubectl -n gateway get pods                          # dashboard-... 1/1 Running?
+kubectl get ingress -n gateway gateway -o yaml | Select-String "path:"   # expect /api, /mcp and /
+curl.exe -s -o NUL -w "%{http_code}\n" http://app.localhost/servers      # expect 200
+kubectl -n gateway logs deploy/dashboard --tail=20
+```
+
+**Causes and fixes.**
+
+- **No dashboard pod or no `/` path:** the release predates Phase 4, or `dashboard.enabled` is false. Run `scripts\up.ps1 -Redeploy`.
+- **Traefik's own "404 page not found":** the Ingress has no `/` rule (see above), or the host is not `app.localhost`.
+- **A refresh on a deep link gives nginx's 404:** the image's `nginx.conf` lost its `try_files $uri /index.html` fallback (it is in `apps/dashboard/nginx.conf`); rebuild with `up.ps1 -Redeploy`. Paths under `/assets/` and `/.well-known/` answer 404 on purpose when the file does not exist.
+- **A white page with no error:** open the browser's developer tools (F12) → Console. A `Content-Security-Policy` error means something tried to load a script from another origin (a browser extension can cause this); a failed `/assets/index-….js` means the page and its assets come from different builds, so reload with Ctrl+F5 (`index.html` is never cached, the assets are).
+
+Verified 2026-10-19: `/` and `/servers` answer 200 with the security headers, `/.well-known/oauth-authorization-server` answers 404, a missing asset answers 404.
+
+## `check-dashboard.ps1` says Playwright Chromium is not installed
+
+**Symptom.** The script prints `Playwright Chromium is not installed. Run this once, then run this script again:` and `npx playwright install chromium`, then exits 1. Or it stops earlier with `Dependencies not installed: run npm ci`.
+
+**Fix.** From the repository root: `npm ci` (if the second message), then `npx playwright install chromium` (about 118 MiB, into `%LOCALAPPDATA%\ms-playwright`; only Chromium is needed). Run it again after an update of `@playwright/test`, because each Playwright version expects its own browser build. Behind a proxy, Playwright needs `HTTPS_PROXY` set to download (**expected**, not tested). Verified 2026-10-19: the message appears when `PLAYWRIGHT_BROWSERS_PATH` points at an empty folder, and the install fixes it.
+
+Other failures of this script: `app.localhost does not resolve` (run `scripts\setup-hosts.ps1` once, as for the other Node checks), `Could not read secret gateway/gateway-bootstrap` (the platform is not deployed: `up.ps1`), and a failing test, whose name and assertion Playwright prints (nothing is recorded, so re-run with the cluster healthy: `kubectl get pods -A`).
+
+## The Vite dev server gives 403 `CSRF_REJECTED`
+
+**Symptom.** While developing the dashboard with `npm run dev -w @urumi/dashboard`, logging in or any change at `http://localhost:5173` fails with `403 CSRF_REJECTED`.
+
+**Cause.** The gateway accepts a mutating call only with `Origin: http://app.localhost`. The dev server's proxy rewrites `Origin` to that value **only** when the request has no `Origin` or comes from `http://localhost:5173` or `http://127.0.0.1:5173`; any other origin is passed through so the gateway can refuse it. So a 403 means the page was opened under another address (a LAN IP, another port, a different host name), or something else sent the request.
+
+**Fix.** Open the dev server exactly at `http://localhost:5173` (port 5173 is fixed with `strictPort`; if it is taken, the dev server stops instead of moving to another port, so free the port). Do not loosen the gateway's CSRF check. The cluster must be up, because the proxy forwards to `http://app.localhost`. Verified in Task 4.3 with `curl.exe` through the proxy: login with the dev origin 200, with `Origin: http://evil.example` 403.
+
+## The dashboard pod is in `ErrImagePull` (image tag not found)
+
+**Symptom.** `kubectl -n gateway get pods` shows `dashboard-...` in `ErrImagePull` or `ImagePullBackOff`, naming an image such as `urumi/dashboard:dev` or a tag the cluster does not hold.
+
+**Cause and fix.** The same as for the other images ([above](#gateway-notes-or-utilities-pod-in-errimagepull)): the cluster has no registry, so the tag must have been built and imported. `scripts\build-images.ps1` builds five images now, including `urumi/dashboard` from `docker/dashboard.Dockerfile`, with one shared tag written to `deploy\.images.local.yaml`. Fix: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`. If the Docker build of the dashboard fails at `npm ci`, the lockfile and `apps/dashboard/package.json` disagree: run `npm install` locally, commit `package-lock.json`, and redeploy. (**Expected**; the failure itself was not reproduced for the dashboard.)
+
+## `npm ci` prints `EBADENGINE` warnings for jsdom
+
+**Symptom.** `npm ci` or `npm install` prints `npm warn EBADENGINE Unsupported engine` for `jsdom@30.1.3` and some `@asamuzakjp/*` packages, naming `node: '^22.22.2 || ^24.15.0 || >=26'`.
+
+**Cause and fix.** jsdom 30 (the dashboard's test environment) declares Node 24.15 or newer; the reference machine has Node 24.0.1. The warnings are harmless there (all 113 dashboard tests pass), and the Docker images use a newer `node:24-alpine`. To silence them, update Node to 24.15 or newer (`winget upgrade OpenJS.NodeJS.LTS`, **expected**, not run here).

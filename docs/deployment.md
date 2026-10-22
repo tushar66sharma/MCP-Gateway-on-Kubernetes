@@ -1,6 +1,6 @@
 # Deployment guide
 
-> **Status (end of Phase 3).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. Phase 2 added the **WooCommerce MCP server** to the chart (namespace `mcp`, internal only) and the image build step that `up.ps1` now runs before every deploy. Phase 3 added the **gateway**, its **Postgres** database, the **Notes** and **Utilities** MCP servers and the `app.localhost` Ingress (`/api` and `/mcp`); `scripts\up.ps1 -Redeploy` deployed them and the checks passed (2026-10-19). The dashboard is not part of the chart yet **(planned, Phase 4)**. The **production (k3s VPS)** section is **(planned, Phase 5)**.
+> **Status (end of Phase 4).** The **local (k3d)** deployment of the store is complete and verified: install, upgrade, uninstall/reinstall and a truly fresh install were all run. Phase 2 added the **WooCommerce MCP server** to the chart (namespace `mcp`, internal only) and the image build step that `up.ps1` now runs before every deploy. Phase 3 added the **gateway**, its **Postgres** database, the **Notes** and **Utilities** MCP servers and the `app.localhost` Ingress (`/api` and `/mcp`); `scripts\up.ps1 -Redeploy` deployed them and the checks passed (2026-10-19). Phase 4 added the **dashboard** (its own nginx pod at `app.localhost/`), the chat agent's **LLM settings** and the optional Secret **`llm-api-keys`** (pushed by `scripts\create-secrets.ps1`); deployed with `up.ps1 -Redeploy` and checked with `scripts\check-dashboard.ps1` (2026-10-19). The **production (k3s VPS)** section is **(planned, Phase 5)**; nothing about production below has been run.
 
 Cost: the local deployment uses no paid service and no cloud account; everything runs on your machine in Docker. (The reason production is a VPS and not Vercel/Render is in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md).)
 
@@ -10,7 +10,7 @@ Related documents: how the pieces fit together [architecture.md](architecture.md
 
 ### What you are building
 
-A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d) with one Helm release called `urumi` in the namespace `urumi-system`. The release creates the namespaces `store`, `mcp` and `gateway`; today `store` contains MariaDB, WordPress with WooCommerce, an Ingress for `store.localhost`, three generated Secrets, and a one-off Job that configures the shop, and `mcp` contains the three MCP servers (WooCommerce, Notes, Utilities: each one Deployment and a ClusterIP Service, plus the Secrets, **no Ingress**), and `gateway` contains Postgres (StatefulSet with a volume), the gateway (Deployment, Service, ConfigMap, Secrets) and the Ingress `gateway` for `app.localhost` (`/api` and `/mcp`).
+A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d) with one Helm release called `urumi` in the namespace `urumi-system`. The release creates the namespaces `store`, `mcp` and `gateway`; today `store` contains MariaDB, WordPress with WooCommerce, an Ingress for `store.localhost`, three generated Secrets, and a one-off Job that configures the shop, and `mcp` contains the three MCP servers (WooCommerce, Notes, Utilities: each one Deployment and a ClusterIP Service, plus the Secrets, **no Ingress**), and `gateway` contains Postgres (StatefulSet with a volume), the gateway (Deployment, Service, ConfigMap, Secrets), the dashboard (Deployment and Service, nginx on port 8080) and the Ingress `gateway` for `app.localhost` (`/api` and `/mcp` to the gateway, `/` to the dashboard). The Secret `llm-api-keys` for the AI chat is **not** created by the chart; you create it with `scripts\create-secrets.ps1` ([step 6b](#step-6b-turn-on-the-ai-chat-optional)).
 
 ### Prerequisites
 
@@ -21,7 +21,7 @@ A single-node Kubernetes cluster (k3s, running inside a Docker container via k3d
 | k3d | v5.9.0 | Creates the cluster | `k3d version` |
 | kubectl | v1.36.1 | Talks to the cluster | `kubectl version --client` |
 | Helm | v4.3.1 | Installs the chart | `helm version` |
-| Node.js, then `npm ci` once from the repository root | 24 (used: 24.0.1) | Not needed to run the store or the MCP server (their images build inside Docker). Needed for the host-side checks (`check-mcp-woocommerce.ps1` imports the MCP SDK from the repository's `node_modules`, the optional REST API check) and for `npm test` | `node --version` |
+| Node.js, then `npm ci` once from the repository root | 24, 24.15 or newer recommended (used: 24.0.1, which works but makes `npm ci` print `EBADENGINE` warnings for jsdom) | Not needed to run anything in the cluster (every image builds inside Docker). Needed for the host-side checks (`check-mcp-woocommerce.ps1`, `check-gateway.ps1`, `check-dashboard.ps1` with `npx playwright install chromium` once) and for `npm test` | `node --version` |
 | Free host port 80 (and 443) | - | The cluster publishes them | see [troubleshooting](troubleshooting.md#port-80-is-already-in-use) |
 
 How these were installed on the reference machine, including the WSL2 memory cap, is in [learning/00-setup-log.md](learning/00-setup-log.md). The store's memory limits add up to 1 GiB (MariaDB 512 Mi + WordPress 512 Mi, plus 768 Mi while the setup Job runs), on top of k3s itself, so the 9 GB WSL2 cap in the setup log is ample. Open a **new** terminal after installing a tool so that `PATH` is refreshed.
@@ -48,15 +48,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1
 
 **Why:** browsers and `curl` resolve `*.localhost` to your own machine automatically, but Node-based tools use the operating system resolver and need a line in the Windows hosts file. This script adds `127.0.0.1 store.localhost app.localhost hello.localhost` (once; it is safe to repeat). **Expected:** a UAC prompt (accept it), then `hosts entries present.` If you will only use a browser (or the scripts in this repository, which do not need it: `scripts\check-woo-api.ps1` connects to 127.0.0.1 through a port-forward and uses `store.localhost` only as a string to sign) you can skip this step.
 
-### Step 3a. Build our program images (new in Phase 2; four images since Phase 3)
+### Step 3a. Build our program images (new in Phase 2; five images since Phase 4)
 
-The three MCP servers and the gateway run from images (`urumi/mcp-woocommerce`, `urumi/mcp-notes`, `urumi/mcp-utilities`, `urumi/gateway`, all with the same tag) that are built from this repository and loaded straight into the cluster (there is no registry locally). `up.ps1` does this automatically. If you deploy with `deploy.ps1` yourself, run this first, **before** step 3:
+The three MCP servers, the gateway and the dashboard run from images (`urumi/mcp-woocommerce`, `urumi/mcp-notes`, `urumi/mcp-utilities`, `urumi/gateway`, `urumi/dashboard`, all with the same tag) that are built from this repository and loaded straight into the cluster (there is no registry locally). `up.ps1` does this automatically. If you deploy with `deploy.ps1` yourself, run this first, **before** step 3:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1
 ```
 
-**Why before:** `helm --wait` waits for every workload, including `mcp-woocommerce`, to be Ready, and Helm runs the store-setup Job only after that. If the image is missing, the MCP pod cannot start and the install waits until the timeout. **What it does:** `docker build` with `docker/node-app.Dockerfile`, `k3d image import` into cluster `urumi`, and a tag file `deploy/.images.local.yaml` (git-ignored) that `deploy.ps1` passes to Helm. The tag is the git short SHA, with `-dirty-<timestamp>` appended when the working tree has any change (even an untracked file); details in the [run guide](run-guide.md#build-the-program-images-build-imagesps1). Without the tag file the chart uses the tag `dev` and the pod cannot start ([troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)).
+**Why before:** `helm --wait` waits for every workload, including `mcp-woocommerce`, to be Ready, and Helm runs the store-setup Job only after that. If the image is missing, the MCP pod cannot start and the install waits until the timeout. **What it does:** `docker build` with `docker/node-app.Dockerfile` (the Node apps) and `docker/dashboard.Dockerfile` (a Node build stage, then `nginxinc/nginx-unprivileged:1.30.6-alpine` with the static files), `k3d image import` into cluster `urumi`, and a tag file `deploy/.images.local.yaml` (git-ignored) that `deploy.ps1` passes to Helm. The tag is the git short SHA, with `-dirty-<timestamp>` appended when the working tree has any change (even an untracked file); details in the [run guide](run-guide.md#build-the-program-images-build-imagesps1). Without the tag file the chart uses the tag `dev` and the pod cannot start ([troubleshooting](troubleshooting.md#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)).
 
 ### Step 3. Install the store
 
@@ -157,6 +157,18 @@ The equivalent raw command, which prints the password:
 
 Try the checkout: add a product to the cart, open the cart, check out as a guest and choose **Cash on delivery**; then find the order in WooCommerce → Orders. (`/checkout/` with an empty cart redirects to `/cart/`; that is normal.) The flow is explained in [workflows.md](workflows.md#2-shopper-checkout-cash-on-delivery).
 
+The team dashboard is at <http://app.localhost/> (user `admin@example.com`; copy the password with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password`). Check it in a browser with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dashboard.ps1` (needs `npx playwright install chromium` once); every page is described in the [run guide](run-guide.md#the-dashboard-phase-4).
+
+### Step 6b. Turn on the AI chat (optional)
+
+The chat needs a free Groq API key. Put it in the git-ignored `.env` as `GROQ_API_KEY=...` (copy `.env.example` to `.env` first), then:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\create-secrets.ps1
+```
+
+**Why a script and not Helm:** the key is yours, not generated, and must never be in a values file. The script reads only `GROQ_API_KEY` and `OPENROUTER_API_KEY` from `.env`, prints `set` or `empty`, creates the Secret `llm-api-keys` in namespace `gateway` with server-side apply (so no plaintext copy lands in an annotation) and restarts the gateway. **Expected:** `secret/llm-api-keys serverside-applied` and `deployment "gateway" successfully rolled out`, then the gateway log line `llm configured: groq/openai/gpt-oss-120b` (verified 2026-10-19). Without the Secret everything else works and the Chat page says it is not configured. Step by step for beginners: the run guide's [Set up the AI chat](run-guide.md#set-up-the-ai-chat); providers, models and limits: [ai-integration.md](ai-integration.md).
+
 ### Step 7. Upgrade (change settings or the chart)
 
 Edit `deploy/values-local.yaml` (or the chart), then run the same command again:
@@ -182,7 +194,7 @@ helm rollback urumi <revision> -n urumi-system --wait
 helm uninstall urumi -n urumi-system
 ```
 
-**Kept on purpose** (so a mistaken uninstall cannot destroy the store): the namespaces `store`, `mcp`, `gateway`; the PVCs `wordpress-data` and `data-mariadb-0`; the Secrets `store-db`, `store-admin`, `store-woo-api`. **Removed:** the WordPress Deployment, MariaDB StatefulSet, Services, Ingress and ConfigMap. The finished `store-setup` Job and its Pod may remain; they are harmless and are replaced on the next deploy.
+**Kept on purpose** (so a mistaken uninstall cannot destroy the store): the namespaces `store`, `mcp`, `gateway`; the PVCs `wordpress-data` and `data-mariadb-0`; the Secrets `store-db`, `store-admin`, `store-woo-api`. **Removed:** the WordPress Deployment, MariaDB StatefulSet, Services, Ingress and ConfigMap. The finished `store-setup` Job and its Pod may remain; they are harmless and are replaced on the next deploy. The Secret `llm-api-keys` is not part of the Helm release at all (the script created it), so uninstall leaves it in place (**expected**); only deleting the `gateway` namespace removes it.
 
 **Reinstall:** run `scripts\deploy.ps1` again with the same release name and namespace. Helm adopts the kept objects and the store comes back with its data (verified on the reference machine, 2026-10-18: the setup log said `WordPress already installed` and `products already present (3); not seeding`).
 
@@ -229,8 +241,9 @@ kubectl -n store create secret generic store-admin --from-literal=password=<your
 | `mcpUtilitiesKey` | `key` | The key of `mcp-utilities` (header `X-Utilities-Key`), in `mcp`, with a copy in `gateway`. |
 | `gatewaySecrets` | `postgres-password`, `encryption-key`, `internal-token-secret` | Namespace `gateway`. `encryption-key` must be base64 of exactly 32 bytes (the gateway refuses to start otherwise); `internal-token-secret` at least 32 characters. Losing the encryption key makes stored upstream credentials unreadable. |
 | `gatewayBootstrap` | `email`, `password` | Namespace `gateway`. The first admin account, used only when the gateway database has no users. |
+| `llmApiKeys` | `GROQ_API_KEY`, `OPENROUTER_API_KEY` | Namespace `gateway`. **Never generated by the chart**, locally or in production. `deploy/values-prod.yaml` names it `llm-api-keys`; it is referenced with `optional: true`, so a missing Secret leaves the gateway running with the chat "not configured". An empty value means that provider is not configured. Create it on the server without putting the key on the command line or in shell history, for example from a file you delete afterwards: `kubectl -n gateway create secret generic llm-api-keys --from-file=GROQ_API_KEY=./groq.txt --from-literal=OPENROUTER_API_KEY=` (**not tested on a VPS**). `scripts\create-secrets.ps1` does the same from a Windows machine whose kube context points at the cluster, but it always uses the name `llm-api-keys`. After changing it, restart the gateway: `kubectl -n gateway rollout restart deploy/gateway`. |
 
-The chart renders the generated copies identically in both namespaces (checked with `helm template`). The pre-created variant for the gateway was **not tested** on a cluster (there is no production cluster yet).
+The chart renders the generated copies identically in both namespaces (checked with `helm template`). The pre-created variant for the gateway was **not tested** on a cluster (there is no production cluster yet). For production, the dashboard needs nothing extra: its image is pulled from the registry like the others (`<registry>/urumi/dashboard:<tag>`) and it is served on the same host as the API (`global.appHost`), which keeps the cookie and CSRF model unchanged ([ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md)). This is **not tested on a VPS** (Phase 5).
 
 `deploy/values-prod.yaml` already names these Secrets and points to this procedure. It also has two placeholders for our own images, `global.imageRegistry` and `global.imageTag` (both `CHANGE-ME`): production pulls `<registry>/urumi/mcp-woocommerce:<tag>` from a real registry instead of importing it. Pushing images to a registry is **(planned, Phase 5)**; the local import workflow is the only one exercised.
 
@@ -259,6 +272,8 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 | Gateway and Postgres status | `kubectl -n gateway get pods,svc,ingress` |
 | Gateway and Postgres logs | `kubectl -n gateway logs deploy/gateway` and `kubectl -n gateway logs postgres-0` |
 | Gateway end-to-end check | `scripts\check-gateway.ps1` (add `-Write`, `-Isolation`); see the [run guide](run-guide.md#9-the-gateway-phase-3) |
+| Dashboard status, logs and check | `kubectl -n gateway get pods`, `kubectl -n gateway logs deploy/dashboard`, `scripts\check-dashboard.ps1` |
+| Is the AI chat configured? | `kubectl -n gateway get secret llm-api-keys -o name` and `kubectl -n gateway logs deploy/gateway \| Select-String "llm "` |
 | Release state | `helm status urumi -n urumi-system`, `helm history urumi -n urumi-system` |
 | What values are in use? | `helm get values urumi -n urumi-system` |
 
@@ -267,8 +282,8 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 - Single node, single replica for every component; no backups and no high availability.
 - The `local-path` storage lives inside the k3d node container: it survives pod restarts and `helm uninstall` (both verified), and survives `k3d cluster stop` (verified 2026-10-18), but not `cluster-down.ps1`.
 - No TLS locally (plain HTTP), and no mail server, so WooCommerce e-mails are not delivered.
-- The cluster needs internet access for image pulls and for downloading WooCommerce 11.2.1 during setup.
+- The cluster needs internet access for image pulls and for downloading WooCommerce 11.2.1 during setup, and the gateway needs it for the AI chat (Groq's free plan: about 8,000 tokens per minute, roughly two chat questions a minute for the whole team; see [ai-integration.md](ai-integration.md#5-limits-and-token-budget)).
 
 ## Production (k3s VPS) — (planned, Phase 5)
 
-Not built yet. The planned approach is one k3s node on a VPS with the same chart and `deploy/values-prod.yaml` (currently a stub with placeholder hostnames, TLS settings and pre-created Secret names); see [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) for why a VPS is used instead of Vercel/Render.
+Not built yet. The planned approach is one k3s node on a VPS with the same chart and `deploy/values-prod.yaml` (currently a stub with placeholder hostnames, TLS settings and pre-created Secret names, including the optional `llm-api-keys`); see [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) for why a VPS is used instead of Vercel/Render, and [ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md) for why the dashboard is not put on a separate static host.

@@ -1,4 +1,5 @@
-# Builds our Node app images, imports them into the k3d cluster and records the tag for deploy.ps1.
+# Builds our images (the Node apps and the dashboard), imports them into the k3d cluster and records the
+# tag for deploy.ps1.
 #   powershell -ExecutionPolicy Bypass -File scripts\build-images.ps1
 # The tag is the git short SHA, plus -dirty-<timestamp> when the working tree has changes, so every
 # build of changed code gets a new tag and Kubernetes rolls the pods. Never prints secrets.
@@ -24,10 +25,16 @@ if ($LASTEXITCODE -ne 0) { Stop-WithError 'git status failed.' }
 $tag = $sha
 if ($dirty) { $tag = "$sha-dirty-$(Get-Date -Format 'yyyyMMddHHmmss')" }
 
-foreach ($app in $apps) {
+# Node apps share docker/node-app.Dockerfile (APP build arg); the dashboard is static files on nginx.
+$builds = @($apps | ForEach-Object { @{ Name = $_; Dockerfile = 'docker/node-app.Dockerfile'; BuildArgs = @('--build-arg', "APP=$_") } })
+$builds += @{ Name = 'dashboard'; Dockerfile = 'docker/dashboard.Dockerfile'; BuildArgs = @() }
+
+foreach ($b in $builds) {
+  $app = $b.Name
   $image = "urumi/${app}:$tag"
   Write-Host "Building $image ..."
-  docker build -f docker/node-app.Dockerfile --build-arg "APP=$app" -t $image .
+  $buildArgs = $b.BuildArgs
+  docker build -f $b.Dockerfile @buildArgs -t $image .
   if ($LASTEXITCODE -ne 0) { Stop-WithError "docker build failed for $app." }
   Write-Host "Importing $image into k3d cluster 'urumi' ..."
   k3d image import $image -c urumi

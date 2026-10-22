@@ -1,0 +1,347 @@
+[
+  {
+    "name": "notes__create_note",
+    "description": "[Notes] Save a note with a title and text. Returns the new note.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "title",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "notes__delete_note",
+    "description": "[Notes] Delete a note by id.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "notes__list_notes",
+    "description": "[Notes] List saved notes, newest first.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "limit": {
+          "default": 20,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    }
+  },
+  {
+    "name": "notes__ping",
+    "description": "[Notes] Health check: returns ok and the server time.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "notes__search_notes",
+    "description": "[Notes] Find notes whose title or text contains the query (case-insensitive).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "limit": {
+          "default": 20,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  {
+    "name": "utils__calculate",
+    "description": "[Utilities] Evaluate arithmetic: + - * / % ^ and parentheses, decimals allowed.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "expression"
+      ]
+    }
+  },
+  {
+    "name": "utils__current_time",
+    "description": "[Utilities] Current time in UTC and in a time zone (default: the store's).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "timezone": {
+          "description": "IANA time zone, e.g. Asia/Kolkata",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    }
+  },
+  {
+    "name": "utils__date_range",
+    "description": "[Utilities] Start and end (UTC ISO) of today, yesterday or the last 7 days in a time zone (default: the store's).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": [
+            "today",
+            "yesterday",
+            "last_7_days"
+          ]
+        },
+        "timezone": {
+          "description": "IANA time zone, e.g. Asia/Kolkata",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "preset"
+      ]
+    }
+  },
+  {
+    "name": "utils__ping",
+    "description": "[Utilities] Health check: returns ok and the server time.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "woo__create_product",
+    "description": "[WooCommerce] Create a simple product with a name and regular price (e.g. \"12.50\"). Published by default.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "regular_price": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "status": {
+          "default": "publish",
+          "type": "string",
+          "enum": [
+            "publish",
+            "draft"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "regular_price"
+      ]
+    }
+  },
+  {
+    "name": "woo__get_order",
+    "description": "[WooCommerce] Get one order with items, totals, customer and payment method.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "woo__list_orders",
+    "description": "[WooCommerce] List orders, newest first. Use period=today|yesterday|last_7_days (store time zone) or after/before date-times with offset.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "string",
+          "enum": [
+            "today",
+            "yesterday",
+            "last_7_days"
+          ]
+        },
+        "after": {
+          "type": "string",
+          "description": "ISO 8601 date-time with offset, e.g. 2026-10-18T00:00:00+05:30"
+        },
+        "before": {
+          "type": "string",
+          "description": "ISO 8601 date-time with offset, e.g. 2026-10-18T00:00:00+05:30"
+        },
+        "status": {
+          "default": "any",
+          "type": "string",
+          "enum": [
+            "pending",
+            "processing",
+            "on-hold",
+            "completed",
+            "cancelled",
+            "refunded",
+            "failed",
+            "any"
+          ]
+        },
+        "page": {
+          "default": 1,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "per_page": {
+          "default": 10,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    }
+  },
+  {
+    "name": "woo__list_products",
+    "description": "[WooCommerce] List store products. Optional search text, status filter and paging.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "search": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "status": {
+          "default": "any",
+          "type": "string",
+          "enum": [
+            "publish",
+            "draft",
+            "pending",
+            "private",
+            "any"
+          ]
+        },
+        "page": {
+          "default": 1,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "per_page": {
+          "default": 10,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      }
+    }
+  },
+  {
+    "name": "woo__ping",
+    "description": "[WooCommerce] Health check: returns ok and the server time.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "woo__update_order_status",
+    "description": "[WooCommerce] Change an order's status (pending, processing, on-hold, completed, cancelled, refunded, failed).",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "processing",
+            "on-hold",
+            "completed",
+            "cancelled",
+            "refunded",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "order_id",
+        "status"
+      ]
+    }
+  }
+]

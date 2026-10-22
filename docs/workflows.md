@@ -1,10 +1,10 @@
 # Workflows
 
-> **Status (end of Phase 3).** Workflows 7-11 are the **gateway** workflows (registering an upstream, a tool call through the gateway, the API key lifecycle, inviting a teammate, an upstream going down and coming back); each says which steps were run on the cluster and which are covered by automated tests only. The dashboard and chat workflows are **(planned, Phase 4)**; NetworkPolicies and production values are **(planned, Phase 5)**; none is described here as available. The **store** workflows (installing the store, a shopper checking out, signed REST access to WooCommerce) and the **MCP tool call to the store** (workflow 6) exist today. Planned workflows are added here as they are built. Workflow 5 (customer account and order history) is verified by `scripts/dev/customer-order-smoke.ps1`. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
+> **Status (end of Phase 4).** Workflows 12-16 are the **dashboard and chat** workflows (logging in, accepting an invite, creating a key, a chat turn with its tool loop, an admin editing a server); each says what the Playwright smoke and the live chat checks ran on the cluster and what is covered by automated tests only. Workflows 7-11 are the **gateway** workflows (registering an upstream, a tool call through the gateway, the API key lifecycle, inviting a teammate, an upstream going down and coming back), with the same labelling. NetworkPolicies and production values are **(planned, Phase 5)** and are not described here as available. The **store** workflows (installing the store, a shopper checking out, signed REST access to WooCommerce) and the **MCP tool call to the store** (workflow 6) exist today. Planned workflows are added here as they are built. Workflow 5 (customer account and order history) is verified by `scripts/dev/customer-order-smoke.ps1`. Workflows 1, 3 and 4 were run against the real local cluster (unless a statement is explicitly marked *expected*, meaning derived from the configuration and not forced to happen). **Workflow 2 (cart, order, wp-admin) was not executed by us**: it is the manual Phase 1 exit check that you run, so its diagram and order-flow rows are labelled *expected, verified by the manual exit check*. Only the page and API checks listed in that section were run.
 
 How to read the failure sections: every workflow answers the same questions: what can fail, how it is detected, what is retried, what the timeouts are, how duplicates and half-finished work are handled, what the user sees, and where the logs are. Statements marked **(observed)** were seen during Phase 1; statements marked **(expected)** follow from the Kubernetes/Helm/WooCommerce documented behavior and the chart's settings but were not deliberately triggered.
 
-Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install) | [5. Customer account and order history](#5-customer-account-and-order-history) | [6. MCP tool call to the store](#6-mcp-tool-call-to-the-store) | [7. Register an upstream](#7-register-an-upstream-and-how-it-appears-in-toolslist) | [8. MCP tool call through the gateway](#8-mcp-tool-call-through-the-gateway) | [9. API key lifecycle](#9-api-key-lifecycle-create-use-revoke) | [10. Invite a teammate](#10-invite-a-teammate) | [11. Upstream goes down and comes back](#11-upstream-goes-down-and-comes-back)
+Contents: [1. Store install](#1-store-install-helm--hook-job) | [2. Shopper checkout](#2-shopper-checkout-cash-on-delivery) | [3. WooCommerce REST access (OAuth1)](#3-woocommerce-rest-access-oauth1) | [4. Data lifecycle: upgrade, uninstall, fresh install](#4-data-lifecycle-upgrade-uninstall-reinstall-fresh-install) | [5. Customer account and order history](#5-customer-account-and-order-history) | [6. MCP tool call to the store](#6-mcp-tool-call-to-the-store) | [7. Register an upstream](#7-register-an-upstream-and-how-it-appears-in-toolslist) | [8. MCP tool call through the gateway](#8-mcp-tool-call-through-the-gateway) | [9. API key lifecycle](#9-api-key-lifecycle-create-use-revoke) | [10. Invite a teammate](#10-invite-a-teammate) | [11. Upstream goes down and comes back](#11-upstream-goes-down-and-comes-back) | [12. Log in to the dashboard](#12-log-in-to-the-dashboard-and-what-happens-when-the-session-ends) | [13. Accept an invite](#13-accept-an-invite-in-the-browser) | [14. Create an API key in the dashboard](#14-create-an-api-key-in-the-dashboard) | [15. A chat turn](#15-a-chat-turn-tool-loop-retries-and-fallback) | [16. An admin edits a server](#16-an-admin-edits-a-server-and-the-url-origin-rule)
 
 ---
 
@@ -398,7 +398,7 @@ sequenceDiagram
 
 **What it does.** An admin adds an MCP server (a name, a URL, optionally a credential). The gateway checks the URL is safe, stores the credential encrypted, connects, reads the server's tools, and from then on lists them with a `<slug>__` prefix. The three built-in servers (`woo`, `notes`, `utils`) are added the same way at the gateway's first start, from the Helm value `SEED_SERVERS`.
 
-**Actors.** The admin (PowerShell today, the dashboard in Phase 4), the `/api` router, the SSRF guard, the crypto module, Postgres, the upstream manager, the upstream MCP server, and later any MCP client.
+**Actors.** The admin (the dashboard's **Add server** form since Phase 4, or PowerShell), the `/api` router, the SSRF guard, the crypto module, Postgres, the upstream manager, the upstream MCP server, and later any MCP client.
 
 **Evidence.** The seeded path (`upsert` and the first check) ran on the cluster: all three servers `connected` with 6, 5 and 4 tools. The SSRF refusals were run live (metadata address, loopback, private address, `file:`, URL with a password), and a duplicate slug (`409`) and a bad slug (`400`). A **new** server was *not* created on the cluster, to keep the registry as it is; that path is covered by `apps/gateway/test/api/servers.test.ts` and `test/upstreams/manager.test.ts`.
 
@@ -543,7 +543,7 @@ Logs: one `tool call` line per call (tool, server, outcome, duration, user) and 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as User (PowerShell or dashboard later)
+    participant U as User (PowerShell or the dashboard)
     participant API as gateway /api
     participant DB as Postgres
     participant C as MCP client
@@ -621,7 +621,7 @@ sequenceDiagram
 
 **Reading the diagram.** The link is a bearer secret: until it is used or expires (72 h), whoever holds it can claim the account. Only the SHA-256 of the token is stored and the request log writes `/api/invites/:token` instead of the token. The accept step claims the invite and creates the user in one atomic operation, so two people racing on one link cannot both succeed. A second use, an expired link and a cancelled link all give the same `404 INVITE_INVALID`.
 
-**Verified live (2026-10-19).** Create (`201`, link shape `http://app.localhost/invite/<43 characters>`), list (the pending invite with `expired: False`), preview of the link (email, role, expiry), cancel (`204`) and the cancelled link answering `404 INVITE_INVALID`. The *accept* step was **not run on the cluster** (it would leave a test user behind); it is covered by `apps/gateway/test/api/invites.test.ts`, including single use, expiry and the conflict case. There is no web page for the link until Phase 4: the teammate can use `POST /api/invites/<token>/accept` directly, as in the [run guide](run-guide.md#invite-a-teammate).
+**Verified live (2026-10-19).** Create (`201`, link shape `http://app.localhost/invite/<43 characters>`), list (the pending invite with `expired: False`), preview of the link (email, role, expiry), cancel (`204`) and the cancelled link answering `404 INVITE_INVALID`. The *accept* step was **not run on the cluster** (it would leave a test user behind); it is covered by `apps/gateway/test/api/invites.test.ts`, including single use, expiry and the conflict case. Since Phase 4 the link opens the dashboard's invite page ([workflow 13](#13-accept-an-invite-in-the-browser)); `POST /api/invites/<token>/accept` still works directly, as in the [run guide](run-guide.md#invite-a-teammate).
 
 ### Failure and recovery
 
@@ -686,3 +686,298 @@ sequenceDiagram
 | `blocked by SSRF guard (<reason>)` | The name now resolves to a forbidden address | Check what the name resolves to; the allow-list is `SSRF_ALLOWED_INTERNAL_HOSTS` |
 | Tools never return after the pod is back | A check is still running or the server is `disabled` | Wait 20 s; `GET /api/servers`; check `enabled` |
 | The gateway itself is down | `/mcp` and `/api` fail; Kubernetes restarts the pod | [Troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts) |
+
+---
+
+## 12. Log in to the dashboard (and what happens when the session ends)
+
+**What it does.** A person opens `http://app.localhost/`, is sent to the login page, signs in with email and password, and lands where they wanted to go. Later, when the 12-hour session ends while a page is open, the next request takes them back to the login page and then back to the same page. Built in Phase 4 (`apps/dashboard/src/lib/auth.tsx`, `lib/api.ts`, `pages/Login.tsx`); the API side is Phase 3 ([workflow 9](#9-api-key-lifecycle-create-use-revoke)).
+
+**Actors.** The browser running the dashboard (React); Traefik; the `dashboard` pod (nginx, static files only); the gateway `/api`; Postgres.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor B as Browser (dashboard)
+    participant N as dashboard pod (nginx)
+    participant API as gateway /api
+    participant DB as Postgres
+
+    B->>N: GET /servers (or any page)
+    N-->>B: index.html (SPA fallback) and the hashed JS and CSS
+    B->>API: GET /api/auth/me (no cookie yet)
+    API-->>B: 401 UNAUTHENTICATED
+    B->>B: RequireAuth redirects to /login?next=%2Fservers
+    B->>API: POST /api/auth/login {email, password}, Origin and JSON set
+    API->>API: CSRF guard, then the limiter (10 a minute per IP and email)
+    alt more than 10 attempts
+        API-->>B: 429 RATE_LIMITED, Retry-After
+        B->>B: "Too many attempts. Try again in N seconds"
+    end
+    API->>DB: user by email, argon2id verify, insert session (hash of the cookie)
+    alt wrong email or password, or user disabled
+        API-->>B: 401 INVALID_CREDENTIALS
+        B->>B: "Email or password is incorrect"
+    end
+    API-->>B: 200 {user}, Set-Cookie ugw_session (HttpOnly, SameSite=Lax, 12 h)
+    B->>B: clear the query cache, store the user, go to next (only a same-site path)
+    Note over B,API: later: the session expires while a page is open
+    B->>API: GET /api/servers (the 10 s refetch)
+    API-->>B: 401 UNAUTHENTICATED
+    B->>B: onUnauthenticated: clear the cache, go to /login?next=<current path>
+```
+
+**Reading the diagram.** nginx never decides anything about users: it serves the same `index.html` for every page path, and the page asks the API who is logged in (steps 1-4). The decision points are the API's: the CSRF guard (the browser sends `Origin` itself; `apiFetch` always sends `Content-Type: application/json` on a mutating call), the login limiter and the password check. `next` is followed only when it is a path on this site (one leading `/`, not `//`, no backslash or control characters, not `/login`), so a crafted link cannot send someone to another site after logging in (**tested**: `rejects next=//evil.example`). Any `401 UNAUTHENTICATED` from any API call (except the login call itself) clears every cached response and returns to the login page with `next` set (**tested**: `401 redirects to login with next`). A `401` from **Log out** counts as logged out (**tested**). If `/api/auth/me` fails with a network error or a 5xx, the page shows a retryable error instead of a misleading login page (**tested**).
+
+**Verified.** Every Playwright run logs in through this form (`e2e/auth.setup.ts`) and logs out (`smoke.spec.ts`, desktop and mobile; **live** 2026-10-19). The session-expiry redirect and the 429 message are covered by unit tests, not forced live.
+
+### Failure and recovery
+
+| What can fail | Detected by | Retried? | What the user sees | Logs |
+|---|---|---|---|---|
+| Wrong email or password, or a disabled user | `POST /api/auth/login` answers `401 INVALID_CREDENTIALS` (one answer for all three) | no | "Email or password is incorrect" in an alert box | gateway `request` line with status 401 |
+| Too many attempts | login limiter, `429 RATE_LIMITED` | no; wait `Retry-After` | "Too many attempts. Try again in N seconds" | request line 429 |
+| Empty field | the form, before any request | n/a | an inline error, focus on the first empty field | none |
+| Gateway unreachable (pod restarting, no network) | `fetch` fails or the answer is not JSON (for example a proxy's HTML error page) | reads retry network errors and 5xx up to 2 times; a login submit is not retried | "Can't reach the gateway…"; on a page load, an error state with **Try again** | `kubectl -n gateway get pods` |
+| Session expired, or the user was disabled while a page is open | any `401 UNAUTHENTICATED` | no | back on the login page; after signing in, back on the same page | request lines with 401 |
+| CSRF rejected (an extension or proxy stripped `Origin`) | `403 CSRF_REJECTED` | no | the error message with its request id | request line 403 |
+
+---
+
+## 13. Accept an invite in the browser
+
+**What it does.** An admin creates an invite on the Team page and sends the link (`http://app.localhost/invite/<token>`) themselves. The invitee opens it, sees which email it is for, chooses a name and a password, and is logged in. The API side and its rules (single use, 72 h, only the hash stored) are [workflow 10](#10-invite-a-teammate); this workflow adds the pages (`apps/dashboard/src/pages/Team.tsx`, `pages/AcceptInvite.tsx`).
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor A as Admin (Team page)
+    participant API as gateway /api
+    actor T as Invitee (browser)
+    participant N as dashboard pod (nginx)
+
+    A->>API: POST /api/invites {email, role}
+    API-->>A: 201 {invite, link} shown once in a dialog
+    A->>T: sends the link over a channel they trust
+    T->>N: GET /invite/<token>
+    N-->>T: index.html with Referrer-Policy no-referrer
+    T->>API: GET /api/invites/<token> (public preview)
+    alt unknown, used, cancelled or expired
+        API-->>T: 404 INVITE_INVALID
+        T->>T: "Invite link not valid. Ask your admin for a new one."
+    end
+    API-->>T: {email, role, expiresAt}
+    T->>T: name, password (10 or more) and confirm, checked in the form first
+    T->>API: POST /api/invites/<token>/accept {name, password}
+    API->>API: claim the invite and create the user in one transaction
+    alt someone created that email meanwhile
+        API-->>T: 409 CONFLICT
+    end
+    API-->>T: 201 {user}, Set-Cookie ugw_session
+    T->>T: start the session (clear the cache, store the user), open the Overview
+```
+
+**Reading the diagram.** The link is a bearer secret until it is used, so the page handles it carefully: the token stays in the page's memory only (the preview query is dropped from the cache as soon as the page closes), `Referrer-Policy: no-referrer` stops the browser from sending the URL to any other site, and the gateway's request log writes `/invite/:token` and `/api/invites/:token` instead of the token. The accept call claims the invite and creates the user atomically, so two people racing on one link cannot both win; the loser gets `404 INVITE_INVALID`. After a successful accept the cookie is already set, so the page only has to load the new user.
+
+**Verified.** The Team page part (create, the one-time link dialog, cancel) runs in every Playwright run (**live** 2026-10-19). The accept page is covered by `test/AcceptInvite.test.tsx` and the API by `apps/gateway/test/api/invites.test.ts`; accepting a link on the cluster was **not run** (it would leave a test user behind that can only be disabled, not deleted).
+
+### Failure and recovery
+
+| What can fail | Detected by | Retried? | What the invitee sees | Logs |
+|---|---|---|---|---|
+| Link used, cancelled, expired (72 h) or mistyped | preview `404 INVITE_INVALID` | no | "Invite link not valid" and "Ask your admin for a new one" | gateway request line `/api/invites/:token` 404 |
+| Password shorter than 10, or the two passwords differ | the form before sending; the API also answers `400 VALIDATION_FAILED` | n/a | inline field errors; the invite stays usable | none, or a 400 line |
+| The email got an account in the meantime | accept `409 CONFLICT` | no | the error message; the admin should cancel the invite | 409 line |
+| The link was claimed between preview and submit | accept `404 INVITE_INVALID` | no | the "not valid" message | 404 line |
+| Gateway unreachable | network error | the preview retries network errors up to 2 times; the submit is not retried | an error state with **Try again** | `kubectl -n gateway get pods` |
+| The link leaks (forwarded mail, a shared screenshot, or the dashboard's nginx access log, which keeps request paths) | nothing detects it | n/a | whoever opens it first gets the account | the admin sees the pending invite on the Team page and can **Cancel** it ([security.md](security.md#8-residual-risks)) |
+
+---
+
+## 14. Create an API key in the dashboard
+
+**What it does.** A person creates a personal API key on the API keys page and copies it into an MCP client. The key is shown exactly once. API side: [workflow 9](#9-api-key-lifecycle-create-use-revoke); page: `apps/dashboard/src/pages/Keys.tsx` and `features/keys/{CreateKeyDialog,KeyCreatedDialog,clientSnippets}`.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User (API keys page)
+    participant API as gateway /api
+    participant DB as Postgres
+
+    U->>U: Create key, type a name (checked in the form)
+    U->>API: POST /api/keys {name} (a plain function call, not cached)
+    API->>API: generate ugw_ plus 43 base62 characters
+    API->>DB: insert the 12-character prefix and the SHA-256 hash only
+    API-->>U: 201 {key, plaintext}
+    U->>U: one-time dialog: the key, plus Claude Code, Cursor and MCP Inspector setups
+    Note over U: Esc and clicks outside are ignored, Close unlocks after "I have copied the key"
+    U->>U: Close: the plaintext is dropped from memory, the list reloads
+    U->>API: GET /api/keys
+    API-->>U: the list with prefixes, never a key or a hash
+```
+
+**Reading the diagram.** The plaintext exists in three places only, and briefly: the create response, the dialog's component state, and wherever the user pastes it. The create call is a plain function rather than a cached mutation, so the key never enters the query cache, and nothing is written to `localStorage` or `sessionStorage` (**tested**: after the dialog closes, storage and the page hold no trace of it). The dialog cannot be dismissed by accident: Esc and clicking outside do nothing, and **Close** stays disabled until "I have copied the key" is ticked. The snippets embed the key once each (`claude mcp add --transport http urumi-gateway http://app.localhost/mcp --header "Authorization: Bearer <key>"`, a Cursor `mcp.json` block, an MCP Inspector command); Claude Code and Cursor are **not tested** against the gateway. **Revoke** asks for confirmation and takes effect on the key's next request.
+
+**Verified.** Playwright creates a key, finds the one-time dialog, checks inside the page that the key and the snippets have the right shape (only true/false values come back, so a failure never prints the key), closes it and revokes the key, at desktop and phone width (**live** 2026-10-19).
+
+### Failure and recovery
+
+| What can fail | Detected by | Retried? | What the user sees | Logs |
+|---|---|---|---|---|
+| Empty or too long name | the form; the API's `400 VALIDATION_FAILED` | n/a | inline error | none, or a 400 line |
+| Session expired | `401 UNAUTHENTICATED` | no | the login page ([workflow 12](#12-log-in-to-the-dashboard-and-what-happens-when-the-session-ends)); no key was created | 401 line |
+| Gateway unreachable during create | network error | **no** (a retry could create a second key) | the error in the dialog; check the list, and revoke a key you did not expect | `kubectl -n gateway get pods` |
+| The tab is closed before the key was copied | nothing can detect it | n/a | the key is lost; the list still shows it by prefix | revoke it and create another |
+| The key leaks (pasted into a chat, committed) | nothing detects it | n/a | anyone can call tools as the user until it is revoked | **Revoke** on the page; the Audit log shows its use |
+| An admin issues a key for a member (Team → Keys…) who is disabled, or for another admin | `409 CONFLICT` / `403 FORBIDDEN` | no | inline error in the dialog (the issue form is hidden for other admins) | 409 / 403 line |
+
+---
+
+## 15. A chat turn (tool loop, retries and fallback)
+
+**What it does.** A person types a question on the Chat page. The gateway runs one **agent turn**: it asks the language model, runs the tools the model asks for **as that person** through the gateway's own `/mcp`, sends the results back, and returns the final answer with a trace of every tool call. Code: `apps/gateway/src/api/chat.routes.ts`, `chat/{service,agent,mcpLoopback,systemPrompt}.ts`, `chat/llm/*`, and the page `apps/dashboard/src/pages/Chat.tsx` with `features/chat/*`. Decisions: [ADR-010](decisions/ADR-010-chat-agent-loopback.md), [ADR-011](decisions/ADR-011-llm-provider-abstraction.md); configuration and limits: [ai-integration.md](ai-integration.md); a captured model exchange: [learning/04-chat-agent.md](learning/04-chat-agent.md).
+
+**Actors.** The browser (Chat page); the gateway's `/api/chat` route and chat service; the agent loop; the LLM registry and adapter; the provider (Groq; OpenRouter only if a fallback is configured); the MCP loopback client; the gateway's own `/mcp` (auth, routing, audit); an upstream MCP server.
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor B as Browser (Chat page)
+    participant R as /api/chat and chat service
+    participant A as agent loop
+    participant P as LLM provider (Groq)
+    participant F as fallback (OpenRouter, optional)
+    participant M as gateway /mcp (loopback)
+    participant U as upstream MCP server
+
+    B->>R: POST /api/chat {messages} (cookie, Origin, JSON)
+    R->>R: session, CSRF, zod: 1-20 messages, user and assistant only, last from user
+    alt no key for the provider
+        R-->>B: 503 LLM_NOT_CONFIGURED (no MCP connection made)
+    else a turn already running for this user
+        R-->>B: 409 CONFLICT
+    else more than 10 turns this minute
+        R-->>B: 429 RATE_LIMITED, Retry-After
+    end
+    R->>M: connect and tools/list, Bearer = fresh internal token for this user
+    M-->>A: the user's tools (descriptions cut to 300 characters)
+    loop until a final answer, 8 tool steps, or the 60 s deadline
+        A->>P: messages + tools + deadline
+        alt 429, 5xx or network error
+            P-->>A: error: wait retry-after (only if 20 s or less) or backoff, at most 2 retries, never past the deadline
+            opt still failing and a fallback key is set
+                A->>F: the same request, once, no retries
+            end
+        end
+        alt the model asks for tools
+            P-->>A: tool_calls (arguments as JSON text)
+            A->>M: tools/call, one at a time, Bearer = a new internal token
+            M->>U: the call with the upstream's own credential
+            U-->>M: result
+            M->>M: audit row: source chat, the user, outcome, duration
+            M-->>A: result text
+            A->>A: wrap as untrusted tool_result (max 6,000 characters)
+        else final text
+            P-->>A: content
+        end
+    end
+    R->>R: one "chat turn" log line (no message text)
+    R-->>B: 200 {reply, toolCalls, stoppedReason, provider, model, usage}
+```
+
+**Reading the diagram.** The first block holds the cheap refusals, in this order: not configured (before anything else, so a missing key never opens a connection), a turn already in flight for this user (checked before the limiter, so a refused double-click costs no turn), and the per-user rate limit. Then the loopback connection: a real MCP client to `http://127.0.0.1:<port>/mcp` whose every HTTP request carries a freshly minted 5-minute token for this user, so the turn sees exactly the tools the user could call from Claude Code. Inside the loop, the decision after each model call is the important one: tool calls run **one at a time** through `/mcp`, where they are authenticated, routed, timed out and audited like any external call; a final text ends the turn. The retry box lives entirely in the LLM adapter and registry: only 429, 5xx and network errors are retried (plus a Groq `tool_use_failed` once), waits honour a `retry-after` of up to 20 s but never pass the turn deadline (a longer `retry-after` fails the call at once), and the fallback is tried once without retries. Tool calls themselves are never retried anywhere.
+
+**Stop reasons.** `final` (the model answered), `max_steps` (it still wanted tools after 8 steps: "I stopped after 8 tool steps without a final answer. Try a narrower question."), `timeout` (the deadline passed or the browser closed the connection: "This took too long and was stopped. The actions listed below already ran.", with the trace so far, or "This took too long and was stopped. No actions ran." when no tool ran). All three are HTTP 200. An empty final answer is replaced by "I couldn't produce an answer. Try rephrasing your question."
+
+**Verified.** Live through the browser on 2026-10-19 (Groq `openai/gpt-oss-120b`, no fallback): "Create a draft product called Chat Test Mug priced 9.99" → `woo__create_product` (draft #36), "What orders came in today?" → `woo__list_orders` (found the Cash-on-delivery order #33), "Save a note: call the supplier on Monday" → `notes__create_note`, "What notes do I have?" → `notes__list_notes`, and the Playwright calculator turn → `utils__calculate`, 42. Each turn cost about 3.2K tokens, and every tool call is an audit row with source **Chat**. The not-configured, rate-limit, error-mapping, timeout, max-steps, malformed-arguments, disconnect and user-disabled-mid-turn paths are covered by `apps/gateway/test/chat/*` and `test/api/chat.test.ts` (**tested**), not forced live. The fallback was **not tested live**.
+
+### Failure and recovery
+
+| What can fail | Detected by | Retried? | What the user sees | Logs |
+|---|---|---|---|---|
+| No AI key | `deps.llm` is null | no | the Chat page's empty state "The AI provider isn't configured" (from `GET /api/chat/status`), or the same text after a send (503) | start-up warning `llm not configured`; no turn line |
+| Invalid request (a `system` or `tool` role, 21 messages, 4,001 characters, last message not from the user) | zod | no | `400 VALIDATION_FAILED` (the page never sends these; earlier assistant replies longer than 4,000 characters are cut to 4,000 before sending) | request line 400 |
+| Double send | the in-flight set | no | "A reply is already being generated." (409) | request line 409 |
+| More than 10 turns a minute | per-user limiter | no | "You're sending messages too quickly." (429; Retry stays disabled until `Retry-After` passes) | request line 429 |
+| Provider rate limit | provider 429 | yes: up to 2 retries honouring a `retry-after` of up to 20 s (never past the deadline); a longer `retry-after` is not waited for; then the fallback once if configured | "The AI provider is rate limited. Try again in N seconds." with a countdown; `Retry-After` is the provider's value or 60 s | `chat turn` warn: `code LLM_RATE_LIMITED`, `httpStatus 429`, `providerCode`, `fallbackProvider`, `fallbackCode` |
+| Provider down, 5xx, network error, request timeout (30 s) | the adapter | yes: backoff about 0.5 s then 1 s (plus jitter), then the fallback once | "The AI provider is unavailable right now." (502) | `code LLM_UNAVAILABLE`, `httpStatus` |
+| Wrong or revoked AI key | provider 401/403 | no | "The AI provider rejected the API key. An admin needs to update it." (502) | `code LLM_AUTH_FAILED` |
+| The model returns something unusable, or a broken tool call (`tool_use_failed`) | adapter parsing; Groq 400 | `tool_use_failed` once; the rest no | "The AI returned an unexpected answer. Try rephrasing." (502) | `code LLM_BAD_RESPONSE`, `providerCode` |
+| **A provider error after a tool already ran** (for example the product was created, then a 429) | `AgentLlmError` carries the traces | no tool is ever retried | the error **plus** "These actions already ran. Check them before asking again, so nothing is created twice." and the trace (`details.toolCalls`) | the turn line lists the `tools` that ran |
+| Malformed tool arguments, or a tool name that does not exist | the agent's JSON parse; `/mcp` answers `Unknown tool` | no; the model is told and may try again within the step budget | a **Failed** row in the trace; usually the model explains | `/mcp` audit `denied` for an unknown tool |
+| A tool fails (upstream `isError`, the 20 s timeout, the upstream is down) | `/mcp` as in [workflow 8](#8-mcp-tool-call-through-the-gateway) | no | a **Failed** row with the preview; the model reports it | audit row `error`, `timeout` or `denied` |
+| The user is disabled during the turn | `/mcp` re-reads the user for each fresh token | no | the next tool call fails ("The gateway rejected this tool call (HTTP 401)…") | audit `auth_rejected`, `user disabled` |
+| The turn passes 60 s | the deadline and the turn signal | no | the timeout reply and the trace so far (200) | turn line `stoppedReason timeout` |
+| The tab is closed or reloaded, the Chat page is left, or **New conversation** is pressed mid-turn (the conversation is gone too: it lives only in the page) | the response's `close` event aborts the turn | no | nothing (the page stopped waiting); a quick next send may get 409 until the server has stopped the old turn | turn line `stoppedReason timeout` (a deferred minor: not told apart from a real timeout) |
+| The loopback connection or `tools/list` fails (rare) | an exception in the service | no | the generic error with a request id (500) | turn line `code INTERNAL` with the error class |
+| Prompt injection in a tool result | cannot be detected reliably | n/a | the model may call another tool; it runs with the user's rights and appears in the trace and the audit log | audit rows with source `chat` ([security.md](security.md#11-the-chat-agent-acts-as-the-user)) |
+
+**Duplicates and partial work.** A turn is not a transaction: tool calls that ran are not undone when a later step fails. That is why every error response carries the executed calls, the page shows them, and nothing (neither the gateway nor the page) repeats a tool call by itself. When tool calls already ran, every later request carries a fixed note after the failed question ("The previous request failed after these actions already ran: … Do not repeat them unless asked."), and **Retry** then asks the model to continue rather than resending the question on its own; the model may still call a write tool again, so the "already ran" list on the page stays the guard. A failed question with no tool calls is followed by a `(no reply)` note, so two user messages are never sent in a row.
+
+**Diagnostics.** `kubectl -n gateway logs deploy/gateway | Select-String "chat turn"` (user id, steps, tool names, stop reason, duration, token usage, provider, model; on errors the code and HTTP status), the Audit page filtered by tool or server (source **Chat**), and the request id shown on the page, which matches the `X-Request-Id` in the gateway log.
+
+---
+
+## 16. An admin edits a server (and the URL-origin rule)
+
+**What it does.** An admin opens a server's page, presses **Edit**, and changes its name, URL, authentication or credential; separate buttons refresh, disable, enable or delete it. The important rule: **a stored credential is never sent to a new host.** If the URL's origin (scheme, host or port) changes while a credential is stored, the admin must type a new credential or tick **Remove stored credential**. The form checks this first, and the gateway enforces it (since the Phase 3 final review). Code: `apps/dashboard/src/pages/ServerDetail.tsx`, `features/servers/{ServerFormDialog.tsx,serverForm.ts,api.ts}`; API: `PATCH /api/servers/:id` (creating a server is [workflow 7](#7-register-an-upstream-and-how-it-appears-in-toolslist)).
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor A as Admin (server page)
+    participant API as gateway /api
+    participant S as SSRF guard
+    participant DB as Postgres
+    participant M as upstream manager
+
+    A->>A: Edit: change the URL to another host, leave the credential blank
+    A->>A: form check: origin changed and a credential is stored
+    alt no new credential and Remove not ticked
+        A->>A: inline error on Credential, nothing is sent
+    end
+    A->>API: PATCH /api/servers/:id {name, url, enabled, authType, credential or clearCredential}
+    API->>API: CSRF, session, admin role, zod (slug cannot change)
+    API->>S: assertSafeUpstreamUrl(url)
+    alt URL refused
+        API-->>A: 400 SSRF_REJECTED, shown under URL
+    end
+    API->>API: origin changed with a stored credential and neither credential nor clearCredential?
+    alt yes
+        API-->>A: 400 VALIDATION_FAILED, shown inline
+    end
+    API->>API: encrypt the new credential (AES-256-GCM, row id as AAD)
+    API->>DB: UPDATE upstream_servers
+    API->>M: upsert(row): replace the entry, check now
+    M-->>API: status connected or unreachable
+    API-->>A: 200 ServerView (never the credential)
+    A->>A: toast and refetch, the status keeps refreshing every 10 s
+```
+
+**Reading the diagram.** The rule exists twice on purpose. The form (steps 2-4, `needsNewCredential` in `serverForm.ts`) catches it before anything is sent, with the message "The URL points to a different host, so enter a new credential, or tick "Remove stored credential"." (**tested**: `origin change requires credential`). The gateway enforces it even for a client that skips the form (**tested** in `apps/gateway/test/api/servers.test.ts`), and its `400` is shown inline if it ever arrives. A path-only change keeps the credential, and the rule does not apply when the authentication is **none**. A blank credential field means "keep the stored one"; only a typed value is sent, and it lives only in the form's state (cleared when the dialog closes; server edits are plain function calls, not cached mutations). The upsert replaces the manager's entry and checks the server at once, so the tool list follows the edit within seconds; a call still running against the old entry answers `Server '<slug>' was reconfigured during the call`. Disable and delete ask for confirmation; a deleted built-in server stays deleted until it is added again with **Add server**.
+
+**Verified.** Component tests (`ServerFormDialog.test.tsx`, `serverForm.test.ts`, `Servers.test.tsx`, `ServerDetail.test.tsx`) and the gateway API tests. Playwright checks the servers list and the `utils` detail page live, but does **not** edit, disable or delete a server on the cluster (to keep the registry intact), so this flow is **tested**, not run live.
+
+### Failure and recovery
+
+| What can fail | Detected by | Retried? | What the admin sees | Logs |
+|---|---|---|---|---|
+| Origin changed without a new credential | the form; the API's `400 VALIDATION_FAILED` | n/a | inline error on Credential | none, or a 400 line |
+| URL to a forbidden address (metadata, loopback, a private address not on the allow-list, `file:`, credentials in the URL) | SSRF guard, `400 SSRF_REJECTED` | no | the reason under the URL field | 400 line |
+| Other invalid fields (name, header name, a credential with non-printable characters) | the form; `400 VALIDATION_FAILED` with `details.issues` mapped to fields | no | inline errors per field | 400 line |
+| The server was deleted by someone else meanwhile | `404 NOT_FOUND` | no | an error toast; the page then shows "Server not found" | 404 line |
+| The new URL or credential does not work | the upsert's health check | the next check in 15 s; **Refresh now** checks at once | 200, status **Unreachable** with the reason (`connection refused`, `HTTP 401 from upstream`, …); its tools leave the list | `upstream status` line |
+| A member tries (only possible outside the page) | role check, `403 FORBIDDEN` | no | members see no Edit button | 403 line |
+| Session expired | `401` | no | the login page; the edit is not saved | 401 line |
+| Gateway unreachable | network error | no (an edit is not repeated automatically) | an error toast; the dialog stays open with its values | `kubectl -n gateway get pods` |

@@ -290,7 +290,7 @@ erDiagram
 - **`ServerView`** (returned by `GET /api/servers`, `GET /api/servers/:id` and the create, edit and refresh calls; never contains the credential): `id, slug, name, url, authType, authHeaderName, hasCredential, enabled, status, lastError, checkedAt, toolCount, tools[{name, description}], skippedTools[]`. `skippedTools` lists upstream tools left out because their prefixed name does not match `^[a-zA-Z0-9_-]{1,64}$` (§6.4).
 - **CSRF:** every `POST`, `PUT`, `PATCH` and `DELETE` needs `Content-Type: application/json` **and** `Origin` equal to the origin of `PUBLIC_APP_URL`, including `DELETE` without a body and the public invite routes; otherwise `403 CSRF_REJECTED`.
 - Codes in use: `VALIDATION_FAILED` 400, `SSRF_REJECTED` 400, `UNAUTHENTICATED` 401, `INVALID_CREDENTIALS` 401, `FORBIDDEN` 403, `CSRF_REJECTED` 403, `NOT_FOUND` 404, `INVITE_INVALID` 404, `CONFLICT` 409, `RATE_LIMITED` 429 (with `Retry-After`), `INTERNAL` 500.
-- `POST /api/chat` is not built (Phase 4). `slug` cannot be changed by `PATCH`. An admin cannot change their own role or disable themselves (409).
+- `POST /api/chat` was built in Phase 4 (see the §6.9 as-built notes), together with `GET /api/chat/status` (`{configured, provider, model, fallbackProvider}`, session). `POST /api/servers` has no `enabled` field (a new server is always enabled). `slug` cannot be changed by `PATCH`. An admin cannot change their own role or disable themselves (409).
 - `GET /api/audit` accepts `userId, serverSlug, toolName, outcome, from, to, limit (1-100, default 50), cursor`; `nextCursor` is the last returned id.
 
 ### 6.3 Upstream manager
@@ -374,7 +374,7 @@ sequenceDiagram
   participant MCP as Gateway /mcp (same process, via HTTP loopback)
   participant LLM as LLM provider
   UI->>API: messages[] (session cookie)
-  API->>API: mint 5-min internal token for this user (HMAC, aud=gateway-chat)
+  API->>API: connectLoopback(mcpUrl, mintToken): a fresh 5-min internal token (HMAC, aud=gateway-chat) for every HTTP request
   API->>MCP: tools/list (Bearer internal token)
   MCP-->>API: aggregated tools (same as external clients)
   loop up to 8 steps
@@ -383,7 +383,7 @@ sequenceDiagram
       API->>MCP: tools/call (Bearer internal token)  → audited as source=chat
       MCP-->>API: tool result
     else final answer
-      API-->>UI: reply + toolCalls[{name,args,outcome,durationMs,resultPreview}]
+      API-->>UI: reply + toolCalls[{name,arguments,outcome,durationMs,resultPreview}]
     end
   end
 ```
@@ -392,6 +392,16 @@ sequenceDiagram
 - The system prompt includes the current date/time and store timezone, and tells the model to use tools rather than guess.
 - **Limits:** max 8 tool steps per turn; tool results truncated to 6,000 characters before going back to the model (protects the token budget); 60s total turn timeout.
 - Untrusted tool output is wrapped in a delimited block and the system prompt states that tool output is data, not instructions (§9).
+
+**As built (Phase 4).**
+
+- **A token per request.** `connectLoopback(mcpUrl, mintToken)` (`apps/gateway/src/chat/mcpLoopback.ts`) is a real MCP client to `http://127.0.0.1:<port>/mcp` whose custom `fetch` mints a fresh internal token for **every** HTTP request, so no turn can outlive its 5-minute token and `/mcp` re-checks the user on every call (a user disabled mid-turn is refused on the next call).
+- **Response:** `200 {reply, toolCalls, stoppedReason: "final" | "max_steps" | "timeout", provider, model, usage}`. Each trace is `{name, arguments, outcome: "success" | "error", durationMs, resultPreview}`: the field is **`arguments`** (the diagram's earlier `args`), holding the parsed JSON object, or the raw text cut to 500 characters when the model's JSON did not parse (that call is not executed and the model gets a tool error). `resultPreview` is at most 500 characters; tool descriptions sent to the model at most 300.
+- **Request:** 1-20 messages, roles `user` | `assistant` only, content 1-4,000 characters, the last from the user, no other fields; a 512 kb body parser for this route.
+- **Limits per user:** one turn in flight (`409 CONFLICT`), `CHAT_RATE_LIMIT_PER_MIN` (10) turns a minute (`429 RATE_LIMITED`). Turn timeout `CHAT_TURN_TIMEOUT_MS` (60 s), also aborted when the client disconnects; `CHAT_MAX_STEPS` (8).
+- **Errors:** `LLM_NOT_CONFIGURED` 503 (checked before any MCP connection), `LLM_RATE_LIMITED` 429 (always with `Retry-After`: the provider's value or 60 s), `LLM_AUTH_FAILED`, `LLM_UNAVAILABLE`, `LLM_BAD_RESPONSE` 502; each carries `details.toolCalls` with the calls that already ran.
+- **System prompt** additions: the user's name, plain text with "- " lists (the UI does not render Markdown), and a currency only when a tool result names one.
+- One `chat turn` log line per turn without message content. Details: `docs/ai-integration.md`, `docs/workflows.md` (workflow 15), ADR-010.
 
 ### 6.10 LLM provider abstraction
 
@@ -406,8 +416,10 @@ interface LlmProvider {
 - **Config:** `LLM_PROVIDER` (`groq` | `openrouter`), `LLM_MODEL`, `LLM_BASE_URL` (optional override), `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `LLM_FALLBACK_PROVIDER` (optional), `LLM_TIMEOUT_MS` (30000), `LLM_MAX_RETRIES` (2).
 - **Retries:** on 429 and 5xx, with exponential backoff and jitter, honoring `retry-after`. When retries are exhausted, the fallback provider (if configured) is tried once.
 - **Normalized errors:** `LLM_RATE_LIMITED`, `LLM_AUTH_FAILED`, `LLM_UNAVAILABLE`, `LLM_BAD_RESPONSE`, `LLM_NOT_CONFIGURED`. The chat UI shows a clear message for each.
-- **Default model:** chosen in the Phase 4 spike between `openai/gpt-oss-120b` and `llama-3.3-70b-versatile` on Groq, based on tool-calling reliability and the account's limits page. The free Developer plan publishes 30 RPM / 1K RPD / 8K TPM for gpt-oss-120b, so tool descriptions are kept short.
+- **Default model:** chosen in the Phase 4 spike, based on tool-calling reliability and the account's limits page. The free Developer plan publishes 30 RPM / 1K RPD / 8K TPM for gpt-oss-120b, so tool descriptions are kept short. **Result (2026-10-19): `openai/gpt-oss-120b` with `reasoning_effort: low`.** The planned second candidate, `llama-3.3-70b-versatile`, had been shut down by Groq for free and developer accounts on 2026-08-16, so the spike compared `openai/gpt-oss-120b` with `openai/gpt-oss-20b`: both were 6/6 correct on the two demo questions with the 15-tool catalogue (8,088 vs 7,995 tokens over six calls; with effort low 8,007 vs 7,975; prompt about 1.3K tokens). The 120b was kept as the stronger model at the same limits; `reasoning_effort: low` is sent only for `^openai/gpt-oss-` models. OpenRouter's default (fallback) model is `nvidia/nemotron-3-super-120b-a12b:free` (2/2). Measured through the dashboard: about 3.2K tokens per single-tool turn.
 - A provider needing a non-OpenAI wire format would get a new adapter class implementing `LlmProvider`. Nothing else changes.
+
+**As built (Phase 4).** The interface grew by addition: `LlmProvider { readonly name; readonly model; chat(req: { messages; tools; signal; deadline }) }` returning `{ message, toolCalls, usage?, provider, model }`, where `deadline` (epoch ms) is the turn's end and no retry sleeps past it. Retries: 429, 5xx and network errors up to `LLM_MAX_RETRIES`, honouring `retry-after` capped at 20 s, otherwise 500 ms × 2^attempt plus jitter; a Groq `400 tool_use_failed` once. The fallback (`LLM_FALLBACK_PROVIDER`, `LLM_FALLBACK_MODEL`) is tried once with no retries, only after `LLM_RATE_LIMITED` or `LLM_UNAVAILABLE`; if it fails, the primary's error is reported. `LlmError` carries `httpStatus` and an identifier-only `providerCode` for the log, never provider text. Keys come from the optional Secret `llm-api-keys`, pushed by `scripts/create-secrets.ps1` (server-side apply). Details: `docs/ai-integration.md`, ADR-011.
 
 ---
 
@@ -435,6 +447,8 @@ interface LlmProvider {
 **Member vs admin:** members see Servers read-only (no add/edit/delete), no Team page, and only their own audit rows. The backend enforces this; the UI only hides it.
 
 **Serving:** a static build served by `nginxinc/nginx-unprivileged` (non-root, port 8080) with an SPA fallback.
+
+**As built (Phase 4).** Built as specified (`apps/dashboard`; ADR-015). Additions: the Overview also has a "Connect a client" card with the MCP endpoint; nginx sets the CSP, `nosniff`, `Referrer-Policy: no-referrer` and `Permissions-Policy` on every response and answers 404 for `/.well-known/*`; the server **create** form has no Enabled box (the API creates servers enabled; edit has it); editing a server's URL to another origin requires a new credential or "Remove stored credential"; the one-time key dialog cannot close until "I have copied the key" is ticked; chat replies are plain text. Verified with 113 component tests and a Playwright smoke at 1440 px and 390 px against the cluster (2026-10-19).
 
 ---
 

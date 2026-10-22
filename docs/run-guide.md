@@ -13,7 +13,8 @@ Statements are either **verified** (run on the reference machine, with the date)
 > 3. Start everything: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1`
 > 4. Ctrl+click the URLs it prints (Windows Terminal and VS Code make them links), or add `-Open` to open the storefront for you (storefront, shop, my account, wp-admin).
 > 5. Need the admin password? `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1` copies it to your clipboard (user `admin`).
-> 6. Done for the day: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1` (keeps your data).
+> 6. The team dashboard is <http://app.localhost/>: log in as `admin@example.com` with the password that `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password` copies to your clipboard ([the dashboard](#the-dashboard-phase-4)). For the AI chat, follow [Set up the AI chat](#set-up-the-ai-chat) once.
+> 7. Done for the day: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1` (keeps your data).
 
 All commands are run from the repository root in **Windows PowerShell 5.1**. The folder path contains spaces on the reference machine; the scripts quote their own paths, so just `cd` into the folder first.
 
@@ -31,6 +32,8 @@ All commands are run from the repository root in **Windows PowerShell 5.1**. The
 8. [WooCommerce MCP server (Phase 2)](#8-woocommerce-mcp-server-phase-2)
 9. [The gateway (Phase 3)](#9-the-gateway-phase-3)
 10. [Viewing the gateway database (Postgres)](#10-viewing-the-gateway-database-postgres)
+    - [The dashboard (Phase 4)](#the-dashboard-phase-4)
+    - [Set up the AI chat](#set-up-the-ai-chat)
 11. [Each part of the project](#11-each-part-of-the-project)
 12. [Health checks and logs](#12-health-checks-and-logs)
 13. [Resetting](#13-resetting)
@@ -52,7 +55,7 @@ flowchart TB
             P2["pod mariadb-0"]
             P3["pod store-setup (Job, finished)"]
             P5["pods mcp-woocommerce, mcp-notes, mcp-utilities (namespace mcp, internal only)"]
-            P6["pods gateway and postgres-0 (namespace gateway)"]
+            P6["pods gateway, dashboard and postgres-0 (namespace gateway)"]
             P4["Traefik, CoreDNS, ... (kube-system)"]
         end
     end
@@ -63,7 +66,7 @@ flowchart TB
     P6 -. "MCP calls inside the cluster" .-> P5
 ```
 
-Reading it from the outside in: your browser talks to port 80 on Windows. Docker Desktop forwards that to the `k3d-urumi-serverlb` container, which hands it to Traefik (the ingress controller) inside the node, which routes `store.localhost` to the WordPress pod. WordPress stores everything in MariaDB. The MCP server pods (section 8) have no route in from outside; the WooCommerce one only calls WordPress from inside the cluster, which the dotted arrow shows. `app.localhost` goes the same way to the gateway pod (section 9), which calls the MCP servers and its own Postgres from inside the cluster.
+Reading it from the outside in: your browser talks to port 80 on Windows. Docker Desktop forwards that to the `k3d-urumi-serverlb` container, which hands it to Traefik (the ingress controller) inside the node, which routes `store.localhost` to the WordPress pod. WordPress stores everything in MariaDB. The MCP server pods (section 8) have no route in from outside; the WooCommerce one only calls WordPress from inside the cluster, which the dotted arrow shows. `app.localhost` goes the same way: `/` to the dashboard pod (the web page, [the dashboard](#the-dashboard-phase-4)), `/api` and `/mcp` to the gateway pod (section 9), which calls the MCP servers and its own Postgres from inside the cluster. For the chat, the gateway also calls the AI provider (Groq) on the internet ([Set up the AI chat](#set-up-the-ai-chat)).
 
 **Why Docker Desktop shows only 3 containers (verified 2026-10-18).** They are:
 
@@ -97,9 +100,10 @@ Optional graphical tools (not required; **not tested on the reference machine**)
 | 2 | **Docker Desktop** (WSL2 backend) | Must be **running** whenever you use the project. |
 | 3 | Memory cap in `C:\Users\<you>\.wslconfig` | On the reference machine (15 GB RAM) the file sets `memory=9GB`, `processors=8`, `swap=4GB`. Without a cap WSL2 may take half the RAM. After editing run `wsl --shutdown` and restart Docker Desktop. |
 | 4 | `winget install --id Helm.Helm -e` and `winget install --id k3d.k3d -e` | Then open a **new** terminal so PATH refreshes. `kubectl` ships with Docker Desktop. |
-| 5 | **Node.js 24** | `winget install --id OpenJS.NodeJS.LTS -e` (on 2026-10-19 winget lists 24.20.0 as the LTS; that command was not run here, the reference machine has Node 24.0.1), or the Node 24 Windows installer from nodejs.org. Open a **new** terminal, then check: `node -v` prints `v24.` something. Not needed for the store itself; needed for the MCP check, MCP Inspector and the tests. |
+| 5 | **Node.js 24** | `winget install --id OpenJS.NodeJS.LTS -e` (on 2026-10-19 winget lists 24.20.0 as the LTS; that command was not run here, the reference machine has Node 24.0.1), or the Node 24 Windows installer from nodejs.org. Open a **new** terminal, then check: `node -v` prints `v24.` something. **Node 24.15 or newer is recommended:** the dashboard's test library jsdom 30 declares `^24.15`, so on older Node 24 releases `npm ci` prints `EBADENGINE` warnings (the tests still passed on 24.0.1). Not needed for the store itself; needed for the MCP check, MCP Inspector, the dashboard check and the tests. |
 | 6 | `npm ci`, once, from the repository root | Installs the project's Node packages into `node_modules`. `scripts\check-mcp-woocommerce.ps1` runs a small MCP client (`scripts/dev/mcp-smoke.mjs`) that imports the MCP SDK from there; without it the check stops with `Dependencies not installed: run npm ci ...`. The Docker images install their own packages, so `up.ps1` works without this step. Run it again after pulling changes to `package-lock.json`. |
 | 7 | Hosts entries (optional) | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-hosts.ps1` (UAC prompt, safe to repeat). Browsers do not need it; Node-based MCP tools do. |
+| 7b | Playwright's Chromium (optional, once) | Only for the dashboard check `scripts\check-dashboard.ps1`: run `npx playwright install chromium` from the repository root after `npm ci` (about 118 MiB, into `%LOCALAPPDATA%\ms-playwright`). |
 | 8 | The first `up.ps1` | Creates the cluster, downloads images and WooCommerce, installs the store. **Typically about 2–3 minutes** the first time (observed on the reference machine). |
 
 Versions used, and how each tool was installed, are in [learning/00-setup-log.md](learning/00-setup-log.md). The long-form deployment steps are in [deployment.md](deployment.md).
@@ -123,9 +127,11 @@ It also reads the Helm release state, because `helm status` succeeds even for a 
   My account   : http://store.localhost/my-account/   (customers: register, log in, see their orders)
   WP admin     : http://store.localhost/wp-admin/     (user: admin)
   MCP server   : internal only (namespace mcp) - check with scripts\check-mcp-woocommerce.ps1
+  Dashboard    : http://app.localhost/
   Gateway API  : http://app.localhost/api
   MCP endpoint : http://app.localhost/mcp   (needs a personal API key)
   Gateway admin: admin@example.com - copy the password with: powershell -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password
+  AI chat      : not set up - see docs/run-guide.md "Set up the AI chat"
 
   Admin password - run this to copy it to the clipboard (it is never printed here):
     powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
@@ -135,7 +141,7 @@ It also reads the Helm release state, because `helm status` succeeds even for a 
 ===========================================================
 ```
 
-The three `Gateway` lines appear only when the gateway is enabled (`gateway.enabled`), and the admin email is the release's `gateway.bootstrapAdminEmail`, both read from the installed release's values.
+The three `Gateway` lines appear only when the gateway is enabled (`gateway.enabled`), and the admin email is the release's `gateway.bootstrapAdminEmail`, both read from the installed release's values. The `Dashboard` line appears when `dashboard.enabled` is true too. The yellow `AI chat` line appears only while the Secret `llm-api-keys` does not exist (the script checks that it exists and never reads it); after [Set up the AI chat](#set-up-the-ai-chat) it disappears (verified 2026-10-19).
 
 Options:
 
@@ -148,13 +154,13 @@ Full form for the options: `powershell -NoProfile -ExecutionPolicy Bypass -File 
 
 ### Build the program images (`build-images.ps1`)
 
-Our own programs (the three MCP servers and the gateway) run from container images that you build on your laptop; there is no registry. `up.ps1` runs this for you whenever it deploys. Run it yourself only if you want to rebuild without a full redeploy:
+Our own programs (the three MCP servers, the gateway and, since Phase 4, the dashboard) run from container images that you build on your laptop; there is no registry. `up.ps1` runs this for you whenever it deploys. Run it yourself only if you want to rebuild without a full redeploy:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-images.ps1
 ```
 
-It builds `urumi/mcp-woocommerce:<tag>` with Docker, copies it into the k3d cluster (`k3d image import`, because the cluster cannot see your Docker images otherwise), and writes the tag to `deploy/.images.local.yaml`, which `deploy.ps1` passes to Helm. Then run `up.ps1 -Redeploy` to roll the new image out.
+It builds the five images (`urumi/mcp-woocommerce`, `urumi/mcp-notes`, `urumi/mcp-utilities`, `urumi/gateway` and `urumi/dashboard`, all with the same `<tag>`) with Docker, copies them into the k3d cluster (`k3d image import`, because the cluster cannot see your Docker images otherwise), and writes the tag to `deploy/.images.local.yaml`, which `deploy.ps1` passes to Helm. Then run `up.ps1 -Redeploy` to roll the new image out.
 
 **How the image tag is chosen.** The tag is the short git commit id (for example `05ca559`). If `git status --porcelain` shows **any** change, including a new untracked file such as a log, the tag becomes `<sha>-dirty-<timestamp>`. This matters:
 
@@ -194,7 +200,9 @@ With the default settings (host port 80, **verified**):
 | WordPress admin | <http://store.localhost/wp-admin/> | User `admin`, password: see [section 5](#5-passwords-and-secrets) |
 | Gateway REST API | <http://app.localhost/api> | Verified 2026-10-19; see [section 9](#9-the-gateway-phase-3) |
 | Gateway MCP endpoint | <http://app.localhost/mcp> | Needs a personal API key (section 9); verified |
-| Dashboard | **(planned — Phase 4)** | Not built yet; `http://app.localhost/` has nothing behind it |
+| Dashboard | <http://app.localhost/> | The team web page (log in as `admin@example.com`); verified 2026-10-19 and 2026-10-20. See [the dashboard](#the-dashboard-phase-4) |
+| Dashboard chat | <http://app.localhost/chat> | Needs the AI key once: [Set up the AI chat](#set-up-the-ai-chat) |
+| Invite links | `http://app.localhost/invite/<token>` | Created by an admin on the Team page; each works once, for 72 hours |
 | WooCommerce MCP server | **internal only** | No URL on your machine. Reach it with a port-forward, see [section 8](#8-woocommerce-mcp-server-phase-2) |
 
 If you moved the store to port 8081 (see [deployment.md](deployment.md)), add `:8081` to every URL; `up.ps1` should print the right ones (expected; the 8081 case was not re-tested for this script).
@@ -237,11 +245,12 @@ In namespace `gateway` (verified 2026-10-19 by the pods running and the checks p
 |---|---|---|
 | `gateway-bootstrap` | `email`, `password` | The first admin account, created on first start. Copy the password with `scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password`. |
 | `gateway-secrets` | `postgres-password`, `encryption-key`, `internal-token-secret` | Postgres; the AES key for stored upstream credentials (32 random bytes, base64); the signing secret of the internal chat token. `postgres-password` is for the database (section 10). Do not lose `encryption-key`: stored credentials cannot be read without it. |
+| `llm-api-keys` | `GROQ_API_KEY`, `OPENROUTER_API_KEY` | The AI provider keys for the chat (Phase 4). **Not generated by Helm:** `scripts\create-secrets.ps1` creates it from your `.env` ([Set up the AI chat](#set-up-the-ai-chat)). Optional: without it the gateway runs and the chat says it is not configured. |
 | `mcp-woocommerce-token`, `mcp-notes-token`, `mcp-utilities-key` | as in `mcp` | Byte-identical copies of the `mcp` Secrets, used only to **seed** the server registry on first start. After that the encrypted copy in the database is the source of truth, so editing a credential in the gateway does not touch these Secrets. Each built-in server is seeded once: a deleted one is not re-created ([re-add it](#delete-and-re-add-a-built-in-server)). |
 
 `get-secret.ps1` works for any Secret value: `-Namespace`, `-Name` and `-Key` are required, the value goes to the clipboard, and it is printed only with `-Show`. The same clipboard caveat as above applies.
 
-**Rule: never paste a secret into a chat, an issue or a commit.** Secrets are generated per install, so they are not in Git.
+**Rule: never paste a secret into a chat, an issue or a commit.** Secrets are generated per install, so they are not in Git. The one secret you supply yourself is the AI provider key; it lives in the git-ignored `.env` and in the Secret `llm-api-keys`, nowhere else.
 
 ## 6. Using the store
 
@@ -489,25 +498,25 @@ Verified 2026-10-19 with SQL against the live database (section 7): one key row,
 
 ### What is not possible yet
 
-- **No direct external access.** Nothing outside the cluster can call this server. Clients connect through the **gateway** ([section 9](#9-the-gateway-phase-3)); the dashboard that will sit in front of it is Phase 4.
+- **No direct external access.** Nothing outside the cluster can call this server. Clients connect through the **gateway** ([section 9](#9-the-gateway-phase-3)), and people use it through the [dashboard](#the-dashboard-phase-4) (Phase 4).
 - **No per-user identity at the server itself.** It has one shared bearer token; per-user keys and the audit log are the gateway's job (built in Phase 3).
 - **No NetworkPolicies** yet (Phase 5).
 
 ## 9. The gateway (Phase 3)
 
-### What it is, and what is not built yet
+### What it is
 
 The gateway is **one MCP endpoint** in front of the three MCP servers (WooCommerce, Notes, Utilities, 15 tools in total), with its own users, personal API keys, invite links, server registry and audit log in its own Postgres database. The idea and real captured traffic are in [learning/03-gateway.md](learning/03-gateway.md); the design is in [system-design.md](system-design.md).
 
 | What | URL | Notes |
 |---|---|---|
-| Gateway REST API | <http://app.localhost/api> | Session cookie; used from PowerShell below (verified 2026-10-19) |
+| Gateway REST API | <http://app.localhost/api> | Session cookie; used by the dashboard and from PowerShell below (verified 2026-10-19) |
 | MCP endpoint | <http://app.localhost/mcp> | Needs a personal API key; `GET` answers 405 (verified) |
-| Health | `GET /healthz`, `GET /readyz` | Reachable inside the cluster; the Ingress routes only `/api` and `/mcp` |
-| Dashboard (web page) | **(planned — Phase 4)** | **Not built.** `http://app.localhost/` has nothing behind it yet |
-| Chat agent | **(planned — Phase 4)** | **Not built.** There is no `POST /api/chat` |
+| Health | `GET /healthz`, `GET /readyz` | Reachable inside the cluster only; the Ingress sends `/api` and `/mcp` to the gateway and everything else to the dashboard |
+| Dashboard (web page) | <http://app.localhost/> | Built in Phase 4: [the dashboard](#the-dashboard-phase-4) |
+| Chat agent | <http://app.localhost/chat> (`POST /api/chat`) | Built in Phase 4; needs the AI key: [Set up the AI chat](#set-up-the-ai-chat) |
 
-Everything you do today, you do with PowerShell, MCP Inspector or an MCP client. `app.localhost` resolves to your machine in browsers and `curl.exe`; Node tools need the hosts entry from `scripts\setup-hosts.ps1` (section 2, step 7).
+Everything in this section can be done in the dashboard by clicking; the PowerShell, MCP Inspector and MCP client steps below show what happens underneath and are how you script it. `app.localhost` resolves to your machine in browsers and `curl.exe`; Node tools need the hosts entry from `scripts\setup-hosts.ps1` (section 2, step 7).
 
 ### Is it running?
 
@@ -527,7 +536,7 @@ The first admin is created automatically the first time the gateway starts with 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password
 ```
 
-Add `-Show` to also print it. The same clipboard caveat as in section 5 applies. The dashboard login page will use this account in Phase 4.
+Add `-Show` to also print it. The same clipboard caveat as in section 5 applies. The dashboard's login page uses this account ([the dashboard](#the-dashboard-phase-4)).
 
 ### Log in and create an API key (PowerShell 5.1)
 
@@ -688,7 +697,7 @@ $pending | Select-Object email, role, expiresAt, expired | Format-Table -AutoSiz
 - The link is valid for **72 hours** and works **once**. Until it is used it is a password for that account: send it over a channel you trust.
 - Anyone can preview a link without logging in: `Invoke-RestMethod -Uri ($inv.link.Replace('/invite/','/api/invites/'))` returns the email, role and expiry (verified).
 - Cancel a link: `Invoke-WebRequest -Method Delete -Uri "$base/api/invites/$($inv.invite.id)" -WebSession $s -Headers $h -ContentType 'application/json' -UseBasicParsing` (204; the link then answers `404 INVITE_INVALID`, verified).
-- The invitee accepts with `POST /api/invites/<token>/accept` and a body `{"name":"...","password":"..."}` (10-200 characters); that creates the account and logs them in. There is no web page for it until Phase 4. The accept call is covered by automated tests (`apps/gateway/test/api/invites.test.ts`) but was **not run on the cluster**, to avoid leaving a test user behind.
+- The invitee accepts with `POST /api/invites/<token>/accept` and a body `{"name":"...","password":"..."}` (10-200 characters); that creates the account and logs them in. Since Phase 4 the link opens a web page instead (`http://app.localhost/invite/<token>`: name, password, confirm; see [the dashboard](#the-dashboard-phase-4)). The accept call is covered by automated tests (`apps/gateway/test/api/invites.test.ts`, and the dashboard's `AcceptInvite.test.tsx`) but was **not run on the cluster**, to avoid leaving a test user behind; the Playwright smoke creates an invite, sees the link dialog and cancels it.
 - The invites list has no creation time (the table has no `created_at`); it is ordered by expiry, newest first.
 - Roles: `member` can use `/mcp`, manage their own keys, see servers and their own audit rows; `admin` can do everything ([security.md](security.md#7-what-a-member-can-and-cannot-do)).
 
@@ -741,6 +750,48 @@ kubectl -n gateway logs deploy/gateway --tail=20     # one "request" line per HT
 kubectl -n gateway logs postgres-0 --tail=20
 kubectl -n gateway get pods
 ```
+
+The gateway writes one JSON line per event. The `msg` field says what kind:
+
+| `msg` | Written when | Main fields |
+|---|---|---|
+| `request` | Every HTTP call, including every click in the dashboard (login, create or revoke a key, invite, role change, disable…) | `method`, `path`, `status`, `durationMs`, `requestId` |
+| `tool call` | Every tool call, from an MCP client or the chat | `tool`, `server`, `outcome`, `durationMs`, `userId`, `source` (`mcp` or `chat`) |
+| `chat turn` | Every chat message (Phase 4) | `steps`, `tools`, `stoppedReason`, `durationMs`, `usage` (tokens), `provider`, `model`; **never** the text |
+| `mcp auth rejected` | A recognisable key that is revoked, unknown or belongs to a disabled user | the reason |
+| `upstream status` | An MCP server changes state (connected, unreachable, disabled) | the server and its status |
+
+Kubernetes checks `/healthz` and `/readyz` every few seconds, so most `request` lines are those probes. The commands below hide them (all verified 2026-10-22 in Windows PowerShell 5.1).
+
+Readable, one line per event, last 300 lines (local time, kind, method, path, status, tool, outcome, source):
+
+```powershell
+kubectl -n gateway logs deploy/gateway --tail=300 | Select-String -NotMatch 'healthz|readyz' | ForEach-Object { try { $j = $_.Line | ConvertFrom-Json; "{0:HH:mm:ss}  {1,-15} {2,-6} {3,-30} {4,-4} {5} {6} {7}" -f ([DateTimeOffset]::FromUnixTimeMilliseconds($j.time).LocalDateTime), $j.msg, $j.method, $j.path, $j.status, $j.tool, $j.outcome, $j.source } catch { $_.Line } }
+```
+
+It prints lines such as `18:41:44  request         POST   /api/auth/login                200`.
+
+Watch it live while you click through the dashboard. Leave it running in a second PowerShell window; Ctrl+C stops it:
+
+```powershell
+kubectl -n gateway logs deploy/gateway -f --tail=0 | Select-String -NotMatch 'healthz|readyz'
+```
+
+Only one kind of event:
+
+```powershell
+kubectl -n gateway logs deploy/gateway | Select-String '"msg":"tool call"'           # every tool call (source mcp or chat)
+kubectl -n gateway logs deploy/gateway | Select-String '"msg":"chat turn"'           # every chat turn: tools, tokens, outcome
+kubectl -n gateway logs deploy/gateway | Select-String 'auth rejected|upstream status' # rejected keys and server state changes
+```
+
+Find the log lines of one error. Every error box in the dashboard, and every API error body, shows a request id; search for it:
+
+```powershell
+kubectl -n gateway logs deploy/gateway | Select-String "<request id>"
+```
+
+`kubectl logs` shows only the current pod's log. A redeploy or restart starts a new, empty log; add `--previous` to read the pod's last crashed run. Tool calls, rejected keys and their users are also kept permanently in the **Audit log** page and in the `audit_logs` table ([section 10](#10-viewing-the-gateway-database-postgres)).
 
 Invite links appear in the log only as `/api/invites/:token`. Everything about failures is in [error-handling.md](error-handling.md); common problems are in [troubleshooting.md](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts).
 
@@ -846,6 +897,140 @@ Press Ctrl+C in terminal 1 to close the tunnel. The tunnel itself was verified o
 
 Table definitions and relationships: [system-design.md](system-design.md#2-data-model).
 
+## The dashboard (Phase 4)
+
+The dashboard is the team's web page for the gateway: server health, MCP servers, personal API keys, the audit log, the team, and a chat assistant that calls the tools for you. It is a static web app served by its own small nginx pod (`dashboard` in namespace `gateway`) on the same address as the API, so it uses the same login cookie and the same protections as the API ([ADR-015](decisions/ADR-015-dashboard-served-by-nginx.md)). Verified on the reference machine on 2026-10-19 and 2026-10-20 with the Playwright check below, at desktop width (1440 px) and phone width (390 px).
+
+![The dashboard overview: four server-health numbers, recent tool calls and the MCP endpoint to copy](screenshots/overview.png)
+
+### Open it and log in
+
+1. Run `scripts\up.ps1` as usual; the URL block shows `Dashboard    : http://app.localhost/`.
+2. Open <http://app.localhost/>. You are sent to the login page.
+3. Email: `admin@example.com` (the Helm value `gateway.bootstrapAdminEmail`). Password: copy it to your clipboard with the command below (it is not printed), then paste it into the Password field. The eye button shows what you typed.
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password
+   ```
+
+4. Press **Sign in**. You land on the Overview.
+
+Good to know: a wrong password shows "Email or password is incorrect"; after 10 attempts in a minute the page says how many seconds to wait. A session lasts 12 hours; when it ends, the next click takes you to the login page and, after logging in, back to the page you were on. **Log out** is in the user menu (your initials, top right). The theme menu next to it switches between System, Light and Dark (remembered in this browser only).
+
+### Every page, and what you can do as an admin or a member
+
+The left sidebar lists the pages. Admins see everything below; members see the same pages except **Team**, and with read-only servers. The backend enforces these rules; the page only hides what you cannot do.
+
+| Page | Address | As an admin | As a member |
+|---|---|---|---|
+| **Overview** | `/` | Four numbers (servers connected, unreachable, disabled; tools available), the latest tool calls of everyone, and **Connect a client** with the MCP endpoint `http://app.localhost/mcp` and a copy button. | The same, with only your own recent calls. |
+| **Servers** | `/servers` | Every MCP server with its status (**Connected** green, **Unreachable** red, **Disabled** grey, **Not checked yet**), tool count, last check and last error; refreshed every 10 s. **Add server** opens a form: slug (permanent, it prefixes the tool names), name, URL, authentication (none, bearer token or a custom header), header name, credential. A URL that points at a forbidden address is refused inline ("SSRF"). | The list, read-only: no Add server. |
+| **Server detail** | `/servers/<id>` (click a server) | Details (URL, authentication, whether a credential is stored, last check, last error), a warning for skipped tools, and the tools with the names clients and the chat use (for example `utils__calculate`). Buttons: **Edit** (the same form, plus **Enabled** and **Remove stored credential**; if you change the URL to another host, scheme or port you must type the credential again or tick Remove, so a stored secret is never sent to a new host), **Refresh now** (a health check), **Disable** / **Enable** (with a confirmation), **Delete** (with a confirmation; a built-in server stays deleted until you add it again with Add server). | Details and tools, no buttons. |
+| **API keys** | `/keys` | Your own keys: name, the first characters, created, last used, status. **Create key** asks for a name, then shows the key **once** with ready-to-paste setups for Claude Code, Cursor and MCP Inspector; the Close button unlocks only after you tick "I have copied the key". **Revoke** (with a confirmation) stops the key at once. | The same, for your own keys. |
+| **Audit log** | `/audit` | Every tool call and rejected key: time, user, source (**MCP client** or **Chat**), event, server, tool, outcome, duration, error. Filters: user, server, tool name (with or without the server prefix: `utils__calculate` sets the server to `utils` and the tool to `calculate`), outcome, from, to (the filters stay in the address, so you can bookmark a view). **Load more** at the bottom. | Only your own rows; there is no user filter. |
+| **Chat** | `/chat` | Ask in plain words; the assistant calls the tools **as you** and shows each call (tool, arguments, outcome, duration, a preview of the result). See [Set up the AI chat](#set-up-the-ai-chat). | The same, with a member's rights. |
+| **Team** | `/team` | **Users**: change a role (admin or member; the change is confirmed in a dialog first, "Make <name> an admin?"), **Keys…** (see, issue or revoke a member's keys), **Disable** / **Enable** (disabling ends their sessions and revokes their keys). Your own row cannot be demoted or disabled. **Pending invites** with **Cancel**. **Invite member** asks for an email and a role, then shows the invite link **once**: send it yourself over a channel you trust. | Not in the sidebar; opening `/team` shows "You don't have access to this page". |
+| **Invite page** | `/invite/<token>` (the link) | | The invitee sees the email the invite is for and chooses a name and a password (at least 10 characters, typed twice). **Create account** logs them in. A used, cancelled or expired link says "Invite link not valid". |
+
+Every list shows a loading placeholder, an empty state that says what to do, and an error state with **Try again**. Destructive actions always ask first. Server, Servers and Audit screenshots: [servers](screenshots/servers.png), [server detail](screenshots/server-detail.png), [audit log](screenshots/audit.png).
+
+### On a phone (or a narrow window)
+
+Below 1024 px the sidebar becomes a **menu button** (top left, "Open navigation") that opens it as a drawer; below 640 px every table turns into a list of cards. To try it on a laptop: open the browser's developer tools (F12), switch on the device toolbar (Ctrl+Shift+M in Chrome or Edge) and choose a 390 px wide phone. The Playwright check below runs every page at 390 × 844 too (verified 2026-10-19). [Screenshot of the servers page at 390 px](screenshots/servers-mobile.png).
+
+### Check it end to end: `check-dashboard.ps1`
+
+One-time setup (after `npm ci`, section 2): `npx playwright install chromium` from the repository root. Then:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dashboard.ps1                    # desktop and phone width
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dashboard.ps1 -Project mobile    # only the 390 px run
+```
+
+It checks Node 24, `node_modules` and the Chromium build (and tells you the install command if it is missing), reads the admin login from the Secret `gateway-bootstrap` into its own environment only, and runs the Playwright tests in `apps/dashboard/e2e/` against `http://app.localhost` (`-Base <url>` for another address). They log in, check the Overview, the three servers and the four `utils` tools, create and revoke a key (the key is checked inside the page and never printed), filter the audit log, open and cancel an invite, use the phone drawer, log out, and, when the AI provider is configured, send one chat message ("Use the calculator: what is 6 times 7?", about 3K tokens of your free quota; desktop run only) and find its audit row with source **Chat**. On the phone-width run they also open the Chat page without sending anything and check that the composer and the suggestions (or the not-configured message) show and the page does not scroll sideways. Nothing is recorded: no screenshots, traces or videos. Verified 2026-10-22: **16 passed, 1 skipped** (the phone-only drawer test on the desktop run, by design) in 18.0 s, ending with `Dashboard works end to end in Chromium (desktop and mobile).` Each run leaves two revoked keys named `e2e …` and a cancelled invite behind.
+
+### Logs
+
+```powershell
+kubectl -n gateway get pods                        # dashboard-... should be 1/1 Running
+kubectl -n gateway logs deploy/dashboard --tail=20 # nginx access log: one line per file or page requested (invite links show as /invite/:token, query strings are dropped)
+```
+
+The nginx log holds request paths, client addresses and browser names, never cookies, keys, passwords or referrers. Invite links are logged as `/invite/:token` and query strings are dropped, so the log never holds an invite token (verified 2026-10-22: after opening `http://app.localhost/invite/test-token-123`, `kubectl -n gateway logs deploy/dashboard` showed `/invite/:token` and no `test-token`; see [security.md](security.md#8-residual-risks)).
+
+What the page does is in the gateway log (`kubectl -n gateway logs deploy/gateway`), because the dashboard only calls `/api`: every click is a `request` line, and every tool call (also from the chat) a `tool call` line. Readable and live views of that log: [Logs and health](#logs-and-health). Problems: [blank page or 404 on refresh](troubleshooting.md#the-dashboard-is-blank-or-a-refresh-gives-404), [Playwright browsers missing](troubleshooting.md#check-dashboardps1-says-playwright-chromium-is-not-installed), [the dashboard image is not found](troubleshooting.md#the-dashboard-pod-is-in-errimagepull-image-tag-not-found). The design rules (colours, spacing, accessibility) and the code layout are in [apps/dashboard/README.md](../apps/dashboard/README.md).
+
+## Set up the AI chat
+
+The Chat page needs an API key for an AI provider. The project uses **Groq's free plan** (no card needed, as of 2026-10-19); OpenRouter is an optional second provider. You do this once per machine; the key stays in the cluster across `stop.ps1` and `up.ps1`. Details on providers, limits and failures: [ai-integration.md](ai-integration.md).
+
+> **Never paste an API key into a chat, an issue, a commit or a screenshot.** It goes only into the file `.env`, which Git ignores.
+
+**Step 1. Get a free Groq key.** Open <https://console.groq.com/keys> and sign in (Google, GitHub or email). Press **Create API Key**, name it (for example `urumi-local`) and copy the key. Groq shows it only once; if you lose it, delete it there and create another.
+
+*Optional:* an OpenRouter key from <https://openrouter.ai/settings/keys> (**Create Key**). It is used only if you turn on the fallback (below).
+
+**Step 2. Put it in `.env`.** In PowerShell, in the repository folder:
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }   # create .env from the template once
+notepad .env
+```
+
+In Notepad, find the line `GROQ_API_KEY=` and paste your key right after the `=` (no spaces, no quotes). Optionally fill `OPENROUTER_API_KEY=` the same way. Save and close. `git check-ignore .env` prints `.env`, which confirms Git will never commit it.
+
+**Step 3. Send the key to the cluster.**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\create-secrets.ps1
+```
+
+The script reads only the two key lines, prints whether each is `set` or `empty` (never the key), stores them in the Secret `llm-api-keys`, and restarts the gateway so it reads them. Real output (2026-10-19):
+
+```text
+GROQ_API_KEY: set
+OPENROUTER_API_KEY: set
+secret/llm-api-keys serverside-applied
+Secret gateway/llm-api-keys is up to date.
+deployment.apps/gateway restarted
+... deployment "gateway" successfully rolled out
+```
+
+If it stops with `.env not found` or `Both GROQ_API_KEY and OPENROUTER_API_KEY are empty`, go back to step 2.
+
+**Step 4. Check that the gateway sees it.**
+
+```powershell
+kubectl -n gateway logs deploy/gateway | Select-String "llm "
+```
+
+Expected: a line containing `llm configured: groq/openai/gpt-oss-120b` (verified 2026-10-19). If it says `llm not configured: chat is disabled`, the key did not arrive: see [troubleshooting](troubleshooting.md#chat-says-the-ai-provider-isnt-configured). `up.ps1` also stops printing the yellow `AI chat : not set up` line.
+
+**Step 5. Use it.** Open <http://app.localhost/chat> (log in first). The header shows a badge `groq · openai/gpt-oss-120b`. Type **Use the calculator: what is 6 times 7?** and press Enter (Shift+Enter makes a new line), or click one of the suggestions. Within a few seconds a reply with `42` appears, above it a row `utils__calculate` marked **Succeeded**; click it to see the arguments and a preview of the result. Then open **Audit log**: the newest `utils__calculate` row has the source **Chat** and your user. Verified on 2026-10-19 with these prompts, each a real tool call through the gateway: "Create a draft product called Chat Test Mug priced 9.99" (`woo__create_product`, a draft visible in wp-admin under Products → Drafts), "What orders came in today?" (`woo__list_orders`), "Save a note: call the supplier on Monday" (`notes__create_note`) and "What notes do I have?" (`notes__list_notes`).
+
+What to know while using it:
+
+- The assistant acts **as you**: it can do exactly what you could do through `/mcp`, including creating products and changing order statuses, and every call is in the audit log. It is told to change data only when you ask; read the trace.
+- The conversation lives only in the open Chat page: **New conversation** clears it, and so do a reload and leaving the Chat page (for example to open the Audit log). A reply still being generated is cancelled in the browser when you leave; it may still finish on the gateway, so check the Audit log (source **Chat**) for any tools it ran. Nothing is stored on the server, and the gateway does not log what you typed. Your messages and the tool results **are** sent to Groq (a third party); keep that in mind for customer data.
+- Free-plan limits: Groq allows about 8,000 tokens a minute and each simple question costs about 3,000, so after two or three quick questions you may see "The AI provider is rate limited. Try again in N seconds." with a countdown. The gateway also limits each person to 10 messages a minute and one reply at a time.
+- If something fails after a tool already ran (for example the product was created and then the provider refused), the page lists the calls under "These actions already ran". Check them before asking again, so nothing is created twice. Your next message (or **Retry**) tells the assistant which calls already ran, and **Retry** asks it to continue rather than start over.
+
+**Switch the model or the provider.** These are Helm values, not secrets. Add to `deploy/values-local.yaml`:
+
+```yaml
+gateway:
+  llm:
+    provider: groq                 # groq | openrouter (needs the matching key in .env and step 3)
+    model: ""                      # "" = the provider's default, or for example openai/gpt-oss-20b
+    fallbackProvider: openrouter   # "" = none; tried once when Groq is rate limited or down
+```
+
+then run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`. The Chat badge shows the new provider and model. (The fallback and OpenRouter as the primary were **not tested** through the gateway; see [ai-integration.md](ai-integration.md#4-putting-keys-in-place-switching-and-adding-a-provider).)
+
+**Change or remove the key.** Edit `.env` and run step 3 again (the script restarts the gateway). The script refuses to run with both keys empty; to switch the chat off completely, delete the Secret and restart the gateway: `kubectl -n gateway delete secret llm-api-keys`, then `kubectl -n gateway rollout restart deploy/gateway` (**expected**: the chat then says it is not configured; not run).
+
+Problems: [chat says not configured](troubleshooting.md#chat-says-the-ai-provider-isnt-configured), [the key is rejected](troubleshooting.md#chat-says-the-ai-provider-rejected-the-api-key-llm_auth_failed), [rate limited](troubleshooting.md#chat-says-the-ai-provider-is-rate-limited-429).
+
 ## 11. Each part of the project
 
 | Part | Status | How to run | How to check | Logs |
@@ -854,9 +1039,10 @@ Table definitions and relationships: [system-design.md](system-design.md#2-data-
 | **WooCommerce MCP server** | Available (Phase 2), internal only | `scripts\up.ps1` builds and deploys it; rebuild with `scripts\build-images.ps1` then `up.ps1 -Redeploy` | `kubectl -n mcp get pods`; `scripts\check-mcp-woocommerce.ps1` (add `-Write` to also create a draft product); explore with MCP Inspector, see [section 8](#8-woocommerce-mcp-server-phase-2) | `kubectl -n mcp logs deploy/mcp-woocommerce` |
 | **Notes MCP server** (`mcp-notes`) | Available (Phase 3), internal only; reached through the gateway as `notes__...` | `scripts\up.ps1` builds and deploys it | `kubectl -n mcp get pods`; `scripts\check-gateway.ps1 -Write` | `kubectl -n mcp logs deploy/mcp-notes` |
 | **Utilities MCP server** (`mcp-utilities`) | Available (Phase 3), internal only; reached through the gateway as `utils__...` | `scripts\up.ps1` builds and deploys it | `kubectl -n mcp get pods`; `scripts\check-gateway.ps1 -Isolation` | `kubectl -n mcp logs deploy/mcp-utilities` |
-| **Gateway** | Available (Phase 3): `http://app.localhost/api` and `/mcp`; no web page yet | `scripts\up.ps1` (add `-Redeploy` after code changes); create a key as in [section 9](#9-the-gateway-phase-3) | `kubectl -n gateway get pods`; `scripts\check-gateway.ps1` (add `-Write`, `-Isolation`) | `kubectl -n gateway logs deploy/gateway` |
+| **Gateway** | Available (Phase 3): `http://app.localhost/api` and `/mcp` | `scripts\up.ps1` (add `-Redeploy` after code changes); create a key as in [section 9](#9-the-gateway-phase-3) | `kubectl -n gateway get pods`; `scripts\check-gateway.ps1` (add `-Write`, `-Isolation`) | `kubectl -n gateway logs deploy/gateway` |
 | **Postgres** (the gateway's database) | Available (Phase 3), internal only | `scripts\up.ps1` | `kubectl -n gateway get pods`; look inside with [section 10](#10-viewing-the-gateway-database-postgres) | `kubectl -n gateway logs postgres-0` |
-| **Dashboard + chat agent** | (planned — Phase 4) | — | — | — |
+| **Dashboard** (web page) | Available (Phase 4): <http://app.localhost/> | `scripts\up.ps1` builds and deploys it (add `-Redeploy` after code changes); for UI work, `npm run dev -w @urumi/dashboard` serves it at `http://localhost:5173` with `/api` and `/mcp` proxied to the cluster ([apps/dashboard/README.md](../apps/dashboard/README.md)) | `kubectl -n gateway get pods`; `scripts\check-dashboard.ps1` ([the dashboard](#the-dashboard-phase-4)) | `kubectl -n gateway logs deploy/dashboard` |
+| **Chat agent** (inside the gateway) | Available (Phase 4) once the AI key is set | [Set up the AI chat](#set-up-the-ai-chat): `.env`, then `scripts\create-secrets.ps1` | `kubectl -n gateway logs deploy/gateway \| Select-String "llm "` shows `llm configured: ...`; the Chat page; `scripts\check-dashboard.ps1 -Project desktop` sends one chat message | `kubectl -n gateway logs deploy/gateway \| Select-String "chat turn"` (no message text) |
 
 ## 12. Health checks and logs
 
@@ -866,9 +1052,11 @@ kubectl -n store logs deploy/wordpress -c wordpress          # Apache access log
 kubectl -n store logs job/store-setup                        # install log; the last line is SETUP COMPLETE
 kubectl -n mcp get pods                                      # mcp-woocommerce, mcp-notes and mcp-utilities should be 1/1 Running
 kubectl -n mcp logs deploy/mcp-woocommerce                   # MCP server log (never contains the token or keys)
-kubectl -n gateway get pods                                  # postgres-0 and gateway-... should be 1/1 Running
-kubectl -n gateway logs deploy/gateway                       # gateway log (never contains keys, passwords or credentials)
+kubectl -n gateway get pods                                  # postgres-0, gateway-... and dashboard-... should be 1/1 Running
+kubectl -n gateway logs deploy/gateway                       # gateway log (never contains keys, passwords, credentials or chat text)
+kubectl -n gateway logs deploy/dashboard                     # dashboard (nginx) access log
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1 -Write               # gateway end-to-end check
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dashboard.ps1                    # dashboard in a real browser, desktop and phone width
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1             # MCP server end-to-end check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-woo-api.ps1                       # WooCommerce REST key check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1            # register, order, see it in My Account
@@ -904,4 +1092,5 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 - A server shows `unreachable`: [troubleshooting](troubleshooting.md#a-server-shows-unreachable-in-the-gateway)
 - Postgres will not start (`PGDATA` permissions): [troubleshooting](troubleshooting.md#postgres-does-not-start-pgdata-permission-errors)
 - The new images are in `ErrImagePull`: [troubleshooting](troubleshooting.md#gateway-notes-or-utilities-pod-in-errimagepull)
+- Dashboard and chat: [chat not configured](troubleshooting.md#chat-says-the-ai-provider-isnt-configured); [key rejected (`LLM_AUTH_FAILED`)](troubleshooting.md#chat-says-the-ai-provider-rejected-the-api-key-llm_auth_failed); [rate limited (429)](troubleshooting.md#chat-says-the-ai-provider-is-rate-limited-429); [blank page or 404 on refresh](troubleshooting.md#the-dashboard-is-blank-or-a-refresh-gives-404); [Playwright Chromium missing](troubleshooting.md#check-dashboardps1-says-playwright-chromium-is-not-installed); [403 `CSRF_REJECTED` through the Vite dev server](troubleshooting.md#the-vite-dev-server-gives-403-csrf_rejected); [dashboard image not found](troubleshooting.md#the-dashboard-pod-is-in-errimagepull-image-tag-not-found)
 - Port 80 in use, pods not ready, setup Job failed and the rest: the full list at the top of [troubleshooting.md](troubleshooting.md).

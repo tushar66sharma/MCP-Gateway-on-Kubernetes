@@ -58,8 +58,9 @@ Small clarifications that do not change the decision (typos, a confirmed spike r
 | 007 | MCP SDK v2 with `createMcpHandler` (modern + stateless legacy fallback) | Accepted (Phase 2 spike) | [ADR-007](ADR-007-mcp-sdk-version.md) |
 | 008 | API keys: random + SHA-256, shown once | Accepted, implemented in Phase 3 | [ADR-008](ADR-008-api-key-hashing.md) |
 | 009 | Upstream credentials AES-256-GCM at rest | Accepted, implemented in Phase 3 | [ADR-009](ADR-009-upstream-credential-encryption.md) |
-| 010 | Chat agent loops back through the real `/mcp` | Accepted; token and `/mcp` acceptance implemented in Phase 3, agent in Phase 4 | [ADR-010](ADR-010-chat-agent-loopback.md) |
-| 011 | LLM: one OpenAI-compatible adapter, Groq + OpenRouter | Accepted (default model Proposed, Phase 4 spike) | [ADR-011](ADR-011-llm-provider-abstraction.md) |
+| 010 | Chat agent loops back through the real `/mcp` (a fresh internal token per request) | Accepted; token and `/mcp` acceptance implemented in Phase 3, agent, loopback client and `POST /api/chat` in Phase 4 | [ADR-010](ADR-010-chat-agent-loopback.md) |
+| 011 | LLM: one OpenAI-compatible adapter, Groq + OpenRouter; default model `openai/gpt-oss-120b` | Accepted, implemented in Phase 4 (default model decided by the spike) | [ADR-011](ADR-011-llm-provider-abstraction.md) |
 | 012 | Deployment target is k3s on a VPS, not Vercel/Render | Accepted | [ADR-012](ADR-012-deployment-target-k3s-vps.md) |
 | 013 | Invite links instead of email/temporary passwords | Accepted, implemented in Phase 3 | [ADR-013](ADR-013-invite-links.md) |
 | 014 | Cached health-checked tool catalog | Accepted, implemented in Phase 3 | [ADR-014](ADR-014-cached-tool-catalog.md) |
+| 015 | Dashboard served by its own unprivileged nginx pod, same origin as the API | Accepted, implemented in Phase 4 | [ADR-015](ADR-015-dashboard-served-by-nginx.md) |

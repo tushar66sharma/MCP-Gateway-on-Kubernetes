@@ -2,6 +2,7 @@ import { startMcpHttpServer, type Logger, type RunningMcpHttpServer } from '@uru
 import { createApiRouter } from './api/router.js';
 import { AuditWriter } from './audit/writer.js';
 import type { LoginRateLimiter } from './auth/rateLimit.js';
+import type { LlmProvider } from './chat/llm/types.js';
 import { ssrfOptionsOf, type Config } from './config.js';
 import type { DbHandle } from './db/client.js';
 import { createMcpAuth } from './mcp/auth.js';
@@ -19,6 +20,8 @@ export interface GatewayDeps {
   upstreams: UpstreamManager;
   audit: AuditWriter;
   repo: UpstreamRepository;
+  /** The chat model (Phase 4); null when no LLM key is configured (chat answers LLM_NOT_CONFIGURED). */
+  llm: LlmProvider | null;
 }
 
 /** The repository, audit writer and (not yet started) upstream manager over one database. */
@@ -51,8 +54,12 @@ export function sanitizeLogPath(path: string): string {
     .replace(/^(\/invite\/)([^/]+)/i, (_m, prefix: string) => `${prefix}:token`);
 }
 
-export function startGateway(deps: GatewayDeps, listen: { port: number; host?: string }): Promise<RunningMcpHttpServer> {
-  return startMcpHttpServer({
+export async function startGateway(deps: GatewayDeps, listen: { port: number; host?: string }): Promise<RunningMcpHttpServer> {
+  // The chat agent calls this same process's /mcp over loopback (ADR-010); the port is known once listening
+  // (it is 0 in tests). The default bind address 0.0.0.0 includes 127.0.0.1, which MCP_ALLOWED_HOSTS allows.
+  let port = 0;
+  const mcpUrl = (): string => `http://127.0.0.1:${port}/mcp`;
+  const running = await startMcpHttpServer({
     name: 'urumi-gateway',
     version: GATEWAY_VERSION,
     port: listen.port,
@@ -70,9 +77,11 @@ export function startGateway(deps: GatewayDeps, listen: { port: number; host?: s
       // X-Forwarded-For. On k3s, ServiceLB may SNAT every client to one node address before Traefik
       // (expected, not tested; Phase 5 checks it).
       app.set('trust proxy', deps.config.TRUST_PROXY);
-      app.use('/api', createApiRouter(deps));
+      app.use('/api', createApiRouter(deps, mcpUrl));
     },
     logPath: sanitizeLogPath,
     readinessCheck: () => deps.db.ping(),
   });
+  port = running.port;
+  return running;
 }

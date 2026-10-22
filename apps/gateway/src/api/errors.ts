@@ -13,7 +13,13 @@ export type ApiErrorCode =
   | 'INVITE_INVALID'
   | 'CONFLICT'
   | 'RATE_LIMITED'
-  | 'INTERNAL';
+  | 'INTERNAL'
+  // Chat (Phase 4): 503, 429 (with Retry-After), 502, 502, 502.
+  | 'LLM_NOT_CONFIGURED'
+  | 'LLM_RATE_LIMITED'
+  | 'LLM_AUTH_FAILED'
+  | 'LLM_UNAVAILABLE'
+  | 'LLM_BAD_RESPONSE';
 
 export class ApiError extends Error {
   readonly status: number;
