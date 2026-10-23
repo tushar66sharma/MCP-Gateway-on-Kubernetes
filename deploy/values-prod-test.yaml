@@ -1,0 +1,32 @@
+# Overrides on top of deploy/values-prod.yaml for the rehearsal in the second k3d cluster (urumi-prod).
+#   helm upgrade --install urumi charts/urumi-platform -n urumi-system --create-namespace \
+#     -f deploy/values-prod.yaml -f deploy/values-prod-test.yaml -f deploy/.images.urumi-prod.yaml
+# deploy/.images.urumi-prod.yaml (global.imageTag) is written by scripts\build-images.ps1 -Cluster urumi-prod.
+# Host ports 8081/8443 reach Traefik's 80/443 (deploy/k3d-prod-test.yaml); *.localhost resolves to 127.0.0.1.
+global:
+  imageRegistry: ""             # the images are imported into the cluster, nothing is pulled from GHCR
+  storeHost: store.prod.localhost
+  appHost: app.prod.localhost
+  publicPort: 8443
+  tls:
+    enabled: true
+    clusterIssuer: selfsigned   # deploy/prod/cluster-issuer-selfsigned.yaml
+storeSetup:
+  adminEmail: admin@example.com
+# Smaller requests and storage than production so it fits next to nothing else on a laptop (the memory
+# limits stay as in values-prod.yaml: they are a ceiling, not a reservation).
+mariadb:
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+wordpress:
+  storage: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+postgres:
+  storage: 1Gi
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+gateway:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }

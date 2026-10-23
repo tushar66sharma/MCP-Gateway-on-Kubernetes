@@ -1,0 +1,27 @@
+{{- if .Values.global.tls.enabled }}
+{{- /* One Middleware per namespace that has an Ingress: Traefik only accepts a same-namespace reference
+       from an Ingress annotation (<namespace>-<name>@kubernetescrd). The mcp namespace has no Ingress. */ -}}
+{{- $namespaces := list (dict "ns" .Values.namespaces.store "name" "wordpress" "component" "store") -}}
+{{- if .Values.gateway.enabled -}}
+{{- $namespaces = append $namespaces (dict "ns" .Values.namespaces.gateway "name" "gateway" "component" "gateway") -}}
+{{- end }}
+{{- range $namespaces }}
+---
+# Sends every plain-http request to https with a permanent (301) redirect.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: {{ .ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" .name "component" .component) | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+    {{- if ne (int $.Values.global.publicPort) 443 }}
+    # Without a port Traefik rewrites https://host:8443 to https://host (port dropped) and loops. Keep the public port.
+    port: {{ $.Values.global.publicPort | toString | quote }}
+    {{- end }}
+{{- end }}
+{{- end }}

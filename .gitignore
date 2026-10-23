@@ -19,3 +19,4 @@ deploy/.images.local.yaml
 
 # Playwright signed-in session (never commit)
 apps/dashboard/e2e/.auth/
+deploy/.images.*.yaml

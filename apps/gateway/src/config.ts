@@ -34,6 +34,8 @@ export interface Config extends LlmConfig {
   CHAT_TURN_TIMEOUT_MS: number;
   CHAT_MAX_STEPS: number;
   CHAT_RATE_LIMIT_PER_MIN: number;
+  /** Audited /mcp authentication failures allowed per client IP per minute before 429. */
+  MCP_AUTH_FAILURE_LIMIT_PER_MIN: number;
   /** IANA zone the chat agent uses to resolve "today"; validated, default UTC. */
   STORE_TIMEZONE: string;
 }
@@ -167,6 +169,7 @@ const appFields = z.object({
   CHAT_TURN_TIMEOUT_MS: intRange(60000, 10000, 120000),
   CHAT_MAX_STEPS: intRange(8, 1, 16),
   CHAT_RATE_LIMIT_PER_MIN: intRange(10, 1, 120),
+  MCP_AUTH_FAILURE_LIMIT_PER_MIN: intRange(30, 1, 1000),
   STORE_TIMEZONE: timeZone,
 });
 

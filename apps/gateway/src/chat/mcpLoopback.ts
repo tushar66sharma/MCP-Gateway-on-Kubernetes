@@ -28,8 +28,11 @@ function resultText(r: CallToolResult): string {
  * A real MCP client to the gateway's own /mcp over HTTP loopback (ADR-010), so chat goes through the same
  * auth, routing, limits and audit as an external client. Every HTTP request carries a freshly minted
  * internal token, so a long turn never outlives its 300 s token. The token is only ever in this header.
+ * `signal` is the turn's: an aborted signal rejects at once, and an abort during the connect closes the transport.
  */
-export async function connectLoopback(mcpUrl: string, mintToken: () => Promise<string>): Promise<McpToolClient> {
+export async function connectLoopback(mcpUrl: string, mintToken: () => Promise<string>, signal?: AbortSignal): Promise<McpToolClient> {
+  // A turn that is already cancelled never opens a connection or mints a token.
+  signal?.throwIfAborted();
   // The status of the last rejected POST (401/403), so a refused call can be told apart from other failures.
   let rejectedStatus: number | null = null;
   const authFetch: FetchLike = async (url, init) => {
@@ -42,8 +45,10 @@ export async function connectLoopback(mcpUrl: string, mintToken: () => Promise<s
   const transport = new StreamableHTTPClientTransport(new URL(mcpUrl), { fetch: authFetch });
   const client = new Client(CLIENT_INFO, { versionNegotiation: { mode: 'auto' } });
   try {
-    await client.connect(transport, { timeout: CONNECT_TIMEOUT_MS, signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS) });
+    const connectSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(CONNECT_TIMEOUT_MS)]) : AbortSignal.timeout(CONNECT_TIMEOUT_MS);
+    await client.connect(transport, { timeout: CONNECT_TIMEOUT_MS, signal: connectSignal });
   } catch (err) {
+    // Also closes the transport (and any request in flight) when the turn was cancelled during the connect.
     await client.close().catch(() => {});
     throw err;
   }

@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import type { UpstreamAuth } from '@urumi/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { updateUser, type AuthUser } from '../../src/auth/users.js';
+import { createChatRouter } from '../../src/api/chat.routes.js';
 import { LlmError } from '../../src/chat/llm/errors.js';
 import { auditLogs } from '../../src/db/schema.js';
 import type { UpstreamRecord } from '../../src/upstreams/connection.js';
@@ -184,7 +186,7 @@ describe('chat api', () => {
     expect((await post(cookie, { messages: [userMsg('three')] })).status).toBe(200);
   });
 
-  it('a client that disconnects stops its turn and frees the slot', async () => {
+  it('a client disconnect is logged as client_closed, stops its turn and frees the slot', async () => {
     const { user, cookie } = await newMember();
     llm.script(
       (r) =>
@@ -204,8 +206,71 @@ describe('chat api', () => {
     client.abort();
     await pending;
     await vi.waitFor(() => expect(llm.requests[0]?.signal.aborted).toBe(true));
-    await vi.waitFor(() => expect(chatTurnLines().find((l) => l.userId === user.id)).toMatchObject({ stoppedReason: 'timeout' }));
+    await vi.waitFor(() => expect(chatTurnLines().find((l) => l.userId === user.id)).toMatchObject({ stoppedReason: 'client_closed' }));
     await vi.waitFor(async () => expect((await post(cookie, { messages: [userMsg('again')] })).status).toBe(200));
+  });
+
+  it('a request whose socket is already closed when the handler starts releases the in-flight slot', async () => {
+    const { user, cookie } = await newMember();
+    llm.script(finalStep('after'));
+    const before = llm.requests.length;
+    // Over HTTP the parser usually aborts such a request first, so the handler is called directly with a
+    // request whose socket is gone and a response that already closed.
+    const layer = (createChatRouter(h.deps, () => `${h.baseUrl}/mcp`) as unknown as { stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (...a: unknown[]) => Promise<void> }> } }> }).stack.find(
+      (l) => l.route?.path === '/chat' && l.route.methods.post,
+    );
+    const handler = layer?.route?.stack.at(-1)?.handle;
+    expect(handler).toBeTypeOf('function');
+    const res = Object.assign(new EventEmitter(), { locals: { user }, closed: true, writableEnded: false, json: vi.fn() });
+    const req = { socket: { destroyed: true }, body: { messages: [userMsg('gone')] } };
+    await handler?.(req, res, vi.fn());
+    expect(llm.requests.length).toBe(before);
+    expect(res.json).not.toHaveBeenCalled();
+    expect(res.listenerCount('close')).toBe(0);
+    // The user's slot was never taken.
+    const next = await post(cookie, { messages: [userMsg('again')] });
+    expect(next.status).toBe(200);
+  });
+
+  describe('chat body parser order', () => {
+    const big = (n: number) => ({ messages: [userMsg('x'.repeat(4000))], pad: 'y'.repeat(n) });
+
+    it('the 512 KB chat parser runs after the session check', async () => {
+      // 300 KB, unauthenticated: 401, not 400/413. The server answers without reading the body, so a client
+      // still writing it may see the connection reset instead; both mean the body was never parsed.
+      for (let i = 0; i < 3; i++) {
+        try {
+          const res = await post(undefined, big(300_000));
+          expect(res.status).toBe(401);
+          expect((res.body as ErrorBody).error.code).toBe('UNAUTHENTICATED');
+          break;
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (code !== 'ECONNRESET' && code !== 'EPIPE') throw err;
+        }
+      }
+      // Invalid JSON, unauthenticated: the parser has not run, so 401 and not 400.
+      const bad = await csrf(request(h.baseUrl).post('/api/chat')).send('{not json');
+      expect(bad.status).toBe(401);
+      // The mixed-case path behaves the same way.
+      const upper = await csrf(request(h.baseUrl).post('/api/CHAT')).send('{not json');
+      expect(upper.status).toBe(401);
+    });
+
+    it('other routes keep the 100 KB limit', async () => {
+      const { cookie } = await newMember();
+      const res = await csrf(request(h.baseUrl).post('/api/keys'), cookie).send({ name: 'z'.repeat(150_000) });
+      expect(res.status).toBe(413);
+    });
+
+    it('an authenticated 300 KB chat body reaches validation (400, not 413), also on /api/CHAT', async () => {
+      const { cookie } = await newMember();
+      for (const path of ['/api/chat', '/api/CHAT']) {
+        const res = await csrf(request(h.baseUrl).post(path), cookie).send(big(300_000));
+        expect(res.status, path).toBe(400);
+        expect((res.body as ErrorBody).error.code).toBe('VALIDATION_FAILED');
+      }
+    });
   });
 
   it('LLM_RATE_LIMITED maps to 429 with Retry-After and details.toolCalls', async () => {

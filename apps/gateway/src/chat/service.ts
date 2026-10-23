@@ -1,6 +1,6 @@
 import { ApiError } from '../api/errors.js';
 import { mintInternalToken } from '../auth/internalToken.js';
-import { LoginRateLimiter } from '../auth/rateLimit.js';
+import { FixedWindowLimiter } from '../auth/rateLimit.js';
 import type { AuthUser } from '../auth/users.js';
 import type { GatewayDeps } from '../server.js';
 import { AgentLlmError, runAgentTurn, type AgentToolTrace, type AgentTurnResult } from './agent.js';
@@ -23,7 +23,7 @@ const toolNames = (traces: AgentToolTrace[]): string[] => traces.map((t) => t.na
  */
 export function createChatService(deps: GatewayDeps, mcpUrl: () => string): ChatService {
   const { config, logger } = deps;
-  const limiter = new LoginRateLimiter({ max: config.CHAT_RATE_LIMIT_PER_MIN, windowMs: 60_000, clock: deps.clock });
+  const limiter = new FixedWindowLimiter({ max: config.CHAT_RATE_LIMIT_PER_MIN, windowMs: 60_000, clock: deps.clock });
   const inFlight = new Set<string>();
 
   return {
@@ -44,8 +44,8 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
       const mintToken = () => mintInternalToken(user.id, config.GATEWAY_INTERNAL_TOKEN_SECRET, undefined, deps.clock());
       let mcp: McpToolClient | undefined;
       try {
-        mcp = await connectLoopback(mcpUrl(), mintToken);
-        const out = await runAgentTurn({
+        mcp = await connectLoopback(mcpUrl(), mintToken, signal);
+        const turn = await runAgentTurn({
           history: messages,
           llm,
           mcp,
@@ -56,6 +56,8 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
           signal,
           deadline,
         });
+        // The turn ends as `timeout` when its signal aborts; if the browser disconnected, that is the reason.
+        const out: AgentTurnResult = turn.stoppedReason === 'timeout' && clientSignal.aborted ? { ...turn, stoppedReason: 'client_closed' } : turn;
         logger.info(
           { userId: user.id, steps: out.steps, tools: toolNames(out.toolCalls), stoppedReason: out.stoppedReason, durationMs: Date.now() - started, usage: out.usage, provider: out.provider, model: out.model },
           'chat turn',

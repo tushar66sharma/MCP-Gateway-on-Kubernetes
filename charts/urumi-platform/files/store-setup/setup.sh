@@ -7,6 +7,11 @@ log() { echo "[store-setup] $(date -u +%H:%M:%S) $*"; }
 fail() { echo "[store-setup] ERROR: $*" >&2; exit 1; }
 
 WP="wp --path=/var/www/html"
+. "$(dirname "$0")/lib.sh"
+
+# Refuse an empty admin password before any WP-CLI call: an empty value would make the install
+# prompt for (or generate) a password nobody knows.
+[ -n "${ADMIN_PASSWORD:-}" ] || fail "ADMIN_PASSWORD is empty"
 
 log "waiting for wp-config.php (written by the WordPress container on first start)"
 i=0
@@ -16,30 +21,65 @@ until [ -f /var/www/html/wp-config.php ]; do
 done
 
 log "waiting for the database"
+# Keep the last error (at most 5 lines) so a failure says why. WP-CLI database errors do not contain the password.
 i=0
-until $WP db query "SELECT 1" >/dev/null 2>&1; do
-  i=$((i + 1)); [ "$i" -gt 60 ] && fail "database not reachable within 300s"
-  sleep 5
+until db_err=$($WP db query "SELECT 1" 2>&1); do
+  i=$((i + 1))
+  if [ "$i" -gt "${DB_WAIT_TRIES:-60}" ]; then
+    fail "database not reachable within $((i * ${DB_WAIT_SLEEP:-5}))s; last error: $(printf '%s\n' "$db_err" | tail -n 5)"
+  fi
+  sleep "${DB_WAIT_SLEEP:-5}"
 done
 
 if $WP core is-installed >/dev/null 2>&1; then
   log "WordPress already installed"
 else
   log "installing WordPress"
-  $WP core install --url="$WP_URL" --title="$SITE_TITLE" \
-    --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" \
-    --admin_email="$ADMIN_EMAIL" --skip-email
+  # The password goes in on stdin (--prompt), never as an argument, so it is not visible in the process
+  # list. With piped input WP-CLI echoes the prompt and the equivalent command line (password included)
+  # on stdout, so stdout is discarded; errors go to stderr and do not contain the password.
+  printf '%s\n' "$ADMIN_PASSWORD" | $WP core install --url="$WP_URL" --title="$SITE_TITLE" \
+    --admin_user="$ADMIN_USER" --admin_email="$ADMIN_EMAIL" --skip-email --prompt=admin_password >/dev/null
 fi
+
+# Keep the stored site address in step with the configured public URL (e.g. after a host change).
+for opt in home siteurl; do
+  current_url=$($WP option get "$opt")
+  if [ "$current_url" != "$WP_URL" ]; then
+    log "updating $opt: $current_url -> $WP_URL"
+    $WP option update "$opt" "$WP_URL"
+  fi
+done
 
 current_woo=""
 if $WP plugin is-installed woocommerce >/dev/null 2>&1; then
   current_woo=$($WP plugin get woocommerce --field=version)
 fi
-if [ "$current_woo" != "$WOO_VERSION" ]; then
-  log "installing WooCommerce $WOO_VERSION (found: ${current_woo:-none})"
-  $WP plugin install woocommerce --version="$WOO_VERSION" --force
-fi
+# Install when WooCommerce is absent or older than WOO_VERSION; never downgrade a newer one.
+# Assign first: the status of a command substitution used as a case word is discarded, so a failing
+# helper would look like "no match" and skip the upgrade silently.
+cmp=$(woo_version_cmp "$current_woo" "$WOO_VERSION") || fail "could not compare WooCommerce versions (installed: ${current_woo:-none}, wanted: $WOO_VERSION)"
+case "$cmp" in
+  older)
+    log "installing WooCommerce $WOO_VERSION (found: ${current_woo:-none})"
+    $WP plugin install woocommerce --version="$WOO_VERSION" --force
+    ;;
+  newer)
+    log "WooCommerce $current_woo is newer than $WOO_VERSION; not downgrading"
+    ;;
+  equal)
+    log "WooCommerce $current_woo is already at $WOO_VERSION"
+    ;;
+  *)
+    fail "could not compare WooCommerce versions (unexpected result '$cmp')"
+    ;;
+esac
 $WP plugin is-active woocommerce >/dev/null 2>&1 || $WP plugin activate woocommerce
+# Run WooCommerce's database update now instead of waiting for an admin visit. Every run, not only after an
+# install or upgrade: it is idempotent ("No updates required"), and it finishes an update that an earlier,
+# failed run left half done.
+log "running the WooCommerce database update"
+$WP wc update
 
 log "configuring store options"
 $WP option update timezone_string "$STORE_TIMEZONE"
@@ -60,11 +100,18 @@ $WP option update woocommerce_cod_settings \
   --format=json
 
 # DEMO-STORE SETTING: open registration has no email verification and no CAPTCHA, so anyone who can
-# reach the store can create accounts (and, with COD guest checkout, fake orders). A values toggle
-# (storeSetup.customerRegistration, off or with anti-spam for production) is planned for Phase 5.
-log "enabling customer accounts (register on My Account and at checkout; customers choose their own password because no mail server is configured)"
-$WP option update woocommerce_enable_myaccount_registration yes
-$WP option update woocommerce_enable_signup_and_login_from_checkout yes
+# reach the store can create accounts (and, with COD guest checkout, fake orders). The values toggle
+# storeSetup.customerRegistration (CUSTOMER_REGISTRATION here) defaults to true for the local demo;
+# production sets it to false. There is no CAPTCHA, so registration stays off wherever the store is public.
+if [ "${CUSTOMER_REGISTRATION:-true}" = "true" ]; then
+  log "enabling customer accounts (register on My Account and at checkout; customers choose their own password because no mail server is configured)"
+  registration=yes
+else
+  log "customer registration is disabled (storeSetup.customerRegistration=false)"
+  registration=no
+fi
+$WP option update woocommerce_enable_myaccount_registration "$registration"
+$WP option update woocommerce_enable_signup_and_login_from_checkout "$registration"
 $WP option update woocommerce_enable_checkout_login_reminder yes
 $WP option update woocommerce_registration_generate_username yes
 $WP option update woocommerce_registration_generate_password no

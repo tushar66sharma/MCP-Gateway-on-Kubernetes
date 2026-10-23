@@ -11,7 +11,9 @@ import { createServersRouter } from './servers.routes.js';
 import { createUsersRouter } from './users.routes.js';
 
 /**
- * Order: headers → json(100kb) → csrfGuard (mutating methods) → each route's requireSession/requireRole → handler.
+ * Order: headers → json(100kb, skipped for /chat) → csrfGuard (mutating methods, headers only) → each route's
+ * requireSession/requireRole → handler. The chat route parses its own 512 KB body after requireSession, so an
+ * anonymous client cannot make the server buffer half a megabyte.
  * `mcpUrl` is the gateway's own /mcp on loopback, for the chat agent (known once the server listens).
  */
 export function createApiRouter(deps: GatewayDeps, mcpUrl: () => string): express.Router {
@@ -23,9 +25,13 @@ export function createApiRouter(deps: GatewayDeps, mcpUrl: () => string): expres
     next();
   });
   // A chat body may hold 20 messages of 4000 characters; in a non-Latin script that is ~240 KB of UTF-8
-  // (JSON escapes can double it). Parsed here first, the general 100 KB parser then skips it.
-  router.use('/chat', express.json({ limit: '512kb' }));
-  router.use(express.json({ limit: '100kb' }));
+  // (JSON escapes can double it), so POST /chat parses a 512 KB body itself, after requireSession. The general
+  // 100 KB parser skips it. Express routing ignores case, so the test lowercases the path too (/api/CHAT).
+  const json100 = express.json({ limit: '100kb' });
+  router.use((req, res, next) => {
+    if (req.path.toLowerCase().startsWith('/chat')) next();
+    else json100(req, res, next);
+  });
   router.use(csrfGuard(deps.config.PUBLIC_APP_URL));
 
   router.use(createAuthRouter(deps));

@@ -28,7 +28,7 @@ export interface AgentToolTrace {
 export interface AgentTurnResult {
   reply: string;
   toolCalls: AgentToolTrace[];
-  stoppedReason: 'final' | 'max_steps' | 'timeout';
+  stoppedReason: 'final' | 'max_steps' | 'timeout' | 'client_closed';
   usage: Usage;
   provider: string;
   model: string;
@@ -76,7 +76,7 @@ export function truncate(text: string, max: number): string {
 const safeName = (name: string): string => name.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
 
 /** A result may not open or close a `<tool_result>` block of its own (it is untrusted text). */
-const neutralise = (text: string): string => text.replace(/<(\/?)tool_result/gi, '<$1tool-result');
+const neutralise = (text: string): string => text.replace(/<\s*(\/?)\s*tool_result/gi, '<$1tool-result');
 
 export function wrapToolResult(name: string, text: string): string {
   return `<tool_result name="${safeName(name)}">\n${truncate(neutralise(text), TOOL_RESULT_MAX_CHARS)}\n</tool_result>`;

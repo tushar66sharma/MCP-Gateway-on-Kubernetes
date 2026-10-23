@@ -1,0 +1,17 @@
+# Keeps the real client IP visible to Traefik (and so to the gateway's per-IP rate limits) instead of the
+# node's address, by making the Traefik Service use externalTrafficPolicy: Local.
+# k3s applies any HelmChartConfig that sits in its manifests directory:
+#   sudo cp deploy/prod/traefik-config.yaml /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+# (a kubectl apply works too). Do not set node-external-ip in the k3s config when you use this: with
+# externalTrafficPolicy Local the bundled ServiceLB is advised against by the k3s docs
+# (https://docs.k3s.io/networking/networking-services).
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      spec:
+        externalTrafficPolicy: Local

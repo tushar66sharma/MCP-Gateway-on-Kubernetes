@@ -1,4 +1,5 @@
 import type { RequestHandler } from 'express';
+import { FixedWindowLimiter } from '../auth/rateLimit.js';
 import { authenticateBearer, type BearerAuthResult } from '../auth/bearer.js';
 import type { AuthUser } from '../auth/users.js';
 import type { GatewayDeps } from '../server.js';
@@ -21,6 +22,8 @@ const REASON_TEXT: Record<Rejection['reason'], string> = {
   expired: 'internal token expired',
 };
 
+const TOO_MANY = { jsonrpc: '2.0', error: { code: -32029, message: 'Too many failed authentication attempts' }, id: null } as const;
+
 const UNAUTHORIZED = { jsonrpc: '2.0', error: { code: -32001, message: 'Unauthorized' }, id: null } as const;
 
 /**
@@ -31,9 +34,15 @@ const UNAUTHORIZED = { jsonrpc: '2.0', error: { code: -32001, message: 'Unauthor
  * internal token whose signature verified (expired → its user, source 'chat'). A missing header,
  * another scheme or a malformed value writes no row, only a debug log line, so anonymous garbage
  * cannot grow the audit table.
+ * Recognised rejections are also limited per client IP (deps.mcpAuthLimiter): over the limit the client
+ * gets 429 with Retry-After, no audit row, and one warn line per IP per window. A valid credential is
+ * always accepted and never counts, and unrecognised garbage stays a plain 401 that does not count, so a
+ * noisy client behind a shared IP cannot lock out a valid key.
  * It answers 401 itself (never next(err)), so the JSON-RPC body and WWW-Authenticate are exact.
  */
 export function createMcpAuth(deps: GatewayDeps): RequestHandler {
+  // At most one 'limited' warn line per IP per window (same window as the failure limiter).
+  const warned = new FixedWindowLimiter({ max: 1, windowMs: 60_000, clock: deps.clock });
   return async (req, res, next) => {
     const now = deps.clock();
     const result = await authenticateBearer(deps.db.db, req.headers.authorization, deps.config.GATEWAY_INTERNAL_TOKEN_SECRET, now);
@@ -44,6 +53,14 @@ export function createMcpAuth(deps: GatewayDeps): RequestHandler {
       return;
     }
     if (result.recognised) {
+      const ip = req.ip ?? 'unknown';
+      const limit = deps.mcpAuthLimiter.hit(ip);
+      if (!limit.allowed) {
+        if (warned.hit(ip).allowed) deps.logger.warn({ ip, retryAfterSec: limit.retryAfterSec }, 'mcp auth failures limited');
+        res.setHeader('Retry-After', String(limit.retryAfterSec));
+        res.status(429).json(TOO_MANY);
+        return;
+      }
       await deps.audit.record({
         event: 'auth_rejected',
         source: result.source,

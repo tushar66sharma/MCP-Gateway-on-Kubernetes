@@ -1,6 +1,5 @@
 {{- $ns := .Values.namespaces.store -}}
 {{- $dbSecret := default "store-db" .Values.secrets.existing.storeDb -}}
-{{- $storeUrl := include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -107,10 +106,7 @@ spec:
               value: {{ .Values.wordpress.tablePrefix | quote }}
             - name: WORDPRESS_CONFIG_EXTRA
               value: |
-                define('WP_HOME', '{{ $storeUrl }}');
-                define('WP_SITEURL', '{{ $storeUrl }}');
-                define('DISALLOW_FILE_EDIT', true);
-                define('FS_METHOD', 'direct');
+                {{- include "urumi.wordpressConfigExtra" . | nindent 16 }}
           ports:
             - name: http
               containerPort: 80
@@ -125,8 +121,9 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          # TCP only: a PHP or database stall must not restart Apache (readiness and startup still use /wp-login.php).
           livenessProbe:
-            httpGet: { path: /wp-login.php, port: http }
+            tcpSocket: { port: http }
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 6
@@ -142,4 +139,6 @@ spec:
           persistentVolumeClaim:
             claimName: wordpress-data
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            # PHP and WooCommerce uploads pass through /tmp; exceeding the limit would evict the storefront.
+            sizeLimit: 128Mi

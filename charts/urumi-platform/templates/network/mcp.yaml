@@ -1,0 +1,47 @@
+{{- if .Values.networkPolicies.enabled }}
+{{- $ns := .Values.namespaces.mcp }}
+{{- $gw := .Values.namespaces.gateway }}
+{{- $servers := list (dict "name" "mcp-woocommerce" "port" 3001) (dict "name" "mcp-notes" "port" 3002) (dict "name" "mcp-utilities" "port" 3003) }}
+{{- range $s := $servers }}
+---
+# {{ $s.name }}: only the gateway in.{{ if eq $s.name "mcp-woocommerce" }} Out: the WordPress service (WooCommerce REST).{{ end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $s.name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" (printf "%s-netpol" $s.name) "component" "network") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "urumi.selectorLabels" (dict "root" $ "name" $s.name) | nindent 6 }}
+  {{- if eq $s.name "mcp-woocommerce" }}
+  policyTypes: [Ingress, Egress]
+  {{- else }}
+  policyTypes: [Ingress]
+  {{- end }}
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $gw }}
+          podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (dict "root" $ "name" "gateway") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: {{ $s.port }} }
+  {{- if eq $s.name "mcp-woocommerce" }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.namespaces.store }}
+          podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (dict "root" $ "name" "wordpress") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 80 }
+  {{- end }}
+{{- end }}
+{{- end }}

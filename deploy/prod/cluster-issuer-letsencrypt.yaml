@@ -1,0 +1,26 @@
+# Let's Encrypt (production) via the ACME HTTP-01 challenge, solved through Traefik.
+# Replace CHANGE-ME with a real email address (Let's Encrypt writes to it about expiring certificates), then:
+#   kubectl apply -f deploy/prod/cluster-issuer-letsencrypt.yaml
+# Needs cert-manager installed and port 80 reachable from the internet. Not executed in this project:
+# it depends on a real domain and DNS.
+#
+# The solver pod (cm-acme-http-solver-*, label acme.cert-manager.io/http01-solver=true, port 8089) starts in the
+# Ingress's namespace (store, gateway). The chart's acme-http01-solver NetworkPolicy admits Traefik to it there.
+# Pod Security: cert-manager v1.21.2 already builds it restricted-compliant (runAsNonRoot true by default, seccomp
+# RuntimeDefault, allowPrivilegeEscalation false, drop ALL; pkg/issuer/acme/http/pod.go), so no podTemplate is
+# needed. Do not add podTemplate.spec.securityContext here: it replaces the pod's whole securityContext, so it
+# must then repeat runAsNonRoot: true and seccompProfile RuntimeDefault or PSA rejects the solver pod.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: CHANGE-ME@example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik

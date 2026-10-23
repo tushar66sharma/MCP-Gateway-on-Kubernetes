@@ -4,7 +4,7 @@ import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import pg from 'pg';
 import type { Logger } from '@urumi/shared';
-import { migrationsFolder } from './migrate.js';
+import { migrationsFolder, withMigrationLock } from './migrate.js';
 import * as schema from './schema.js';
 
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
@@ -18,7 +18,7 @@ export interface DbHandle {
 
 /**
  * Bounds for a hung Postgres (e.g. a SYN black-hole): a connect attempt fails after 5 s instead of
- * waiting forever (the 30 x 2 s startup retry assumes attempts fail fast, and /readyz must answer),
+ * waiting forever (the 90 x 2 s startup retry assumes attempts fail fast, and /readyz must answer),
  * a statement is cancelled server-side after 10 s, and idle clients are closed after 30 s.
  */
 export const PG_POOL_OPTIONS = { max: 10, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30_000, statement_timeout: 10_000 } as const satisfies pg.PoolConfig;
@@ -46,7 +46,17 @@ export function createPostgresHandle(logger?: Logger): DbHandle {
       const migrationPool = new pg.Pool({ ...PG_POOL_OPTIONS, max: 1, statement_timeout: undefined });
       migrationPool.on('error', (err) => logger?.warn({ reason: safeReason(err) }, 'postgres migration pool error'));
       try {
-        await migratePg(drizzle(migrationPool, { schema }), { migrationsFolder: migrationsFolder() });
+        // One client for the whole run: the advisory lock belongs to its session.
+        const client = await migrationPool.connect();
+        try {
+          await withMigrationLock(
+            client,
+            () => migratePg(drizzle(client, { schema }), { migrationsFolder: migrationsFolder() }),
+            (err) => logger?.warn({ reason: safeReason(err) }, 'migration advisory unlock failed; the lock ends with the session'),
+          );
+        } finally {
+          client.release();
+        }
       } finally {
         await migrationPool.end();
       }

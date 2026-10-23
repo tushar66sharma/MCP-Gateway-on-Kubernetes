@@ -53,7 +53,7 @@ flowchart TB
         subgraph NODE["k3d-urumi-server-0 = the Kubernetes node (k3s, containerd inside)"]
             P1["pod wordpress"]
             P2["pod mariadb-0"]
-            P3["pod store-setup (Job, finished)"]
+            P3["pod store-setup (Job, finished)<br/>pod wp-cron-... (every 5 min, a few seconds)"]
             P5["pods mcp-woocommerce, mcp-notes, mcp-utilities (namespace mcp, internal only)"]
             P6["pods gateway, dashboard and postgres-0 (namespace gateway)"]
             P4["Traefik, CoreDNS, ... (kube-system)"]
@@ -185,6 +185,14 @@ This runs `k3d cluster stop urumi`, which frees the RAM. **Data survives a stop 
 
 Start Docker Desktop, wait for "Engine running", then run `up.ps1` again. The k3d containers use the Docker restart policy `unless-stopped`, so after a reboot the cluster may already be running or may be stopped (expected; not tested across a reboot). `up.ps1` handles both and keeps your data.
 
+### The cluster listens on this computer only (Phase 5)
+
+Since 2026-10-23 `deploy/k3d-config.yaml` publishes the cluster's ports as `127.0.0.1:80` and `127.0.0.1:443`, so only programs on this computer can reach the store, the dashboard and the gateway. Before, k3d published them on every network interface, so another device on the same Wi-Fi could open `http://<this computer's address>/` with a `Host: store.localhost` header. **Verified 2026-10-23:** `curl.exe -m 5 http://127.0.0.1/ -H "Host: store.localhost"` answers `200`; the same request to this computer's Wi-Fi address (<your LAN IPv4>) gets no answer (curl exit 7, connection refused); `docker port k3d-urumi-serverlb` lists `80/tcp -> 127.0.0.1:80` and `443/tcp -> 127.0.0.1:443`. One more port stays open: the Kubernetes API (`6443/tcp -> 0.0.0.0:<random port>`), which needs the cluster's client certificate (see [security.md](security.md#8-residual-risks), risk 9).
+
+The browser, `curl` and all scripts use `localhost` names, so nothing changes in daily use. A device on your network can no longer open the store; to show it to someone else use a screen share, or the production path in [deployment.md](deployment.md#production-k3s-vps).
+
+**Recreating the cluster loses all local data.** The cluster was deleted and recreated on 2026-10-23 to apply this setting (the owner agreed): products, orders, customers, gateway users, API keys and the audit log are gone, and **new passwords were generated** (store admin, database, gateway admin). Fetch them again with the commands in [section 5](#5-passwords-and-secrets); the AI keys come back by running `scripts\create-secrets.ps1` once (it reads `.env` itself). Any API key you created before the recreation no longer works; any MCP client that stored one needs a new key. To check the whole platform after such a recreation run `scripts\smoke-test.ps1` (below, section 12).
+
 ## 4. URLs
 
 With the default settings (host port 80, **verified**):
@@ -273,7 +281,9 @@ The full flow is in [workflows.md](workflows.md#5-customer-account-and-order-his
 
 > **Security note (demo setting).** Open registration is a demo-store choice. Anyone who can reach the store can register an account. There is no email verification and no CAPTCHA. The password-strength meter runs in the browser only, so a direct POST accepts weak passwords. The "already registered" error reveals which emails have accounts. With cash-on-delivery guest checkout, bots could create fake accounts and orders.
 >
-> k3d publishes ports 80 and 443 without a host IP, so Docker is **expected** to bind them on all interfaces; the store is then likely reachable from your local network (for example café Wi-Fi). This was **not verified** on this machine. On untrusted networks stop the cluster with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1`. A production toggle is planned for Phase 5.
+> k3d publishes ports 80 and 443 without a host IP, so Docker is **expected** to bind them on all interfaces; the store is then likely reachable from your local network (for example café Wi-Fi). This was **not verified** on this machine. On untrusted networks stop the cluster with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1`. The production toggle is described below.
+
+> **Registration toggle (Phase 5).** Turn registration off with `storeSetup.customerRegistration: false` (chart value, default `true`, a boolean in the schema); the setup Job then sets `woocommerce_enable_myaccount_registration` and `woocommerce_enable_signup_and_login_from_checkout` to `no`. **Verified 2026-10-22** on the local cluster: with `--set storeSetup.customerRegistration=false` My Account had no Register form (login form only) and the block checkout's settings said `checkoutAllowsSignup:false`; after `up.ps1 -Redeploy` (default `true`) the Register form was back and `checkoutAllowsSignup:true`. The page HTML was checked with curl, not a browser. There is no CAPTCHA or email verification, so production turns registration off ([security.md](security.md#8-residual-risks)). With registration off, customers can still check out as guests; existing accounts keep working.
 
 ### As the admin
 
@@ -404,7 +414,7 @@ HPOS ("high-performance order storage") is **off** (`woocommerce_custom_orders_t
 
 ### Why it is internal-only
 
-It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server; since Phase 3 the list also shows the `gateway` Ingress, which routes only `/api` and `/mcp` on `app.localhost` to the gateway). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. The **gateway** ([section 9](#9-the-gateway-phase-3)) is the single public door: it checks who the caller is, then calls this server with the token. NetworkPolicies that restrict which pods may reach it arrive in Phase 5 (**not built yet**; today any pod in the cluster can reach the Service, but still needs the token).
+It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server; since Phase 3 the list also shows the `gateway` Ingress, which routes only `/api` and `/mcp` on `app.localhost` to the gateway). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. The **gateway** ([section 9](#9-the-gateway-phase-3)) is the single public door: it checks who the caller is, then calls this server with the token. Since Phase 5 a NetworkPolicy also limits who can reach it: only the gateway pod may open a connection to it (verified 2026-10-22: a pod in the `default` namespace was refused, the gateway got its `401`; `scripts	est-network-policies.ps1`, [security.md, section 15](security.md#15-networkpolicies-phase-5)). The token is still required on top.
 
 ### How it starts
 
@@ -500,7 +510,7 @@ Verified 2026-10-19 with SQL against the live database (section 7): one key row,
 
 - **No direct external access.** Nothing outside the cluster can call this server. Clients connect through the **gateway** ([section 9](#9-the-gateway-phase-3)), and people use it through the [dashboard](#the-dashboard-phase-4) (Phase 4).
 - **No per-user identity at the server itself.** It has one shared bearer token; per-user keys and the audit log are the gateway's job (built in Phase 3).
-- **No NetworkPolicies** yet (Phase 5).
+- **Reachable only from the gateway** (NetworkPolicy since Phase 5); `kubectl port-forward`, which `check-mcp-woocommerce.ps1` uses, is not affected by the policies.
 
 ## 9. The gateway (Phase 3)
 
@@ -793,7 +803,7 @@ kubectl -n gateway logs deploy/gateway | Select-String "<request id>"
 
 `kubectl logs` shows only the current pod's log. A redeploy or restart starts a new, empty log; add `--previous` to read the pod's last crashed run. Tool calls, rejected keys and their users are also kept permanently in the **Audit log** page and in the `audit_logs` table ([section 10](#10-viewing-the-gateway-database-postgres)).
 
-Invite links appear in the log only as `/api/invites/:token`. Everything about failures is in [error-handling.md](error-handling.md); common problems are in [troubleshooting.md](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts).
+Invite links appear in the log only as `/api/invites/:token`. Everything about failures is in [error-handling.md](error-handling.md); common problems are in [troubleshooting.md](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-90-attempts).
 
 ## 10. Viewing the gateway database (Postgres)
 
@@ -1050,6 +1060,8 @@ Problems: [chat says not configured](troubleshooting.md#chat-says-the-ai-provide
 kubectl -n store get pods                                    # wordpress and mariadb-0 should be 1/1 Running; store-setup is Completed
 kubectl -n store logs deploy/wordpress -c wordpress          # Apache access log and PHP errors
 kubectl -n store logs job/store-setup                        # install log; the last line is SETUP COMPLETE
+kubectl -n store get cronjob wp-cron                         # WordPress scheduled work, every 5 minutes (since the Phase 5 final review)
+kubectl -n store get jobs                                    # the latest wp-cron-<n> Job should be Complete; read it with: kubectl -n store logs job/wp-cron-<n>
 kubectl -n mcp get pods                                      # mcp-woocommerce, mcp-notes and mcp-utilities should be 1/1 Running
 kubectl -n mcp logs deploy/mcp-woocommerce                   # MCP server log (never contains the token or keys)
 kubectl -n gateway get pods                                  # postgres-0, gateway-... and dashboard-... should be 1/1 Running
@@ -1061,7 +1073,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerc
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-woo-api.ps1                       # WooCommerce REST key check
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1            # register, order, see it in My Account
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\customer-order-smoke.ps1 -CheckGuestLinking   # also checks guest-order linking
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1                         # everything in one command: pods, 4 checks, dashboard, policies, invite log, npm audit (Phase 5; -Quick skips the dashboard and npm audit)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invite-log.ps1                   # the dashboard log must hold no invite token (Phase 5; also run by check-dashboard.ps1)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policies.ps1               # NetworkPolicies: 13 allowed/blocked probes (Phase 5)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1                    # chart schema and render rules, deploy.ps1 guards, .env parser, kubeconform (Phase 5): hostnames, timezone, TLS scheme, Pod Security labels, emptyDir limits (Phase 5, no cluster needed)
 ```
+
+**NetworkPolicy probe script (Phase 5).** `scripts\test-network-policies.ps1` starts thirteen short-lived `curlimages/curl:8.22.0` pods (labelled like the pod they impersonate) and checks that each flow is allowed or blocked as designed. It takes about 3 minutes because each probe waits 10 s (`-SettleSeconds`) for the network controller to program the new pod. It prints a table and ends with `NetworkPolicies behave as designed (13 probes)` or exits 1. It runs against the current kube context and refuses any context other than `k3d-urumi` and `k3d-urumi-prod`. List the policies with `kubectl get networkpolicy -A`.
+
+**The smoke test (Phase 5).** `scripts\smoke-test.ps1` runs, in this order, one step each: (1) all pods ready, (2) `check-woo-api`, (3) `check-mcp-woocommerce`, (4) `check-gateway -Write`, (5) `check-dashboard` (a real browser, and one live chat turn when the AI key is set, which spends free-tier tokens), (6) `test-network-policies` (about 3 minutes), (7) the invite-log check and (8) `npm audit --omit=dev --audit-level=high`. Each step runs in its own PowerShell process and only its last output line is shown; the run ends with a PASS/FAIL table and exit code 0 only if nothing failed. `-Quick` skips steps 5 and 8 (no browser, no chat turn, no network). The scripts never print a password or key. Result on a fresh cluster, 2026-10-23: all 8 rows PASS (full run), and 6 PASS with 2 SKIPPED for `-Quick`.
 
 The smoke test leaves a demo customer and order in the store (users like `smoke+<timestamp>@example.com`). It never prints the password it generates.
 
@@ -1071,7 +1091,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 |---|---|---|
 | Remove the store but keep the data | `helm uninstall urumi --namespace urumi-system` | The data volumes and namespace are kept; a later `up.ps1` reinstalls and the data comes back (verified, see [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept)). |
 | Wipe all store data | 1. `helm uninstall urumi --namespace urumi-system`<br>2. `kubectl delete ns store mcp gateway --wait=true --timeout=300s`<br>3. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1` | **Destroys all data**: products, orders, users and passwords. Do the uninstall first: if the Helm release stays installed while its namespace is gone, `up.ps1` now notices the missing `store` namespace and redeploys (expected; this exact combination was not re-run after the up.ps1 change), but the clean sequence below is the one verified in Phase 1. After all three steps `up.ps1` builds a brand-new store with new passwords (same sequence as [deployment.md](deployment.md#step-9-uninstall-and-what-is-kept), verified in Phase 1). |
-| Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch. |
+| Delete the whole cluster | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\cluster-down.ps1` | **Destroys everything**, including all data. `up.ps1` recreates it from scratch with **new passwords**; run `scripts\create-secrets.ps1` afterwards to put the AI keys back, then `scripts\smoke-test.ps1`. |
 
 ## 14. Troubleshooting pointers
 
@@ -1087,7 +1107,7 @@ The smoke test leaves a demo customer and order in the store (users like `smoke+
 - The MCP server answers 401: [troubleshooting](troubleshooting.md#the-mcp-server-answers-401-unauthorized); 403 Invalid Host: [troubleshooting](troubleshooting.md#the-mcp-server-answers-403-invalid-host); a tool says WooCommerce 401 Invalid signature: [troubleshooting](troubleshooting.md#an-mcp-tool-returns-woocommerce-401-invalid-signature); a tool times out: [troubleshooting](troubleshooting.md#an-mcp-tool-times-out); port 13001 busy: [troubleshooting](troubleshooting.md#the-port-forward-port-13001-is-already-in-use); Inspector oddities: [libuv assertion](troubleshooting.md#inspector-prints-a-libuv-assertion-at-the-end-windows); a price is refused: [troubleshooting](troubleshooting.md#create_product-says-regular_price-must-be-non-negative-with-at-most-2-decimals)
 - `check-mcp-woocommerce.ps1` says `Dependencies not installed`, or Node says `Cannot find package '@modelcontextprotocol/client'`: [troubleshooting](troubleshooting.md#the-mcp-check-says-dependencies-not-installed-or-cannot-find-package-modelcontextprotocolclient)
 - The store-setup Job fails with `missing urumi_managed_key_owner marker`: [troubleshooting](troubleshooting.md#the-store-setup-job-fails-with-missing-urumi_managed_key_owner-marker)
-- Gateway pod in `CrashLoopBackOff` with `database not ready after 30 attempts`: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-30-attempts); with an environment message: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-with-an-invalid-environment-message)
+- Gateway pod in `CrashLoopBackOff` with `database not ready after 90 attempts`: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-90-attempts); with an environment message: [troubleshooting](troubleshooting.md#the-gateway-pod-is-in-crashloopbackoff-with-an-invalid-environment-message)
 - `/mcp` answers 401: [troubleshooting](troubleshooting.md#mcp-answers-401-on-the-gateway); `/api` answers 403 `CSRF_REJECTED`: [troubleshooting](troubleshooting.md#api-answers-403-csrf_rejected); login answers 429: [troubleshooting](troubleshooting.md#login-answers-429-too-many-attempts)
 - A server shows `unreachable`: [troubleshooting](troubleshooting.md#a-server-shows-unreachable-in-the-gateway)
 - Postgres will not start (`PGDATA` permissions): [troubleshooting](troubleshooting.md#postgres-does-not-start-pgdata-permission-errors)

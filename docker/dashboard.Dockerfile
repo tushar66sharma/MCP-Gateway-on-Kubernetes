@@ -12,5 +12,8 @@ RUN npm run build -w @urumi/dashboard
 FROM nginxinc/nginx-unprivileged:1.30.6-alpine AS runtime
 COPY --from=build /app/apps/dashboard/dist /usr/share/nginx/html
 COPY apps/dashboard/nginx.conf /etc/nginx/conf.d/default.conf
+# A fixed worker count instead of `auto` (which follows the node's CPU count, not the pod's limit).
+USER root
+RUN sed -i 's/^worker_processes .*;/worker_processes 2;/' /etc/nginx/nginx.conf
 USER 101
 EXPOSE 8080

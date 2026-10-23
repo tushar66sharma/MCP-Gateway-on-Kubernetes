@@ -5,8 +5,13 @@ Namespaces: {{ .Values.namespaces.store }}, {{ .Values.namespaces.mcp }}, {{ .Va
 Storefront:  {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}
 Store admin: {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}/wp-admin   (user: {{ (.Values.storeSetup | default dict).adminUser | default "admin" }})
 
+{{ if eq .Values.global.publicScheme "https" -}}
+Admin password (the command prints it; run it on a machine you trust):
+  kubectl -n {{ .Values.namespaces.store }} get secret {{ default "store-admin" .Values.secrets.existing.storeAdmin }} -o jsonpath='{.data.password}' | base64 -d; echo
+{{- else -}}
 Admin password (copied to the clipboard, never printed; run from the repository root):
   powershell -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1
+{{- end }}
 
 Store setup log:
   kubectl -n {{ .Values.namespaces.store }} logs job/store-setup
@@ -19,6 +24,14 @@ Dashboard:    {{ $app }}/
 Gateway API:  {{ $app }}/api
 MCP endpoint: {{ $app }}/mcp   (needs a personal API key)
 
+{{ if eq .Values.global.publicScheme "https" -}}
+Gateway admin password (login: the email given to scripts/prod/create-prod-secrets.sh):
+  kubectl -n {{ .Values.namespaces.gateway }} get secret {{ default "gateway-bootstrap" .Values.secrets.existing.gatewayBootstrap }} -o jsonpath='{.data.password}' | base64 -d; echo
+
+AI chat (optional): create the Secret {{ default "llm-api-keys" .Values.secrets.existing.llmApiKeys }} in namespace {{ .Values.namespaces.gateway }} (keys GROQ_API_KEY, OPENROUTER_API_KEY),
+then restart the gateway: kubectl -n {{ .Values.namespaces.gateway }} rollout restart deploy/gateway   (see docs/deployment.md)
+{{- else -}}
 AI chat (optional): put GROQ_API_KEY (and optionally OPENROUTER_API_KEY) in .env, then run:
   powershell -ExecutionPolicy Bypass -File scripts\create-secrets.ps1
+{{- end }}
 {{- end }}

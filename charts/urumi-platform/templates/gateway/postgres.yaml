@@ -85,9 +85,12 @@ spec:
               mountPath: /tmp
       volumes:
         - name: run
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            # Postgres temp files for sorts and hashes; 4x the other Node pods.
+            sizeLimit: 64Mi
   # PVCs created from volumeClaimTemplates are not Helm-managed: they survive `helm uninstall`.
   volumeClaimTemplates:
     - metadata:

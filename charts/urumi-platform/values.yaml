@@ -22,6 +22,10 @@ namespaces:
   mcp: mcp
   gateway: gateway
 
+# Pod Security Admission level enforced (and warned/audited) on the three app namespaces. See ADR-017.
+podSecurity:
+  level: restricted           # restricted | baseline | privileged
+
 # Pre-created Secrets (production). Empty = the chart generates them.
 secrets:
   existing:
@@ -53,6 +57,15 @@ wordpress:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # WordPress scheduled work (WP-Cron, WooCommerce Action Scheduler). true = DISABLE_WP_CRON in WordPress plus
+  # the wp-cron CronJob running `wp cron event run --due-now`, so nothing depends on WordPress reaching its own
+  # public URL (blocked by the NetworkPolicies on a VPS). false = WordPress's built-in loopback WP-Cron.
+  cron:
+    enabled: true
+    schedule: "*/5 * * * *"
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
 
 storeSetup:
   enabled: true
@@ -67,6 +80,9 @@ storeSetup:
   country: "US:CA"
   timezone: Asia/Kolkata
   seedProducts: true
+  # Let shoppers create accounts (My Account and checkout). There is no CAPTCHA or email verification,
+  # so production sets this to false.
+  customerRegistration: true
   # Must be shorter than deploy.ps1's --timeout (10m) so a stuck Job fails the release with a clear reason.
   activeDeadlineSeconds: 480
   resources:
@@ -125,6 +141,7 @@ gateway:
   healthIntervalMs: 15000
   healthTimeoutMs: 5000
   callTimeoutMs: 20000    # must stay greater than mcpWoocommerce.timeoutMs (10000)
+  mcpAuthFailureLimitPerMin: 30   # audited /mcp auth failures per client IP per minute, then 429
   # AI chat model. Names only: the API keys live in the llm-api-keys Secret (secrets.existing.llmApiKeys).
   llm:
     provider: groq          # groq | openrouter
@@ -153,3 +170,8 @@ dashboard:
   resources:
     requests: { cpu: 10m, memory: 16Mi }
     limits: { cpu: 100m, memory: 64Mi }
+
+# Default-deny NetworkPolicies for the three app namespaces plus explicit allow rules (ADR-016).
+# Needs a CNI that enforces them (k3s: the embedded kube-router controller).
+networkPolicies:
+  enabled: true

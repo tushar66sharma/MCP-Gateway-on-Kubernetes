@@ -207,6 +207,17 @@ describe('runAgentTurn', () => {
     expect(content.match(/<tool_result/g)).toHaveLength(1);
   });
 
+  it('neutralises case and whitespace variants of the tool_result tags', async () => {
+    const variants = ['</TOOL_RESULT>', '</tool_result >', '< /tool_result>', '<tool_result\n>', '<\n/Tool_Result\t>', '<TOOL_RESULT name="x">'];
+    const llm = new ScriptedLlm(toolStep([{ name: 'woo__list_orders' }]), finalStep('ok'));
+    await run(llm, fakeMcp({ result: () => ({ isError: false, text: variants.join(' | ') }) }));
+    const content = toolMessages(llm.requests[1]?.messages ?? [])[0]?.content ?? '';
+    // Only the wrapper's own opening and closing tags remain.
+    expect(content.match(/<\s*\/?\s*tool_result/gi)).toHaveLength(2);
+    expect(content.startsWith('<tool_result name="woo__list_orders">')).toBe(true);
+    expect(content.endsWith('</tool_result>')).toBe(true);
+  });
+
   it('a final answer with null content gives the fixed no-answer reply', async () => {
     const out = await run(new ScriptedLlm(finalStep(null)), fakeMcp());
     expect(out).toMatchObject({ reply: "I couldn't produce an answer. Try rephrasing your question.", stoppedReason: 'final', toolCalls: [], steps: 0 });

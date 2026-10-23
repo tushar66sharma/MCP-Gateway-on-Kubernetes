@@ -75,6 +75,22 @@ shows fresh random values; real installs and upgrades reuse stored ones.
 {{- end -}}
 {{- end }}
 
+{{/* PHP that the WordPress image's wp-config.php evals (WORDPRESS_CONFIG_EXTRA). Shared by the WordPress
+     Deployment and the wp-cron CronJob so both run WordPress with the same constants. The host is safe to
+     embed: the schema only accepts RFC 1123 host names. Arg: the root context. */}}
+{{- define "urumi.wordpressConfigExtra" -}}
+{{- $storeUrl := include "urumi.publicUrl" (dict "root" . "host" .Values.global.storeHost) -}}
+define('WP_HOME', '{{ $storeUrl }}');
+define('WP_SITEURL', '{{ $storeUrl }}');
+define('DISALLOW_FILE_EDIT', true);
+define('DISALLOW_FILE_MODS', true);
+define('FS_METHOD', 'direct');
+{{- if .Values.wordpress.cron.enabled }}
+// Scheduled work runs from the wp-cron CronJob; page loads never call wp-cron.php on the public URL.
+define('DISABLE_WP_CRON', true);
+{{- end }}
+{{- end }}
+
 {{/* Pod-level security context. Args: dict uid, gid. */}}
 {{- define "urumi.podSecurityContext" -}}
 runAsNonRoot: true
@@ -214,5 +230,6 @@ spec:
               mountPath: /tmp
       volumes:
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            sizeLimit: 16Mi
 {{- end }}

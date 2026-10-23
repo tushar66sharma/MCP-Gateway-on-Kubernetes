@@ -13,6 +13,8 @@ metadata:
 data:
   setup.sh: |-
     {{- .Files.Get "files/store-setup/setup.sh" | nindent 4 }}
+  lib.sh: |-
+    {{- .Files.Get "files/store-setup/lib.sh" | nindent 4 }}
   upsert-api-key.php: |-
     {{- .Files.Get "files/store-setup/upsert-api-key.php" | nindent 4 }}
 ---
@@ -85,6 +87,7 @@ spec:
             - { name: STORE_CURRENCY, value: {{ .Values.storeSetup.currency | quote }} }
             - { name: STORE_COUNTRY, value: {{ .Values.storeSetup.country | quote }} }
             - { name: STORE_TIMEZONE, value: {{ .Values.storeSetup.timezone | quote }} }
+            - { name: CUSTOMER_REGISTRATION, value: {{ .Values.storeSetup.customerRegistration | quote }} }
             - { name: SEED_PRODUCTS, value: {{ .Values.storeSetup.seedProducts | quote }} }
             - name: WOO_CONSUMER_KEY
               valueFrom: { secretKeyRef: { name: {{ $wooSecret }}, key: consumer-key } }
@@ -104,5 +107,7 @@ spec:
           configMap:
             name: store-setup-scripts
         - name: tmp
-          emptyDir: {}
+          emptyDir:
+            # wp plugin install downloads the WooCommerce zip (18 MB for 11.2.1) here; 256Mi leaves room for upgrades.
+            sizeLimit: 256Mi
 {{- end }}

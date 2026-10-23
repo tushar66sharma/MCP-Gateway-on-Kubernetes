@@ -3,7 +3,7 @@ import request from 'supertest';
 import { sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, type RunningMcpHttpServer } from '@urumi/shared';
-import { LoginRateLimiter } from '../src/auth/rateLimit.js';
+import { FixedWindowLimiter } from '../src/auth/rateLimit.js';
 import { loadConfig } from '../src/config.js';
 import { connectWithRetry, type DbHandle } from '../src/db/client.js';
 import { createUpstreamServices, startGateway } from '../src/server.js';
@@ -53,7 +53,8 @@ describe('gateway scaffold', () => {
         logger: createLogger('test', 'silent'),
         db,
         clock: () => new Date(),
-        rateLimiter: new LoginRateLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }),
+        rateLimiter: new FixedWindowLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }),
+        mcpAuthLimiter: new FixedWindowLimiter({ max: 30, windowMs: 60_000, clock: () => new Date() }),
         ...createUpstreamServices(config, createLogger('test', 'silent'), db),
         llm: null,
       },
