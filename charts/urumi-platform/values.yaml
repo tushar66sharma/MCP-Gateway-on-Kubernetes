@@ -57,6 +57,15 @@ wordpress:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # WordPress scheduled work (WP-Cron, WooCommerce Action Scheduler). true = DISABLE_WP_CRON in WordPress plus
+  # the wp-cron CronJob running `wp cron event run --due-now`, so nothing depends on WordPress reaching its own
+  # public URL (blocked by the NetworkPolicies on a VPS). false = WordPress's built-in loopback WP-Cron.
+  cron:
+    enabled: true
+    schedule: "*/5 * * * *"
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { cpu: 500m, memory: 256Mi }
 
 storeSetup:
   enabled: true

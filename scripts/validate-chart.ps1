@@ -90,6 +90,34 @@ $r2 = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $lo
 Report 'customerRegistration false renders CUSTOMER_REGISTRATION false' ($r2.Out -match 'name: CUSTOMER_REGISTRATION, value: "false"')
 Report 'rendered setup script has no --admin_password= argument' ($r.Out -notmatch '--admin_password=')
 
+# --- Final review I1: WordPress scheduled work runs from a CronJob, not from loopback requests to the public URL ---
+$cron = $docs | Where-Object { $_ -match '(?m)^kind: CronJob' -and $_ -match '(?m)^  name: wp-cron\s*$' -and $_ -match '(?m)^  namespace: store\s*$' } | Select-Object -First 1
+Report 'CronJob wp-cron renders in store (schedule */5, Forbid, deadlines, history limits, backoffLimit 0)' ([bool]($cron -and
+    $cron -match 'schedule: "\*/5 \* \* \* \*"' -and $cron -match 'concurrencyPolicy: Forbid' -and $cron -match 'startingDeadlineSeconds: 120' -and
+    $cron -match 'successfulJobsHistoryLimit: 1' -and $cron -match 'failedJobsHistoryLimit: 3' -and $cron -match 'activeDeadlineSeconds: 240' -and
+    $cron -match 'backoffLimit: 0'))
+Report 'wp-cron runs restricted as uid 33 (runAsNonRoot, seccomp RuntimeDefault, no escalation, drop ALL)' ([bool]($cron -and
+    $cron -match 'runAsNonRoot: true' -and $cron -match 'runAsUser: 33' -and $cron -match 'type: RuntimeDefault' -and
+    $cron -match 'allowPrivilegeEscalation: false' -and $cron -match 'drop: \["ALL"\]' -and $cron -match 'automountServiceAccountToken: false'))
+Report 'wp-cron runs "wp --path=/var/www/html cron event run --due-now" from the store-setup image on the WordPress PVC' ([bool]($cron -and
+    $cron -match 'image: wordpress:cli-' -and $cron -match '(?m)^\s+exec wp --path=/var/www/html cron event run --due-now\r?$' -and
+    $cron -match 'claimName: wordpress-data' -and $cron -match 'app\.kubernetes\.io/name: wp-cron'))
+# A new pod can start before kube-router admits its IP to MariaDB (observed 2026-10-23: refused in the first second).
+Report 'wp-cron waits for the database (bounded) before running events' ([bool]($cron -and
+    $cron -match 'until err=\$\(wp --path=/var/www/html db query "SELECT 1"' -and $cron -match '-ge 30 \]' -and $cron -match 'exit 1'))
+$wp = $docs | Where-Object { $_ -match '(?m)^kind: Deployment' -and $_ -match '(?m)^  name: wordpress\s*$' } | Select-Object -First 1
+Report 'WordPress sets DISABLE_WP_CRON (no wp-cron.php loopback on page loads)' ([bool]($wp -and $wp -match "define\('DISABLE_WP_CRON', true\);"))
+$np = $docs | Where-Object { $_ -match '(?m)^kind: NetworkPolicy' -and $_ -match '(?m)^  name: wp-cron\s*$' } | Select-Object -First 1
+Report 'NetworkPolicy wp-cron: egress only (MariaDB 3306 + internet), no ingress' ([bool]($np -and $np -match 'policyTypes: \[Egress\]' -and
+    $np -match 'port: 3306' -and $np -match 'cidr: 0\.0\.0\.0/0' -and $np -notmatch '(?m)^  ingress:'))
+$mdb = $docs | Where-Object { $_ -match '(?m)^kind: NetworkPolicy' -and $_ -match '(?m)^  name: mariadb\s*$' } | Select-Object -First 1
+Report 'MariaDB policy admits wp-cron' ([bool]($mdb -and $mdb -match 'app\.kubernetes\.io/name: wp-cron'))
+$rc = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '--set', 'wordpress.cron.enabled=false')
+Report 'wordpress.cron.enabled=false renders no CronJob, no wp-cron policy and leaves WP-Cron on' (($rc.Code -eq 0) -and ($rc.Out -match '(?m)^kind: Deployment') -and
+  ($rc.Out -notmatch '(?m)^kind: CronJob') -and ($rc.Out -notmatch '(?m)^  name: wp-cron\s*$') -and ($rc.Out -notmatch 'DISABLE_WP_CRON')) $rc.Out
+Case-Lint 'empty wordpress.cron.schedule is rejected' "wordpress:`n  cron:`n    schedule: `"`"`n" $false
+Case-Lint 'non-boolean wordpress.cron.enabled is rejected' "wordpress:`n  cron:`n    enabled: `"yes`"`n" $false
+
 # --- Task 5.6: TLS redirect and HSTS middlewares (rendered only when TLS is on) -------------------------------
 $rp = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $prod)
 Report 'prod values render' ($rp.Code -eq 0) $rp.Out

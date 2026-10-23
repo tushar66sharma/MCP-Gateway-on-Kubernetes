@@ -1,0 +1,103 @@
+{{- /*
+WordPress scheduled work (WP-Cron events, WooCommerce Action Scheduler) without loopback requests.
+WordPress normally runs it by requesting its own public URL (wp-cron.php) on page loads. On a VPS that
+request goes node IP -> Traefik pod IP, which the private-range exclusion of the internet egress rule blocks,
+so the chart sets DISABLE_WP_CRON and runs the due events here with WP-CLI instead (ADR-018).
+*/ -}}
+{{- if .Values.wordpress.cron.enabled }}
+{{- $ns := .Values.namespaces.store -}}
+{{- $dbSecret := default "store-db" .Values.secrets.existing.storeDb -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: wp-cron
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" "wp-cron" "component" "store") | nindent 4 }}
+spec:
+  schedule: {{ .Values.wordpress.cron.schedule | quote }}
+  # One run at a time; a run that cannot start within 2 minutes of its slot is skipped (the next one catches up).
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "urumi.labels" (dict "root" $ "name" "wp-cron" "component" "store") | nindent 8 }}
+    spec:
+      # No retries: the next scheduled run is the retry. The deadline keeps a stuck run shorter than the 5-minute slot.
+      backoffLimit: 0
+      activeDeadlineSeconds: 240
+      template:
+        metadata:
+          labels:
+            {{- include "urumi.podLabels" (dict "root" $ "name" "wp-cron" "component" "store") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            # Same user as store-setup: the WordPress volume is owned by the Debian image's www-data (uid 33).
+            {{- include "urumi.podSecurityContext" (dict "uid" 33 "gid" 33) | nindent 12 }}
+          affinity:
+            # The WordPress volume is ReadWriteOnce: schedule next to the WordPress pod.
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      {{- include "urumi.selectorLabels" (dict "root" $ "name" "wordpress") | nindent 22 }}
+                  topologyKey: kubernetes.io/hostname
+          containers:
+            - name: wp-cron
+              image: {{ .Values.storeSetup.image }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              command:
+                - sh
+                - -c
+                - |
+                  # A new pod can start before kube-router has admitted its IP to MariaDB's policy: the first
+                  # connection is refused within the first second (observed). Wait for the database, at most 60 s.
+                  # WP-CLI database errors do not contain the password.
+                  i=0
+                  until err=$(wp --path=/var/www/html db query "SELECT 1" 2>&1 >/dev/null); do
+                    i=$((i + 1))
+                    if [ "$i" -ge 30 ]; then
+                      echo "[wp-cron] database not reachable within 60s; last error: $(printf '%s\n' "$err" | tail -n 3)" >&2
+                      exit 1
+                    fi
+                    sleep 2
+                  done
+                  exec wp --path=/var/www/html cron event run --due-now
+              workingDir: /var/www/html
+              securityContext:
+                {{- include "urumi.containerSecurityContext" . | nindent 16 }}
+              env:
+                - { name: HOME, value: /tmp }
+                - { name: WP_CLI_CACHE_DIR, value: /tmp/wp-cli-cache }
+                - name: WORDPRESS_DB_HOST
+                  value: "mariadb.{{ $ns }}.svc.cluster.local:3306"
+                - name: WORDPRESS_DB_NAME
+                  value: {{ .Values.mariadb.database | quote }}
+                - name: WORDPRESS_DB_USER
+                  value: {{ .Values.mariadb.user | quote }}
+                - name: WORDPRESS_DB_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ $dbSecret }}, key: password } }
+                - name: WORDPRESS_TABLE_PREFIX
+                  value: {{ .Values.wordpress.tablePrefix | quote }}
+                - name: WORDPRESS_CONFIG_EXTRA
+                  value: |
+                    {{- include "urumi.wordpressConfigExtra" . | nindent 20 }}
+              resources:
+                {{- toYaml .Values.wordpress.cron.resources | nindent 16 }}
+              volumeMounts:
+                - { name: data, mountPath: /var/www/html }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: wordpress-data
+            - name: tmp
+              emptyDir:
+                # WP-CLI's cache and PHP temp files only; no downloads happen here.
+                sizeLimit: 64Mi
+{{- end }}

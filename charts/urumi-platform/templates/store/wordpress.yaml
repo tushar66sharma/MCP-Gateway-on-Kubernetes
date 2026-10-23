@@ -1,6 +1,5 @@
 {{- $ns := .Values.namespaces.store -}}
 {{- $dbSecret := default "store-db" .Values.secrets.existing.storeDb -}}
-{{- $storeUrl := include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -107,11 +106,7 @@ spec:
               value: {{ .Values.wordpress.tablePrefix | quote }}
             - name: WORDPRESS_CONFIG_EXTRA
               value: |
-                define('WP_HOME', '{{ $storeUrl }}');
-                define('WP_SITEURL', '{{ $storeUrl }}');
-                define('DISALLOW_FILE_EDIT', true);
-                define('DISALLOW_FILE_MODS', true);
-                define('FS_METHOD', 'direct');
+                {{- include "urumi.wordpressConfigExtra" . | nindent 16 }}
           ports:
             - name: http
               containerPort: 80

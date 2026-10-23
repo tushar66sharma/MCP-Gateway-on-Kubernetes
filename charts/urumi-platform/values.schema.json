@@ -33,6 +33,20 @@
       "additionalProperties": false,
       "properties": { "level": { "type": "string", "enum": ["restricted", "baseline", "privileged"] } }
     },
+    "wordpress": {
+      "type": "object",
+      "properties": {
+        "cron": {
+          "type": "object",
+          "required": ["enabled", "schedule"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "schedule": { "type": "string", "minLength": 1 },
+            "resources": { "type": "object" }
+          }
+        }
+      }
+    },
     "storeSetup": {
       "type": "object",
       "properties": {
