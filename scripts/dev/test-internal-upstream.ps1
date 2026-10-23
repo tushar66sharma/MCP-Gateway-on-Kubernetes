@@ -27,11 +27,11 @@ $slugMcp = 'extra-mcp'
 $slugTools = 'extra-tools'
 if (-not $ScratchDir) { $ScratchDir = [IO.Path]::GetTempPath() }
 $work = Join-Path $ScratchDir ('urumi-internal-upstream-' + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $work | Out-Null
 $script:session = $null
 $script:keyId = $null
 $script:failed = $false
 $script:checks = @()
+$script:armed = $false   # set only after the preflight passed: cleanup and restore run only then
 
 function Step([string]$m) { Write-Host "`n== $m" -ForegroundColor Cyan }
 function Check([string]$name, [bool]$ok, [string]$detail = '') {
@@ -103,7 +103,9 @@ function Get-ServerBySlug([string]$slug) {
 }
 function Remove-TestKubernetes {
   & kubectl -n mcp delete deployment,service,secret -l 'urumi.dev/test=internal-upstream' --ignore-not-found 2>&1 | Out-Null
-  & kubectl delete namespace $testNs --ignore-not-found --wait=true --timeout=120s 2>&1 | Out-Null
+  # Only a namespace carrying our label is ever deleted.
+  $mine = (& kubectl get namespace $testNs -l 'urumi.dev/test=internal-upstream' --no-headers 2>$null)
+  if ($mine) { & kubectl delete namespace $testNs --wait=true --timeout=120s 2>&1 | Out-Null }
 }
 
 # Manifest for one test server. The pod is Pod Security "restricted" compliant (non-root, RuntimeDefault seccomp,
@@ -213,17 +215,28 @@ function Describe-Server($s) {
   return "status=$($s.status), tools=$($s.toolCount), lastError=$($s.lastError)"
 }
 
-$before = $null
-try {
-  foreach ($t in 'kubectl', 'helm', 'node') { if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { throw "'$t' not found on PATH." } }
-  $ctx = (& kubectl config current-context).Trim()
-  if ($ctx -ne 'k3d-urumi') { throw "Refusing to run against context '$ctx' (use k3d-urumi)." }
-  $imagesFile = Join-Path $root 'deploy/.images.local.yaml'
-  $tag = ''
-  if (Test-Path $imagesFile) { if ((Get-Content $imagesFile -Raw) -match 'imageTag:\s*"?([A-Za-z0-9._-]+)"?') { $tag = $Matches[1] } }
-  if (-not $tag) { throw 'No image tag in deploy/.images.local.yaml; run scripts\build-images.ps1 first.' }
-  if (-not (Test-Path (Join-Path $root 'node_modules/@modelcontextprotocol/client'))) { throw 'Dependencies not installed: run npm ci from the repository root.' }
+# Preflight: runs BEFORE the try block, so a refusal exits without any pre-clean, cleanup or redeploy.
+function Stop-Preflight([string]$m) { Write-Host "ERROR: $m" -ForegroundColor Red; exit 1 }
+foreach ($t in 'kubectl', 'helm', 'node') { if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { Stop-Preflight "'$t' not found on PATH." } }
+$ctx = ''
+$ctxOut = (& kubectl config current-context 2>$null)
+if ($LASTEXITCODE -eq 0 -and $ctxOut) { $ctx = ([string]$ctxOut).Trim() }
+if ($ctx -ne 'k3d-urumi') { Stop-Preflight "Refusing to run against context '$ctx' (use k3d-urumi). Nothing was changed." }
+$imagesFile = Join-Path $root 'deploy/.images.local.yaml'
+$tag = ''
+if (Test-Path $imagesFile) { if ((Get-Content $imagesFile -Raw) -match 'imageTag:\s*"?([A-Za-z0-9._-]+)"?') { $tag = $Matches[1] } }
+if (-not $tag) { Stop-Preflight 'No image tag in deploy/.images.local.yaml; run scripts\build-images.ps1 first.' }
+if (-not (Test-Path (Join-Path $root 'node_modules/@modelcontextprotocol/client'))) { Stop-Preflight 'Dependencies not installed: run npm ci from the repository root.' }
+$nsExisting = (& kubectl get namespace $testNs --ignore-not-found --no-headers 2>$null)
+if ($nsExisting) {
+  $nsMine = (& kubectl get namespace $testNs -l 'urumi.dev/test=internal-upstream' --no-headers 2>$null)
+  if (-not $nsMine) { Stop-Preflight "Namespace '$testNs' already exists and was not created by this script (no label urumi.dev/test=internal-upstream). Refusing to start; nothing was changed." }
+}
 
+$before = $null
+New-Item -ItemType Directory -Path $work | Out-Null
+$script:armed = $true
+try {
   Step 'Pre-clean (leftovers of an earlier run)'
   if (-not (Login)) { throw 'Could not log in as the bootstrap admin.' }
   Remove-Servers
@@ -232,7 +245,10 @@ try {
 
   Step '1. Deploy mcp-extra in mcp and in tools-test (restricted-compliant, key in a Secret, never printed)'
   $keyMcp = Deploy-TestServer 'mcp' $tag
-  $null = Run-Native 'kubectl' @('create', 'namespace', $testNs)
+  $nsFile = Join-Path $work 'namespace.yaml'
+  [IO.File]::WriteAllText($nsFile, "apiVersion: v1`nkind: Namespace`nmetadata:`n  name: $testNs`n  labels:`n    urumi.dev/test: internal-upstream`n")
+  $nr = Run-Native 'kubectl' @('apply', '-f', $nsFile)
+  if ($nr.Code -ne 0) { throw "could not create namespace ${testNs}: $($nr.Out)" }
   $keyTools = Deploy-TestServer $testNs $tag
   & kubectl -n mcp get deploy,svc -l 'urumi.dev/test=internal-upstream' --no-headers 2>&1 | ForEach-Object { Write-Host "   mcp: $($_ -replace '\s+', ' ')" }
   & kubectl -n $testNs get deploy,svc --no-headers 2>&1 | ForEach-Object { Write-Host "   ${testNs}: $($_ -replace '\s+', ' ')" }
@@ -293,29 +309,31 @@ catch {
   $script:failed = $true
 }
 finally {
-  Step '4. Cleanup'
-  try {
-    if (-not $script:session -or ((Api 'GET' '/api/servers').Status -ne 200)) { $null = Login }
-    if ($script:keyId) { $d = Api 'DELETE' "/api/keys/$($script:keyId)"; Write-Host "   revoked the temporary key: HTTP $($d.Status)" }
-    Remove-Servers
+  if ($script:armed) {
+    Step '4. Cleanup'
+    try {
+      if (-not $script:session -or ((Api 'GET' '/api/servers').Status -ne 200)) { $null = Login }
+      if ($script:keyId) { $d = Api 'DELETE' "/api/keys/$($script:keyId)"; Write-Host "   revoked the temporary key: HTTP $($d.Status)" }
+      Remove-Servers
+    }
+    catch { Write-Host "   API cleanup error: $($_.Exception.Message)" -ForegroundColor Yellow }
+    Remove-TestKubernetes
+    Remove-Item Env:GW_KEY -ErrorAction SilentlyContinue
+    $up = Run-Native 'powershell' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'scripts/up.ps1'), '-Redeploy')
+    Write-Host "   up.ps1 -Redeploy exit code $($up.Code)"
+    if ($up.Code -ne 0) { Write-Host $up.Out; $script:failed = $true }
+    Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+    $after = Get-State 'AFTER (cleanup and redeploy without the setting)'
+    if ($before) {
+      Check 'after: NetworkPolicy count equals the count before' ($after.Policies -eq $before.Policies) "(before $($before.Policies), after $($after.Policies))"
+      Check 'after: SSRF_ALLOWED_INTERNAL_HOSTS equals the value before' ($after.Ssrf -eq $before.Ssrf)
+    }
+    $nsLeft = (& kubectl get ns $testNs --ignore-not-found --no-headers 2>$null)
+    Check "after: namespace $testNs is gone" (-not $nsLeft)
+    $podsLeft = (& kubectl get pods -A --no-headers 2>$null | Where-Object { $_ -match 'mcp-extra' })
+    Check 'after: no mcp-extra pod is left' (-not $podsLeft)
+    & kubectl get pods -A --no-headers 2>&1 | Where-Object { $_ -notmatch 'Completed' } | ForEach-Object { Write-Host "   $($_ -replace '\s+', ' ')" }
   }
-  catch { Write-Host "   API cleanup error: $($_.Exception.Message)" -ForegroundColor Yellow }
-  Remove-TestKubernetes
-  Remove-Item Env:GW_KEY -ErrorAction SilentlyContinue
-  $up = Run-Native 'powershell' @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'scripts/up.ps1'), '-Redeploy')
-  Write-Host "   up.ps1 -Redeploy exit code $($up.Code)"
-  if ($up.Code -ne 0) { Write-Host $up.Out; $script:failed = $true }
-  Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-  $after = Get-State 'AFTER (cleanup and redeploy without the setting)'
-  if ($before) {
-    Check 'after: NetworkPolicy count equals the count before' ($after.Policies -eq $before.Policies) "(before $($before.Policies), after $($after.Policies))"
-    Check 'after: SSRF_ALLOWED_INTERNAL_HOSTS equals the value before' ($after.Ssrf -eq $before.Ssrf)
-  }
-  $nsLeft = (& kubectl get ns $testNs --ignore-not-found --no-headers 2>$null)
-  Check "after: namespace $testNs is gone" (-not $nsLeft)
-  $podsLeft = (& kubectl get pods -A --no-headers 2>$null | Where-Object { $_ -match 'mcp-extra' })
-  Check 'after: no mcp-extra pod is left' (-not $podsLeft)
-  & kubectl get pods -A --no-headers 2>&1 | Where-Object { $_ -notmatch 'Completed' } | ForEach-Object { Write-Host "   $($_ -replace '\s+', ' ')" }
 }
 if ($script:failed) { Write-Host "`nFAILED" -ForegroundColor Red; exit 1 }
 Write-Host "`nAll checks passed ($($script:checks.Count))" -ForegroundColor Green

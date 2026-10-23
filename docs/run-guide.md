@@ -647,7 +647,7 @@ The seeds of the other two: `woo` is `bearer` at `http://mcp-woocommerce.mcp.svc
 A server of your own that runs in this cluster (not one of `woo`, `notes`, `utils`) needs two things the chart controls: permission in the gateway's SSRF allow-list and a NetworkPolicy path. Without them the dashboard form shows the inline error `In-cluster servers must be listed in the chart setting gateway.internalUpstreams.` (the API answers `400 SSRF_REJECTED`), or, for a server in the `mcp` namespace, the server is saved but shows `unreachable` with `connection refused`. Both were observed on 2026-10-23.
 
 1. Run your server with a Service in a namespace of your choice. For the namespace `mcp` the pod must carry labels you can select on, for example `app.kubernetes.io/name: my-mcp-server`; the namespace `mcp` enforces the `restricted` Pod Security level, so the pod must be non-root with a RuntimeDefault seccomp profile, dropped capabilities and no privilege escalation.
-2. Add the entry to your values file (the full description is in [deployment.md](deployment.md#registering-mcp-servers-that-run-inside-the-cluster)) and apply it:
+2. Add the entry to your values file: `deploy/values-local.yaml` on the local cluster, which `up.ps1 -Redeploy` applies; on a VPS, the production values file passed with `scripts\deploy.ps1 -ValuesFile <file>`. The full description is in [deployment.md](deployment.md#registering-mcp-servers-that-run-inside-the-cluster). Do not list system namespaces such as `kube-system` or `gateway`: that would let the gateway reach cluster components. Apply it:
 
    ```yaml
    gateway:

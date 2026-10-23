@@ -362,6 +362,7 @@ What each entry changes (an empty list, the default, renders exactly the objects
 
 Rules and limits:
 
+- Do not list system namespaces such as `kube-system` or `gateway`: each entry lets the gateway reach that namespace's pods on the port you give.
 - The pod must speak the MCP Streamable HTTP protocol on the given port. The gateway still applies the SSRF guard to the resolved address (loopback and link-local stay refused), and the new egress rule is limited to the one port you list.
 - Apply the value with `scripts\up.ps1 -Redeploy` (put it in your values file), then add the server: dashboard Servers > Add server with the URL `http://<service>.<namespace>.svc.cluster.local:<port>/mcp`. Step by step: [run guide](run-guide.md#add-an-mcp-server-that-runs-inside-the-cluster).
 - The schema rejects a `port` outside 1-65535, a `namespace` that is not a DNS label (for example `Bad_NS`), an entry without a port, unknown keys and non-string label values.
