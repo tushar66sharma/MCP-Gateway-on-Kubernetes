@@ -318,3 +318,14 @@ With `tls.enabled: true` (production values) the chart adds cert-manager Certifi
 | TLS, redirect, HSTS, `Secure` cookies (above) | plain-text traffic in production | rehearsal only |
 | Auth-failure limits, migration lock, chat hardening (sections 8 and 11) | key-guessing floods, concurrent migrations, orphaned chat slots | tests and live checks, 2026-10-22 |
 | `npm audit --omit=dev --audit-level=high` | known-vulnerable runtime dependencies | 0 vulnerabilities, 2026-10-23 (step 8 of `scripts\smoke-test.ps1`) |
+
+## 17. An external WooCommerce store (Phase 5b)
+
+Decision: [ADR-019](decisions/ADR-019-external-woocommerce-store.md). Setup: [deployment, Using a WooCommerce store hosted elsewhere](deployment.md#using-a-woocommerce-store-hosted-elsewhere).
+
+- **Basic over HTTPS only.** `WOO_AUTH_MODE=basic` sends the consumer key and secret in an `Authorization: Basic` header with every request, which is safe only inside TLS. The MCP server refuses to start unless `WOO_BASE_URL` starts with `https://`, and the chart refuses to render an `externalStore.url` that is not `https://` (schema pattern and a template check). Over plain HTTP WooCommerce itself requires OAuth 1.0a, which stays the default and is unchanged.
+- **No credentials in URLs.** A `WOO_BASE_URL` or `externalStore.url` containing `user@` or `user:pass@` is refused in both places, in every mode. Start-up errors name the variable, never the value.
+- **TLS verification stays on.** The server does not offer a switch to skip it. Verified 2026-10-23 with a throw-away CA: with the CA trusted the calls worked; without it the same server failed with a network error and a plain fetch reported `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
+- **No leakage through errors or redirects.** Redirects are not followed, so the header cannot be forwarded to another host. Any WooCommerce error text that echoes the key, the secret or their base64 form is redacted before it reaches the model or a log (unit-tested).
+- **The key lives in a Secret you create** in the `mcp` namespace; the chart only references it by name and never copies it into the values or the Helm release Secret.
+- **Egress.** With an external URL the `mcp-woocommerce` pod may use the internet rule (443 and 80, private and special-use ranges excluded) plus any `extraEgressCIDRs` on 443; it loses the rule to the in-cluster WordPress. Rendered, not tested against a real remote host. A broad `extraEgressCIDRs` entry such as `10.0.0.0/8` would reopen the cluster's own networks to that pod: keep entries narrow.

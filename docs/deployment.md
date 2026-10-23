@@ -297,6 +297,47 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 - No TLS locally (plain HTTP), and no mail server, so WooCommerce e-mails are not delivered.
 - The cluster needs internet access for image pulls and for downloading WooCommerce 11.2.1 during setup, and the gateway needs it for the AI chat (Groq's free plan: about 8,000 tokens per minute, roughly two chat questions a minute for the whole team; see [ai-integration.md](ai-integration.md#5-limits-and-token-budget)).
 
+## Using a WooCommerce store hosted elsewhere
+
+Phase 5b (Task 5b.5, [ADR-019](decisions/ADR-019-external-woocommerce-store.md)). The WooCommerce MCP server can talk to a store that is not installed by this chart. It then uses **HTTP Basic over HTTPS** (the consumer key as user name, the consumer secret as password). **Verified 2026-10-23:** the MCP server in this mode against the local WooCommerce 11.2.1 over HTTPS with TLS verification on (`scripts\dev	est-external-store.ps1`). **Rendered, not installed:** the chart's external mode was rendered and linted but not installed on a cluster. A real remote store is **not tested**.
+
+1. **Create the REST key on that store.** In its admin: WooCommerce > Settings > Advanced > REST API > Add key. Choose a user that may manage the shop (a shop manager is enough) and the permission **Read/Write**. WooCommerce shows the key and secret once.
+2. **Create the Secret in the `mcp` namespace.** Put the two values in files that are not in the repository, create the Secret from the files, then delete them. The commands contain no secret values:
+
+   ```powershell
+   kubectl -n mcp create secret generic my-store-woo --from-file=consumer-key=.\ck.txt --from-file=consumer-secret=.\cs.txt
+   Remove-Item .\ck.txt, .\cs.txt
+   ```
+
+   The key names must be exactly `consumer-key` and `consumer-secret`. The chart owns the namespace `mcp`: on a first install create it with Helm's ownership metadata as described under [Pre-created Secrets](#pre-created-secrets-advanced-mostly-for-production), or install first and create the Secret afterwards (the MCP pod then waits with `CreateContainerConfigError` until it exists).
+3. **Set the values** (a values file, for example appended to `deploy/values-prod.yaml`):
+
+   ```yaml
+   store:
+     enabled: false              # omit it to keep the in-cluster store as well
+   mcpWoocommerce:
+     externalStore:
+       url: https://shop.example.com        # https only, no user name or password in it
+       existingSecret: my-store-woo         # the Secret from step 2
+       extraEgressCIDRs: []                 # see "Private-network stores" below
+   storeSetup:
+     timezone: Europe/Berlin                # the time zone of THAT store
+   ```
+
+   The chart refuses to render an `http://` URL, a URL containing `user@` or `user:pass@`, a missing `existingSecret`, or `store.enabled: false` without a URL.
+4. **Time zone.** `today`, `yesterday` and `last_7_days` in `list_orders` are computed in `STORE_TIMEZONE`, which the chart takes from `storeSetup.timezone`. Set it to the external store's own time zone (WooCommerce > Settings > General or Settings > General in WordPress), or those periods start at the wrong midnight.
+5. **After rotating the key**, restart the pod, because it reads the Secret only at start: `kubectl -n mcp rollout restart deploy/mcp-woocommerce`.
+
+**What `store.enabled: false` skips.** Everything in the `store` namespace and the namespace itself: WordPress, MariaDB, the `store-setup` Job, the `wp-cron` CronJob, the store Ingress, the store Secrets (`store-db`, `store-admin`, `store-woo-api` and its copy in `mcp`), the store NetworkPolicies (default-deny, DNS, WordPress, MariaDB, wp-cron, solver) and, with TLS on, the store's redirect and HSTS Middlewares. The `mcp` and `gateway` namespaces, their policies, the other MCP servers, the gateway and the dashboard are rendered as before. The helper scripts for the local cluster (`up.ps1`, `check-mcp-woocommerce.ps1`, `get-admin-password.ps1`) assume the in-cluster store.
+
+**Egress.** With an external URL the `mcp-woocommerce` pod may reach the public internet on ports 443 and 80, with the private and special-use ranges excluded (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`, `127.0.0.0/8`), the same rule the gateway uses. It no longer has the rule to the in-cluster WordPress. Rendered, not tested against a real remote address.
+
+**Private-network stores.** If the store is on a private address (a VPN, a peered network), the internet rule excludes it. List its network under `extraEgressCIDRs` (IPv4 CIDRs such as `10.20.0.0/24`); each entry opens TCP 443 only. Keep the entries as narrow as possible: `10.0.0.0/8` would also open the cluster's own pod and service networks to that pod.
+
+**HTTPS only.** Basic sends the secret with every request, so the MCP server and the chart both refuse anything but `https://` in this mode ([security, section 17](security.md#17-an-external-woocommerce-store-phase-5b)). The certificate must be valid for the host and signed by a public CA; the server does not skip verification.
+
+**If the store answers 401 or 403**, see [troubleshooting](troubleshooting.md#the-external-store-answers-401-or-403-or-the-mcp-server-cannot-reach-it): some hosts strip the `Authorization` header before it reaches WordPress.
+
 ## Production (k3s VPS)
 
 > **Status (2026-10-23).** This guide installs the same chart on one k3s server with TLS. **No real VPS, domain or Let's Encrypt certificate has been used.** What *was* run is marked **verified**; everything else is **not executed** (it needs your cloud account, domain or registry) or **expected** (taken from the tools' documentation). Task 5.7 of Phase 5 rehearses the cluster side on a second local k3d cluster with a self-signed issuer; its results are recorded in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) and the [testing guide](testing.md).

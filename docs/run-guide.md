@@ -512,6 +512,10 @@ Verified 2026-10-19 with SQL against the live database (section 7): one key row,
 - **No per-user identity at the server itself.** It has one shared bearer token; per-user keys and the audit log are the gateway's job (built in Phase 3).
 - **Reachable only from the gateway** (NetworkPolicy since Phase 5); `kubectl port-forward`, which `check-mcp-woocommerce.ps1` uses, is not affected by the policies.
 
+### A store hosted elsewhere (Phase 5b)
+
+`scripts\dev	est-external-store.ps1 [-Write]` proves the HTTPS Basic mode against the local store: it creates a throw-away CA, a temporary TLS Secret and Ingress (`ext-proof*`) in `store`, runs the built server on the host with TLS verification on, runs the smoke client, runs a negative control without the CA, and removes everything. It prints no key, secret or token. Setting up a real external store: [deployment guide](deployment.md#using-a-woocommerce-store-hosted-elsewhere).
+
 ## 9. The gateway (Phase 3)
 
 ### What it is

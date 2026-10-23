@@ -46,6 +46,7 @@ helm status urumi -n urumi-system
 - [Pre-created Secrets with the wrong keys](#pre-created-secrets-with-the-wrong-keys)
 - [`mcp-woocommerce` is in ErrImageNeverPull or ImagePullBackOff](#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)
 - [`mcp-woocommerce` CrashLoopBackOff with an environment variable message](#mcp-woocommerce-crashloopbackoff-with-an-environment-variable-message)
+- [The external store answers 401 or 403, or the MCP server cannot reach it](#the-external-store-answers-401-or-403-or-the-mcp-server-cannot-reach-it)
 - [The MCP server answers 401 Unauthorized](#the-mcp-server-answers-401-unauthorized)
 - [The MCP server answers 403 Invalid Host](#the-mcp-server-answers-403-invalid-host)
 - [An MCP tool returns WooCommerce 401 Invalid signature](#an-mcp-tool-returns-woocommerce-401-invalid-signature)
@@ -954,3 +955,27 @@ kubectl -n store logs job/wp-cron-manual; kubectl -n store delete job wp-cron-ma
 - `Error: Error establishing a database connection.` in under a second, from a chart older than the Phase 5 final review: a new pod connected before kube-router had admitted its IP (observed 2026-10-23). The current chart waits for the database first; redeploy.
 - No `wp-cron` CronJob at all: `wordpress.cron.enabled` is `false` in your values. WordPress then uses its built-in WP-Cron, which needs the loopback to its public URL.
 - `DeadlineExceeded`: one run took longer than 4 minutes (`activeDeadlineSeconds: 240`); look for a slow plugin event in the log. The next run continues with the remaining events.
+
+## The external store answers 401 or 403, or the MCP server cannot reach it
+
+Applies to `mcpWoocommerce.externalStore` ([ADR-019](decisions/ADR-019-external-woocommerce-store.md), [deployment](deployment.md#using-a-woocommerce-store-hosted-elsewhere)). The chart's external mode is rendered, not installed; the causes below are the expected ones except where marked.
+
+**Symptom.** A tool returns `WooCommerce request failed (rest_cannot_view)` / HTTP 401 or 403, or `Could not reach WooCommerce (network error)`.
+
+**Diagnose.**
+
+```powershell
+kubectl -n mcp logs deploy/mcp-woocommerce --tail=20            # start-up message: variable names only
+kubectl -n mcp get pod -l app.kubernetes.io/name=mcp-woocommerce # CreateContainerConfigError = the Secret is missing
+kubectl -n mcp describe networkpolicy mcp-woocommerce            # the egress rules the pod really has
+```
+
+**Causes and fixes.**
+
+- **The pod does not start and the log names `WOO_BASE_URL`.** The URL must start with `https://` and must not contain a user name or password. Fix `mcpWoocommerce.externalStore.url`. (`helm template` refuses these values, so this appears only with hand-edited env.)
+- **`CreateContainerConfigError`.** The Secret named in `externalStore.existingSecret` does not exist in namespace `mcp`, or lacks the keys `consumer-key` and `consumer-secret`.
+- **401 on every call although the key is right: the host strips the `Authorization` header** (expected; not tested). Some hosts, mostly PHP running as CGI/FastCGI behind Apache, do not hand the header to WordPress, so WooCommerce sees no credentials. The usual fix is on the store's side: add `RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]` to `.htaccess` (or the host's equivalent setting), then retry. Ask the host if you cannot edit it. Do not move the key into the URL: the MCP server and the chart refuse that on purpose.
+- **401 or 403 with the header passing.** The key was revoked, was created with **Read** only (writes then fail with 401/403), belongs to a user who cannot manage the shop, or the Secret holds an old value. Create a new Read/Write key, update the Secret, then `kubectl -n mcp rollout restart deploy/mcp-woocommerce` (the pod reads the Secret only at start).
+- **`Could not reach WooCommerce (network error)`.** One of: DNS for the host; a TLS problem (the certificate is self-signed, expired, for another host name or signed by a CA that Node does not trust: the server never skips verification); or the egress rule. The pod may only reach the public internet (443, 80) outside the private ranges, plus `extraEgressCIDRs` on 443. A store on a private address needs its network listed there.
+- **Redirects.** The client does not follow them, so a store URL that redirects (for example `http` to `https`, or to a `www` host) fails. Use the final `https://` address as `externalStore.url`.
+- **Wrong "today".** `list_orders` with `period` uses `storeSetup.timezone`; set it to the store's time zone.

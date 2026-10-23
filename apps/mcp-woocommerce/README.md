@@ -1,6 +1,6 @@
 # mcp-woocommerce
 
-An MCP (Model Context Protocol) server that lets an AI client read and change a WooCommerce store: list and create products, list orders, read one order, change an order's status. It is a small Node 24 + TypeScript service that exposes `POST /mcp` and calls the WooCommerce REST API v3, signing each request with OAuth 1.0a.
+An MCP (Model Context Protocol) server that lets an AI client read and change a WooCommerce store: list and create products, list orders, read one order, change an order's status. It is a small Node 24 + TypeScript service that exposes `POST /mcp` and calls the WooCommerce REST API v3, signing each request with OAuth 1.0a. For a store hosted elsewhere it can instead use HTTP Basic over HTTPS (`WOO_AUTH_MODE=basic`, https only).
 
 It runs in the Kubernetes namespace `mcp` and is **internal only** (a ClusterIP Service, no Ingress). External clients will reach it through the gateway in Phase 3. How to run and inspect it day to day: [run guide, section 8](../../docs/run-guide.md#8-woocommerce-mcp-server-phase-2). Protocol walkthrough with real captured traffic: [docs/learning/02-mcp-protocol.md](../../docs/learning/02-mcp-protocol.md).
 
@@ -38,8 +38,9 @@ Read by `src/config.ts`. A missing or invalid variable stops the process at star
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `WOO_BASE_URL` | yes | none | Where the server connects, for example `http://wordpress.store.svc.cluster.local` (in the cluster). Must be a URL. |
-| `WOO_SIGNING_BASE_URL` | yes | none | The URL the OAuth1 signature is computed over: the public store URL with scheme `http` (for example `http://store.localhost`). Must start with `http://`. In the chart it comes from the helper `urumi.storeSigningBaseUrl`. |
+| `WOO_AUTH_MODE` | no | `oauth1` | `oauth1` (default, today's mode: signed requests to the in-cluster store over HTTP) or `basic` (`Authorization: Basic base64(key:secret)`, for a store hosted elsewhere; see [ADR-019](../../docs/decisions/ADR-019-external-woocommerce-store.md)). Anything else stops the server at start. |
+| `WOO_BASE_URL` | yes | none | Where the server connects: `http://wordpress.store.svc.cluster.local` (in the cluster, `oauth1`) or `https://shop.example.com` (`basic`). Must be a URL **without a user name or password** in every mode; in `basic` mode it must start with `https://`. |
+| `WOO_SIGNING_BASE_URL` | with `oauth1` | none | The URL the OAuth1 signature is computed over: the public store URL with scheme `http` (for example `http://store.localhost`). Must start with `http://`. In the chart it comes from the helper `urumi.storeSigningBaseUrl`. Optional and ignored with `basic`. |
 | `WOO_CONSUMER_KEY` | yes | none | WooCommerce REST consumer key (at least 10 characters). From Secret `store-woo-api`, key `consumer-key`. |
 | `WOO_CONSUMER_SECRET` | yes | none | WooCommerce REST consumer secret (at least 10 characters). From Secret `store-woo-api`, key `consumer-secret`. |
 | `MCP_AUTH_TOKEN` | yes | none | The bearer token clients must send (at least 16 characters). From Secret `mcp-woocommerce-token`, key `token`. |
