@@ -924,8 +924,8 @@ The whole-branch review of Phase 0 found issues that belong to later phases. The
 
 ### Phase 6
 
-- [ ] **`security.md`: Helm release Secret exposure.** The Helm release Secret `sh.helm.release.v1.urumi.vN` in `urumi-system` contains the rendered Secret manifests (all generated passwords), so read access to Secrets in `urumi-system` equals read access to all credentials.
-- [ ] **Threat model: WooCommerce key owner.** Cover the `urumi-mcp` `shop_manager` key owner (see the Phase 2 item).
+- [x] **`security.md`: Helm release Secret exposure.** *(Resolved → Task 6.2: `security.md` residual risk 19 (verified on revision 24 of the local release by counting only, 12 Secret manifests with data), `threat-model.md` section 5 and `deployment.md` section 13; production mitigation is `create-prod-secrets.sh`; Secrets encryption at rest is not enabled or tested.)* The Helm release Secret `sh.helm.release.v1.urumi.vN` in `urumi-system` contains the rendered Secret manifests (all generated passwords), so read access to Secrets in `urumi-system` equals read access to all credentials.
+- [x] **Threat model: WooCommerce key owner.** *(Resolved → Task 6.2: `threat-model.md` section 1, "The key owner is least privilege, not harmless", with the ownership marker; ADR-005.)* Cover the `urumi-mcp` `shop_manager` key owner (see the Phase 2 item).
 
 ### Accepted as-is (no change)
 
