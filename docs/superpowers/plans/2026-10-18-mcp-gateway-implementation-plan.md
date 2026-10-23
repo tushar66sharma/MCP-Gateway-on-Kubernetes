@@ -782,24 +782,28 @@ Every page has loading, empty and error states; member/admin gating is backed by
 # Phase 6 — Documentation + demo prep (branch `phase-6-docs-demo`)
 
 ### Task 6.1: Required technical docs (complete and accurate)
+- [x] **Done 2026-10-23** *(phase plan `2026-10-23-phase-6-docs-demo.md` Tasks 6.1-6.3: the definition-of-done demo run ([demo-script.md](../../demo-script.md)), the final technical docs and the diagram set including the Helm resource map ([architecture.md](../../architecture.md), [diagrams/](../../diagrams/README.md), [testing.md](../../testing.md)).)*
 - `docs/architecture.md`, `system-design.md`, `workflows.md`, `diagrams/*.md`
   - Diagrams: architecture, MCP call sequence, chat loop, credential flow, auth/key lifecycle, upstream health state machine, NetworkPolicy map, Helm/K8s resource map, plus text explanations.
 - `ai-integration.md` (how to get Groq and OpenRouter keys, quotas, switching providers, adding an adapter, errors), `error-handling.md`, `security.md`, `testing.md`, `troubleshooting.md`, `deployment.md`.
 - **Commits:** one per 2–3 documents.
 
 ### Task 6.2: Assignment-specific notes
+- [x] **Done 2026-10-23** *([system-design-and-tradeoffs.md](../../system-design-and-tradeoffs.md), [threat-model.md](../../threat-model.md), [stand-out-items.md](../../stand-out-items.md) and [assignment-checklist.md](../../assignment-checklist.md).)*
 - `docs/system-design-and-tradeoffs.md` (short): architecture choices; aggregation, routing and failure handling; what changes for production (DNS, ingress, storage class, secrets).
 - `docs/threat-model.md` (short): shared upstream credentials; why there's no token passthrough; malicious tool descriptions; member-vs-member; malicious or compromised upstream.
 - `docs/stand-out-items.md`: security hardening with file pointers; everything else not attempted.
 - **Commit:** `docs: add system design/tradeoffs note, threat model and stand-out items list`
 
 ### Task 6.3: README (all 22 CLAUDE.md sections)
+- [x] **Done 2026-10-23** *([README.md](../../../README.md), walked through from a fresh clone against the existing cluster (owner decision: no cluster deletion; the first-install path was last proven in Phase 5 Task 5.8), with screenshots in [docs/screenshots/](../../screenshots/).)*
 - Beginner-sequential: prerequisites → `.wslconfig` → install tools → clone → `.env` → `cluster-up` → `setup-hosts` → `build-images` → `create-secrets` → `deploy` → first login → place an order → connect Claude Code/Cursor/Inspector → use the chat → tests → VPS pointer → troubleshooting → limitations.
 - Screenshots go in `docs/images/`, captured with Playwright.
 - **Verify:** follow the README from a fresh clone into a fresh cluster (`cluster-down`, then the README steps) with no undocumented fixes.
 - **Commit:** `docs: write complete beginner-friendly README`
 
 ### Task 6.4: Interview and demo prep
+- [x] **Done 2026-10-23** *(the learning primers in [docs/learning/](../../learning/) (including [02-mcp-protocol.md](../../learning/02-mcp-protocol.md) and [03-gateway.md](../../learning/03-gateway.md)) are in the repository. The demo-video outline and the interview Q&A are kept by the owner outside the repository and are not linked.)*
 - `docs/learning/02-mcp-internals.md`: the protocol flow with real JSON-RPC payloads captured from our gateway, plus how collisions, timeouts and dead upstreams are handled.
 - `docs/learning/03-interview-qa.md`: the about 30 likeliest questions with answers grounded in our code (file:line pointers).
 - `docs/demo-video-outline.md`: the 6 required sections, timing, and what to show on screen.
