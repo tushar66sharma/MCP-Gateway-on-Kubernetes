@@ -1,5 +1,15 @@
 # Chart render and schema tests (no cluster needed). Task 5.6 extends this file.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1
+#
+# Compare-ToMainRender <label> <values file> [<ignored env var names>] (reusable, Tasks 5b.5 and 5b.6):
+#   Renders the chart at main commit d57c8ae (git archive into a temp dir) and the working-tree chart with the
+#   same values file, then requires the same set of (kind, namespace, name) objects and identical normalised
+#   text for each. Normalisation drops: Secret data/stringData (generated at random), the value of every
+#   checksum/* annotation (derived from random Secrets and from the ignored env vars), comment-only lines (incl.
+#   "# Source:"), blank lines and trailing spaces, and the env entries named in the third argument (default: the gateway variables
+#   added by Phase 5b: LLM_MAX_OUTPUT_TOKENS, CHAT_TOPIC_CHECK, CHAT_TOPIC_CHECK_MODEL,
+#   CHAT_TOPIC_CHECK_TIMEOUT_MS, CHAT_DAILY_TOKEN_BUDGET). A later task that adds default-off settings of its
+#   own extends that default list. Returns @{ Ok; Detail; Count; Store; Mcp; Network }.
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 $chart = Join-Path $root 'charts\urumi-platform'
@@ -28,6 +38,85 @@ function Case-Lint([string]$name, [string]$yaml, [bool]$expectOk) {
   [IO.File]::WriteAllText($f, $yaml)
   $r = Invoke-Helm @('lint', $chart, '-f', $local, '-f', $f)
   Report $name (($r.Code -eq 0) -eq $expectOk) "(helm lint exit $($r.Code))"
+}
+
+# --- Compare-ToMainRender: see the header ---------------------------------------------------------------------
+$mainCommit = 'd57c8ae'
+$script:mainChartDir = $null
+function Get-MainChart {
+  if ($script:mainChartDir) { return $script:mainChartDir }
+  $dir = Join-Path $tmp 'main-chart'
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $tar = Join-Path $tmp 'main-chart.tar'
+  $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  Push-Location $root
+  & git archive --format=tar -o $tar $mainCommit charts/urumi-platform 2>&1 | Out-Null
+  $c1 = $LASTEXITCODE
+  Pop-Location
+  # Relative names: a Windows drive path (C:\...) is read as host:file by GNU tar.
+  if ($c1 -eq 0) { Push-Location $tmp; & tar -xf main-chart.tar -C main-chart 2>&1 | Out-Null; $c1 = $LASTEXITCODE; Pop-Location }
+  $ErrorActionPreference = $old
+  if ($c1 -ne 0) { return $null }
+  $script:mainChartDir = Join-Path $dir 'charts\urumi-platform'
+  return $script:mainChartDir
+}
+
+function ConvertTo-NormalisedObjects([string]$rendered, [string[]]$ignoreEnv) {
+  $map = @{}
+  foreach ($doc in ($rendered -split '(?m)^---\s*$')) {
+    $lines = @(($doc -split "`r?`n") | Where-Object { $_.Trim() -ne '' -and $_ -notmatch '^\s*#' } | ForEach-Object { $_.TrimEnd() })
+    if (-not ($lines | Where-Object { $_ -match '^kind: ' })) { continue }
+    $text = $lines -join "`n"
+    $kind = if ($text -match '(?m)^kind: (\S+)') { $Matches[1] } else { '' }
+    $name = if ($text -match '(?m)^  name: (\S+)') { $Matches[1] } else { '' }
+    $ns = if ($text -match '(?m)^  namespace: (\S+)') { $Matches[1] } else { '' }
+    if ($kind -eq 'Secret') {
+      $kept = New-Object System.Collections.Generic.List[string]; $skip = $false
+      foreach ($l in $lines) {
+        if ($l -match '^(data|stringData):') { $skip = $true; $kept.Add($l); continue }
+        if ($skip -and $l -match '^\s') { continue }
+        $skip = $false; $kept.Add($l)
+      }
+      $text = $kept -join "`n"
+    }
+    $text = [regex]::Replace($text, '(?m)^(\s*checksum/[A-Za-z0-9.-]+): .*$', '$1: <checksum>')
+    foreach ($e in $ignoreEnv) { $text = [regex]::Replace($text, '(?m)^\s+- name: ' + [regex]::Escape($e) + '\n\s+value: .*\n?', '') }
+    $map["$kind|$ns|$name"] = $text.TrimEnd()
+  }
+  return $map
+}
+
+function Compare-ToMainRender([string]$label, [string]$valuesFile,
+    [string[]]$ignoreEnv = @('LLM_MAX_OUTPUT_TOKENS', 'CHAT_TOPIC_CHECK', 'CHAT_TOPIC_CHECK_MODEL', 'CHAT_TOPIC_CHECK_TIMEOUT_MS', 'CHAT_DAILY_TOKEN_BUDGET')) {
+  $res = @{ Ok = $false; Detail = ''; Count = 0; Store = 0; Mcp = 0; Network = 0 }
+  $main = Get-MainChart
+  if (-not $main) { $res.Detail = "could not extract the chart at $mainCommit (git archive/tar failed)"; return $res }
+  $a = Invoke-Helm @('template', 'urumi', $main, '-n', 'urumi-system', '-f', $valuesFile)
+  $b = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $valuesFile)
+  if ($a.Code -ne 0 -or $b.Code -ne 0) { $res.Detail = "helm template failed (main $($a.Code), current $($b.Code)) $($a.Out) $($b.Out)"; return $res }
+  $ma = ConvertTo-NormalisedObjects $a.Out $ignoreEnv
+  $mb = ConvertTo-NormalisedObjects $b.Out $ignoreEnv
+  $problems = New-Object System.Collections.Generic.List[string]
+  foreach ($k in $ma.Keys) { if (-not $mb.ContainsKey($k)) { $problems.Add("missing now: $k") } }
+  foreach ($k in $mb.Keys) { if (-not $ma.ContainsKey($k)) { $problems.Add("new object: $k") } }
+  foreach ($k in $ma.Keys) {
+    if ($mb.ContainsKey($k) -and $ma[$k] -ne $mb[$k]) {
+      $problems.Add("differs: $k")
+      $x = $ma[$k] -split "`n"; $y = $mb[$k] -split "`n"
+      $d = Compare-Object $x $y | Select-Object -First 4 | ForEach-Object { "      $($_.SideIndicator) $($_.InputObject)" }
+      foreach ($line in $d) { $problems.Add($line) }
+    }
+  }
+  $res.Count = $mb.Count
+  foreach ($k in $mb.Keys) {
+    $parts = $k -split '\|'
+    if ($parts[1] -eq 'store') { $res.Store++ }
+    if ($parts[1] -eq 'mcp') { $res.Mcp++ }
+    if ($parts[0] -eq 'NetworkPolicy') { $res.Network++ }
+  }
+  $res.Ok = ($problems.Count -eq 0) -and ($mb.Count -gt 0)
+  $res.Detail = ($problems | Select-Object -First 20) -join "`n"
+  return $res
 }
 
 Case-Lint 'storeHost with PHP injection is rejected' "global:`n  storeHost: `"x');evil('`"`n" $false
@@ -179,6 +268,64 @@ Case-Lint 'topicCheckTimeoutMs under 1000 is rejected' "gateway:`n  chat:`n    t
 Case-Lint 'non-boolean topicCheck is rejected' "gateway:`n  chat:`n    topicCheck: `"maybe`"`n" $false
 Case-Lint 'topicCheckModel with a space is rejected' "gateway:`n  chat:`n    topicCheckModel: `"a b`"`n" $false
 Case-Lint 'budget 0, topic check off and a model are accepted' "gateway:`n  chat:`n    dailyTokenBudget: 0`n    topicCheck: false`n    topicCheckModel: openai/gpt-oss-20b`n" $true
+
+# --- Task 5b.5: external WooCommerce store (ADR-019) and an optional in-cluster store -------------------------------
+# Default-render check: every object rendered with the default store/mcp settings must equal main's render.
+$mainCmp = Compare-ToMainRender 'values-local' $local
+Report "default render unchanged vs main $mainCommit, values-local ($($mainCmp.Count) objects: $($mainCmp.Store) in store ns, $($mainCmp.Mcp) in mcp ns, $($mainCmp.Network) NetworkPolicies)" $mainCmp.Ok $mainCmp.Detail
+$mainCmpProd = Compare-ToMainRender 'values-prod' $prod
+Report "default render unchanged vs main $mainCommit, values-prod ($($mainCmpProd.Count) objects)" $mainCmpProd.Ok $mainCmpProd.Detail
+Report 'default render has no WOO_AUTH_MODE and keeps WOO_SIGNING_BASE_URL' (($r.Out -notmatch 'WOO_AUTH_MODE') -and ($r.Out -match 'name: WOO_SIGNING_BASE_URL'))
+
+$extSets = @('--set', 'mcpWoocommerce.externalStore.url=https://shop.example.com', '--set', 'mcpWoocommerce.externalStore.existingSecret=my-woo-key', '--set', 'mcpWoocommerce.externalStore.extraEgressCIDRs={10.1.2.0/24}')
+$re = Invoke-Helm (@('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local) + $extSets)
+Report 'external store values render' ($re.Code -eq 0) $re.Out
+$reDocs = $re.Out -split '(?m)^---\s*$'
+$reDep = $reDocs | Where-Object { $_ -match '(?m)^kind: Deployment' -and $_ -match '(?m)^  name: mcp-woocommerce\s*$' } | Select-Object -First 1
+Report 'external store: mcp-woocommerce gets WOO_BASE_URL, WOO_AUTH_MODE basic and the key from the named Secret, no signing URL' ([bool]($reDep -and
+    (Test-EnvVar $reDep 'WOO_BASE_URL' 'https://shop.example.com') -and (Test-EnvVar $reDep 'WOO_AUTH_MODE' 'basic') -and
+    ($reDep -match 'name: WOO_CONSUMER_KEY\r?\n\s+valueFrom:\r?\n\s+secretKeyRef: \{ name: my-woo-key, key: consumer-key \}') -and
+    ($reDep -match 'name: WOO_CONSUMER_SECRET\r?\n\s+valueFrom:\r?\n\s+secretKeyRef: \{ name: my-woo-key, key: consumer-secret \}') -and
+    ($reDep -notmatch 'WOO_SIGNING_BASE_URL') -and ($reDep -notmatch 'store-woo-api') -and ($reDep -notmatch 'wordpress\.store')))
+$reNp = $reDocs | Where-Object { $_ -match '(?m)^kind: NetworkPolicy' -and $_ -match '(?m)^  name: mcp-woocommerce\s*$' } | Select-Object -First 1
+Report 'external store: mcp-woocommerce egress is the internet rule (443, 80, private ranges excluded) plus the extra CIDR on 443, no WordPress rule' ([bool]($reNp -and
+    $reNp -match 'cidr: 0\.0\.0\.0/0' -and $reNp -match '- 10\.0\.0\.0/8' -and $reNp -match '- 169\.254\.0\.0/16' -and $reNp -match 'port: 443' -and $reNp -match 'port: 80 ' -and
+    $reNp -match 'cidr: "10\.1\.2\.0/24"' -and $reNp -notmatch 'name: wordpress' -and $reNp -notmatch 'metadata\.name: store'))
+Report 'external store with the in-cluster store still on keeps the store rendered' (($re.Out -match '(?m)^kind: Deployment') -and ($re.Out -match '(?m)^  name: wordpress\s*$'))
+
+$eo = Invoke-Helm (@('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '--set', 'store.enabled=false') + $extSets)
+Report 'external store with store.enabled=false renders' ($eo.Code -eq 0) $eo.Out
+$eoDocs = $eo.Out -split '(?m)^---\s*$'
+$storeKinds = @($eoDocs | Where-Object { $_ -match '(?m)^  namespace: store\s*$' } | ForEach-Object { if ($_ -match '(?m)^kind: (\S+)') { $Matches[1] } })
+Report 'store.enabled=false: nothing is rendered in the store namespace (no workloads, Secrets, Ingress, policies)' (($eo.Code -eq 0) -and ($storeKinds.Count -eq 0)) ($storeKinds -join ',')
+Report 'store.enabled=false: no store Namespace, wordpress/mariadb/store-setup/wp-cron or store-woo-api' (($eo.Code -eq 0) -and
+    -not ($eoDocs | Where-Object { $_ -match '(?m)^kind: Namespace' -and $_ -match '(?m)^  name: store\s*$' }) -and
+    ($eo.Out -notmatch '(?m)^  name: (wordpress|mariadb|store-setup|wp-cron|store-woo-api|store-db|store-admin)\s*$'))
+Report 'store.enabled=false: the mcp and gateway namespaces and their default-deny are still rendered' (($eo.Code -eq 0) -and
+    ($eoDocs | Where-Object { $_ -match '(?m)^kind: Namespace' -and $_ -match '(?m)^  name: mcp\s*$' }) -and ($eoDocs | Where-Object { $_ -match '(?m)^kind: Namespace' -and $_ -match '(?m)^  name: gateway\s*$' }) -and
+    ($eoDocs | Where-Object { $_ -match '(?m)^kind: NetworkPolicy' -and $_ -match '(?m)^  name: default-deny-all\s*$' -and $_ -match '(?m)^  namespace: mcp\s*$' }))
+$eop = Invoke-Helm (@('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $prod, '--set', 'store.enabled=false') + $extSets)
+$eopStore = @($eop.Out -split '(?m)^---\s*$' | Where-Object { $_ -match '(?m)^  namespace: store\s*$' })
+Report 'prod values with store.enabled=false: nothing in the store namespace (no store Ingress, Middlewares or solver policy)' (($eop.Code -eq 0) -and ($eopStore.Count -eq 0)) $eop.Out
+
+function Case-Set([string]$name, [string[]]$sets, [bool]$expectOk, [string]$mustSay = '') {
+  $x = Invoke-Helm (@('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local) + $sets)
+  $ok = (($x.Code -eq 0) -eq $expectOk)
+  if (-not $expectOk -and $mustSay) { $ok = $ok -and ($x.Out -match $mustSay) }
+  Report $name $ok "(helm template exit $($x.Code)) $($x.Out)"
+}
+$okUrl = 'mcpWoocommerce.externalStore.url=https://shop.example.com'
+$okSecret = 'mcpWoocommerce.externalStore.existingSecret=my-woo-key'
+Case-Set 'external store: an http:// URL is rejected' @('--set', 'mcpWoocommerce.externalStore.url=http://shop.example.com', '--set', $okSecret) $false 'externalStore'
+Case-Set 'external store: a URL with user info is rejected' @('--set', 'mcpWoocommerce.externalStore.url=https://ck_user@shop.example.com', '--set', $okSecret) $false 'externalStore'
+Case-Set 'external store: a URL with user:password is rejected' @('--set', 'mcpWoocommerce.externalStore.url=https://ck:cs@shop.example.com', '--set', $okSecret) $false 'externalStore'
+Case-Set 'external store: a URL without existingSecret is rejected by the template' @('--set', $okUrl) $false 'existingSecret is required'
+Case-Set 'store.enabled=false without an external URL is rejected' @('--set', 'store.enabled=false') $false 'url'
+Case-Set 'store.enabled=false without a URL is fine when mcpWoocommerce is disabled' @('--set', 'store.enabled=false', '--set', 'mcpWoocommerce.enabled=false') $true
+Case-Set 'external store: extraEgressCIDRs must be IPv4 CIDRs' @('--set', $okUrl, '--set', $okSecret, '--set', 'mcpWoocommerce.externalStore.extraEgressCIDRs={not-a-cidr}') $false 'extraEgressCIDRs'
+Case-Set 'external store: a /33 CIDR is rejected' @('--set', $okUrl, '--set', $okSecret, '--set', 'mcpWoocommerce.externalStore.extraEgressCIDRs={10.0.0.0/33}') $false 'extraEgressCIDRs'
+Case-Set 'external store: an https URL with a path and a Secret name is accepted' @('--set', 'mcpWoocommerce.externalStore.url=https://shop.example.com/blog', '--set', $okSecret) $true
+Case-Set 'non-boolean store.enabled is rejected' @('--set-string', 'store.enabled=yes') $false 'store'
 
 # --- Task 5.6: deploy.ps1 guards, run against a throw-away kubeconfig so no real cluster is touched -----------
 function Invoke-DeployGuard([string]$contextName, [string]$valuesFile) {
