@@ -1,6 +1,6 @@
 # Security
 
-> **Status: end of Phase 5 (hardening and production values; the threat model is Phase 6).** This file covers what the gateway does today: credentials, authentication, sessions, CSRF, the SSRF guard, logging, roles, and the known residual risks; and since Phase 4 the dashboard's browser headers, the chat agent acting as the user, untrusted tool output and prompt injection, the LLM keys and chat privacy, and the one-time key dialog (sections 10-14). The full **threat model** is Phase 6 (`threat-model.md`) and does not exist yet; NetworkPolicies, Pod Security and the loopback-only cluster are built and described in sections 8.5, 15 and 16. The security chapter of the spec is [§9](superpowers/specs/2026-10-18-mcp-gateway-design.md).
+> **Status: end of Phase 6 (hardening, production values and the threat model).** This file covers what the gateway does today: credentials, authentication, sessions, CSRF, the SSRF guard, logging, roles, and the known residual risks; and since Phase 4 the dashboard's browser headers, the chat agent acting as the user, untrusted tool output and prompt injection, the LLM keys and chat privacy, and the one-time key dialog (sections 10-14). The short **threat model** is [threat-model.md](threat-model.md); NetworkPolicies, Pod Security and the loopback-only cluster are built and described in sections 8.5, 15 and 16. The security chapter of the spec is [§9](superpowers/specs/2026-10-18-mcp-gateway-design.md).
 
 Evidence labels: **live** = run against the k3d cluster on 2026-10-19; **tested** = pinned by an automated test ([testing.md](testing.md)); **expected** = follows from the code, not run.
 
@@ -129,6 +129,10 @@ Added in Phase 5b (final review):
 
 18. **The topic check can be talked past.** It stops casual misuse ("write binary search in Python" is refused before the main model runs: measured in 3 probe runs and live on 2026-10-23), not a determined user. (a) The conversation history is client-supplied and the server keeps none, so a forged `assistant` turn worded to look on-topic, followed by "yes, go ahead", can pass; an *openly* off-topic offer followed by a confirmation is blocked (measured). (b) A cleverly worded message, or one that makes the check model reason past its 64-token cap (an empty reply fails open), can pass (expected, not reproduced). (c) Padding alone no longer works: a message over 2,000 characters is checked at both ends (**tested**). What bounds the damage: the scope rule in the main prompt, the 1024-token answer cap and the per-user daily budget of 50,000 tokens. Closing (a) needs server-side history or signed assistant turns ([ADR-020](decisions/ADR-020-chat-guardrails.md), "Revisit if").
 
+Added in Phase 6:
+
+19. **The Helm release Secret holds the rendered Secrets.** Helm stores every release revision in a Secret `sh.helm.release.v1.urumi.vN` in namespace `urumi-system` (the manifest is base64 and gzip, not encrypted). When the chart generates the Secrets (the local mode), that stored manifest contains all of them: the database passwords, the admin password, the upstream tokens and the gateway encryption key. **Verified 2026-10-23** on the local release (revision 24): decoding it and counting only (no value read or printed) showed 12 Secret manifests, each with a `data` block. So **read access to Secrets in `urumi-system` is read access to every credential**, and older revisions (Helm keeps a limited history) can hold values that were later replaced. Mitigations: in production, pre-create the Secrets with `scripts/prod/create-prod-secrets.sh` and name them under `secrets.existing.*`, so none of those passwords is in the release ([deployment.md](deployment.md#13-the-helm-release-secret-note)); keep access to `urumi-system` to cluster admins. **Not done:** encryption of Secrets at rest in the datastore (a k3s option), which was neither enabled nor tested. Locally the cluster listens on this computer only (section 16).
+
 ### 8.5 Pod security (Phase 5, Task 5.4)
 
 The namespaces `store`, `mcp` and `gateway` carry `pod-security.kubernetes.io/enforce`, `warn` and `audit` at `restricted`, each with `-version: latest` (chart value `podSecurity.level`, schema enum `restricted | baseline | privileged`; [ADR-017](decisions/ADR-017-pod-security-restricted.md)). A pod that is not compliant is refused at admission.
@@ -157,7 +161,7 @@ The namespaces `store`, `mcp` and `gateway` carry `pod-security.kubernetes.io/en
 
 ## 9. Not yet covered
 
-The threat model including malicious tool descriptions and compromised upstreams, and the Helm release Secret exposure note (Phase 6). Pod hardening, production TLS and secrets handling are covered in sections 8.5, 15 and 16.
+The threat model (shared credentials, token passthrough, malicious tool descriptions and compromised upstreams, member against member) is [threat-model.md](threat-model.md); the Helm release Secret exposure is residual risk 19. Pod hardening, production TLS and secrets handling are covered in sections 8.5, 15 and 16.
 
 ## 10. Browser headers and the dashboard
 
@@ -313,7 +317,7 @@ With `tls.enabled: true` (production values) the chart adds cert-manager Certifi
 
 ### Production secrets bootstrap
 
-`scripts/prod/create-prod-secrets.sh` creates the three namespaces with the Helm ownership metadata and every Secret the production values name. It generates values with `openssl rand` on the server and pipes each manifest to `kubectl create -f -` on **stdin** (an existing Secret is never overwritten; the script skips it), so no secret appears in a file, in Git, in the process list or in the output (the script prints names and `created`/`kept`, never values). It is **idempotent**: a second run keeps existing Secrets (`kept`) and re-creates a deleted copy byte-identical to its twin. Verified on a throw-away k3d cluster and in the rehearsal (2026-10-23). Backups of these Secrets are the operator's job ([deployment.md](deployment.md#12-backups)); the Helm release Secret also holds rendered values and is a Phase 6 item.
+`scripts/prod/create-prod-secrets.sh` creates the three namespaces with the Helm ownership metadata and every Secret the production values name. It generates values with `openssl rand` on the server and pipes each manifest to `kubectl create -f -` on **stdin** (an existing Secret is never overwritten; the script skips it), so no secret appears in a file, in Git, in the process list or in the output (the script prints names and `created`/`kept`, never values). It is **idempotent**: a second run keeps existing Secrets (`kept`) and re-creates a deleted copy byte-identical to its twin. Verified on a throw-away k3d cluster and in the rehearsal (2026-10-23). Backups of these Secrets are the operator's job ([deployment.md](deployment.md#12-backups)); the Helm release Secret also holds rendered manifests (residual risk 19 in [section 8](#8-residual-risks)).
 
 ### Defence layers as built (summary)
 
