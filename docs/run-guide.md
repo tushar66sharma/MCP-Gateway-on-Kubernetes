@@ -1,6 +1,6 @@
 # Run guide
 
-How to run, use and inspect every part of the project, written for someone new to Kubernetes. Every phase extends this guide. Parts that are not built yet are marked **(planned — Phase N)** and contain no commands.
+How to run, use and inspect every part of the project, written for someone new to Kubernetes. Every phase extended this guide; it is final as of Phase 6 and nothing in it is planned. Statements about things that were not run are labelled **expected** or **not tested**.
 
 Statements are either **verified** (run on the reference machine, with the date) or labelled **expected**.
 

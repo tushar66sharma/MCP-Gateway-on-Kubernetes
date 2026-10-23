@@ -254,5 +254,5 @@ Run on branch `phase-5b-guardrails-external-store` after the review fixes (image
 - Claude Code and Cursor against the gateway: not tested (the steps are in the [run guide](run-guide.md#connect-claude-code)).
 - A multi-replica gateway: not tested.
 - The fallback LLM provider on a live outage: unit tested only.
-- Gaps noted in the Phase 4 reviews and deferred by the owner (docs and demo only in Phase 6): no unit tests for the Overview page, the responsive table's card branch, theme persistence or the status badge labels (the Playwright mobile run covers the cards); no test that counts internal-token mints per loopback request; the `useChat` race guards (double send, reset mid-turn, unmount) and the 4,000-character clipping are untested; the audit filters do not reject a `from` later than `to`.
+- Gaps noted in the Phase 4 reviews and deferred by the owner (Phase 6 was docs and demo only): no unit tests for the Overview page, the responsive table's card branch, theme persistence or the status badge labels (the Playwright mobile run covers the cards); no test that counts internal-token mints per loopback request; the `useChat` race guards (double send, reset mid-turn, unmount) and the 4,000-character clipping are untested; the audit filters do not reject a `from` later than `to`.
 - Playwright is not part of `npm test`; it runs only against a live cluster.

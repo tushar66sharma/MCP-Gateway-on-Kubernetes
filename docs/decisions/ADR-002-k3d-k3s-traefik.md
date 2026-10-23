@@ -28,7 +28,7 @@ The assignment requires a local Kubernetes cluster and a deployment path to a VP
 
 ## Consequences/trade-offs
 
-- Dev/prod parity for ingress, storage and NetworkPolicy enforcement (k3s uses its embedded kube-router controller); this is still to be verified by the NetworkPolicy checks in a later phase.
+- Dev/prod parity for ingress, storage and NetworkPolicy enforcement (k3s uses its embedded kube-router controller); verified in Phase 5: `scripts/test-network-policies.ps1` showed the allowed and blocked flows on k3d (2026-10-22), see [ADR-016](ADR-016-default-deny-network-policies.md).
 - We depend on what k3s bundles; if we need features Traefik lacks, we would be adding a controller ourselves.
 - `*.localhost` removes the need for hosts edits in browsers only; non-browser MCP clients still need the hosts file.
 - Port 80 may be busy, so URLs can carry `:8081`, which also affects `PUBLIC_APP_URL`.

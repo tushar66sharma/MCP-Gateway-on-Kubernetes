@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Status (end of Phase 5).** Covers the local k3d cluster, the store, the MCP servers, the gateway and its Postgres database, the dashboard and the AI chat (the entries from [Chat says the AI provider isn't configured](#chat-says-the-ai-provider-isnt-configured) onwards), and the Phase 5 layers: NetworkPolicies, Pod Security, the loopback-only cluster, production certificates and the `wp-cron` CronJob (from [A pod cannot reach X after Phase 5](#a-pod-cannot-reach-x-after-phase-5) onwards).
+> **Status: final (Phase 6, checked 2026-10-23).** Covers the local k3d cluster, the store, the MCP servers, the gateway and its Postgres database, the dashboard and the AI chat (the entries from [Chat says the AI provider isn't configured](#chat-says-the-ai-provider-isnt-configured) onwards, including the daily token budget and the topic check), the Phase 5 layers (NetworkPolicies, Pod Security, the loopback-only cluster, production certificates and the `wp-cron` CronJob, from [A pod cannot reach X after Phase 5](#a-pod-cannot-reach-x-after-phase-5) onwards) and the external WooCommerce store. The cases are listed in the contents below.
 
 Each entry has a **symptom**, a **diagnosis** command and a **fix**. Entries marked **(observed)** happened while building Phase 1; the others are standard Kubernetes/Helm/WooCommerce behavior that follows from the chart's settings and was not deliberately triggered. Commands run from the repository root in PowerShell; refresh `PATH` first if a tool is "not found". Deployment steps: [deployment.md](deployment.md); how the flows work: [workflows.md](workflows.md).
 
@@ -73,6 +73,8 @@ helm status urumi -n urumi-system
 - [Chat says the AI provider rejected the API key (`LLM_AUTH_FAILED`)](#chat-says-the-ai-provider-rejected-the-api-key-llm_auth_failed)
 - [Chat says the AI provider is rate limited (429)](#chat-says-the-ai-provider-is-rate-limited-429)
 - [Chat says the AI provider is unavailable, or the answer was unexpected](#chat-says-the-ai-provider-is-unavailable-or-the-answer-was-unexpected)
+- [Chat says today's AI budget is used up (`CHAT_BUDGET_EXCEEDED`)](#chat-says-todays-ai-budget-is-used-up-chat_budget_exceeded)
+- [Chat refuses a question that looks on-topic (`off_topic`)](#chat-refuses-a-question-that-looks-on-topic-off_topic)
 - [The dashboard is blank, or a refresh gives 404](#the-dashboard-is-blank-or-a-refresh-gives-404)
 - [`check-dashboard.ps1` says Playwright Chromium is not installed](#check-dashboardps1-says-playwright-chromium-is-not-installed)
 - [The Vite dev server gives 403 `CSRF_REJECTED`](#the-vite-dev-server-gives-403-csrf_rejected)
@@ -86,6 +88,7 @@ helm status urumi -n urumi-system
 - [The gateway restarted once or twice on a first install](#the-gateway-restarted-once-or-twice-on-a-first-install)
 - [A certificate stays `READY False`](#a-certificate-stays-ready-false)
 - [Scheduled WordPress work does not run (`wp-cron` CronJob)](#scheduled-wordpress-work-does-not-run-wp-cron-cronjob)
+- [The external store answers 401 or 403, or the MCP server cannot reach it](#the-external-store-answers-401-or-403-or-the-mcp-server-cannot-reach-it)
 
 ---
 
@@ -797,6 +800,22 @@ Verified 2026-10-19: before the Secret existed the log said `llm not configured:
 **Causes.** *Unavailable:* no internet from the cluster, the provider is down (5xx), or one request took longer than `LLM_TIMEOUT_MS` (30 s); the gateway retried twice. *Unexpected answer:* the model produced a broken tool call (Groq `tool_use_failed`, retried once) or an answer the adapter could not read, or a `gateway.llm.model` that the provider does not know (a 400/404 is reported this way too).
 
 **Fix.** Check the cluster's internet access (`kubectl -n gateway exec deploy/gateway -- node -e "fetch('https://api.groq.com').then(r=>console.log(r.status))"`; **expected** to print a status, not run) and the provider's status page; for a bad answer, rephrase, or check `gateway.llm.model` against the provider's model list and redeploy. The log line's `httpStatus` and `providerCode` say which case it was.
+
+## Chat says today's AI budget is used up (`CHAT_BUDGET_EXCEEDED`)
+
+**Symptom.** The Chat page shows a box with the reset time and the message box is disabled; the API answers `429 CHAT_BUDGET_EXCEEDED` with a `Retry-After` header (seconds until 00:00 in the store time zone) and `details {limit, used, resetsAt}`. The text is "Today's AI budget is used up. It resets at 00:00 (<time zone>)." This is the gateway's own per-user limit, not the provider's: the provider's rate limit is the entry above.
+
+**Cause.** Each user may spend `gateway.chat.dailyTokenBudget` tokens a day (default 50,000; `0` means unlimited), counted per user and per day in the table `chat_usage_daily` (`CHAT_DAILY_TOKEN_BUDGET` in the pod). A turn that starts under the limit may overshoot it; the next one is refused.
+
+**Fix.** Wait for the reset, or raise the value under `gateway.chat.dailyTokenBudget` in `deploy/values-local.yaml` and run `scripts\up.ps1 -Redeploy`. To see the current numbers, open the Chat page (the budget line) or call `GET /api/chat/status` (`budget.limit`, `used`, `remaining`, `resetsAt`).
+
+## Chat refuses a question that looks on-topic (`off_topic`)
+
+**Symptom.** The reply is the fixed refusal, no tools run and the trace is empty; the API answered `200` with `stoppedReason: "off_topic"`.
+
+**Cause.** The topic check (a small model called before the main model, [ADR-020](decisions/ADR-020-chat-guardrails.md)) answered BLOCK. It is a guardrail, not a security boundary, and it can be wrong in both directions. If the check itself fails, times out or gives an unreadable verdict, the turn runs under the scope rule in the system prompt instead.
+
+**Fix.** Rephrase the question around the store, the notes or the utilities. To turn the check off, set `gateway.chat.topicCheck: false` and run `scripts\up.ps1 -Redeploy`; `scripts\dev\topic-probe.mjs` replays 30 labelled prompts to measure it ([testing.md](testing.md#5-cluster-checks)).
 
 ## The dashboard is blank, or a refresh gives 404
 
