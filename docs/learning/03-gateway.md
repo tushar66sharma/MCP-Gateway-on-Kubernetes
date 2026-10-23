@@ -35,6 +35,22 @@ Evidence (**live**, `check-gateway.ps1 -Isolation`): with `mcp-utilities` scaled
 
 `woo`, `notes` and `utils` each have a `ping`. The gateway names every tool `<slug>__<tool>`: `woo__ping`, `notes__ping`, `utils__ping`. The slug is chosen once by an admin (`^[a-z][a-z0-9-]{1,15}$`) and never changes, because renaming would silently break every client that uses the old names. Routing splits on the **first** `__`; slugs cannot contain `_`, so there is never doubt about where the slug ends. The whole name must fit `^[a-zA-Z0-9_-]{1,64}$`, the strictest pattern clients accept; an upstream tool that would break it is skipped alone (listed in `skippedTools`) and the rest of that server is still served. The description gets a prefix such as `[Utilities] `, and the input schema is passed through untouched. Decision: [ADR-006](../decisions/ADR-006-tool-naming-scheme.md).
 
+**A worked example with two servers that both have `ping`.** Say an admin registers two servers, slug `shop` and slug `crm`, and each exposes a tool called `ping` and one more tool (`shop` has `list_orders`, `crm` has `find_customer`). The upstreams know nothing about each other, and each one's `tools/list` returns plain names:
+
+| Server (slug) | Upstream tool name | Name the client sees | Description the client sees |
+|---|---|---|---|
+| `shop` | `ping` | `shop__ping` | `[Shop] <shop's own text>` |
+| `shop` | `list_orders` | `shop__list_orders` | `[Shop] ...` |
+| `crm` | `ping` | `crm__ping` | `[CRM] <crm's own text>` |
+| `crm` | `find_customer` | `crm__find_customer` | `[CRM] ...` |
+
+1. `tools/list` returns the four prefixed names; the cached entry keeps the upstream name beside each one (`upstreamName`, `apps/gateway/src/upstreams/manager.ts:299`).
+2. A client calls `crm__ping`. The gateway splits on the first `__` (`naming.ts:17-23`): slug `crm`, tool `ping`. It looks the slug up (`manager.ts:195`), takes the stored credential for `crm` only, and calls the upstream with the plain name `ping`. `shop` never sees the call.
+3. The audit row stores server `crm` and tool `ping` (the upstream's name), so it reads like the upstream's own log.
+4. If `crm` registered a tool whose prefixed name broke `^[a-zA-Z0-9_-]{1,64}$`, only that tool would be skipped (`manager.ts:292-296`), shown as skipped on the server page; `crm__ping` and the whole `shop` server are unaffected.
+
+This example is illustrative (two made-up servers); the real, running case is `woo__ping`, `notes__ping` and `utils__ping` above, listed live in [5.1](#51-toolslist-trimmed-from-15-tools-to-three).
+
 ## 4. Hashing versus encryption, and the auth flow
 
 - **API keys are hashed** (SHA-256). The gateway only ever needs to ask "is this the key I issued?", so it stores a one-way hash; a database leak does not hand out working keys. SHA-256 is enough because a key is 32 random bytes: nobody can guess it, so slowness would add cost without safety ([ADR-008](../decisions/ADR-008-api-key-hashing.md)). Passwords are hashed with the slow argon2id because humans pick guessable ones.
@@ -200,6 +216,35 @@ The JSON below is **not** real captured traffic; it is built by hand from the me
 ```
 
 Audit row: outcome `timeout`, duration about the limit. A timeout is **not** a connection failure, so the server stays `connected` and keeps its tools. The limit is above the WooCommerce server's own 10 s timeout on purpose, so a slow store normally comes back as that server's clean `isError`, not as a gateway abort.
+
+### 5.6 A dead upstream, captured live
+
+Captured on **2026-10-23** (Task 6.1, the definition-of-done run on the local k3d cluster, at API level) while the `utils` pod had just been killed with `kubectl -n mcp delete pod -l app.kubernetes.io/name=mcp-utilities`. `utils` was already marked `unreachable` (the first health check had failed with `connection refused`), and user B called its tool through the gateway with B's API key. The key is shown as `<redacted>`; the request was sent as plain HTTP with `Mcp-Method` and `Mcp-Name` headers, as the modern clients do.
+
+```
+POST /mcp HTTP/1.1
+Authorization: Bearer <redacted>
+Content-Type: application/json
+Accept: application/json, text/event-stream
+Mcp-Method: tools/call
+Mcp-Name: utils__calculate
+
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"utils__calculate","arguments":{"expression":"6*7"}}}
+
+-> HTTP 200
+event: message
+data: {"result":{"content":[{"type":"text","text":"Server 'utils' is disabled or unreachable"}],"isError":true},"jsonrpc":"2.0","id":1}
+```
+
+What it shows:
+
+- It is **HTTP 200** with `isError: true`, not an HTTP error: the call reached the gateway, was authenticated and was routed, and the tool itself failed. The model (or a person) reads the text and decides.
+- The text is the gateway's own `Server '<slug>' is disabled or unreachable` (`apps/gateway/src/upstreams/manager.ts:201-203`). The upstream was **not contacted**: no connection is open to a server in that state, so the answer is instant and the other servers are not slowed.
+- The audit row for it: `tool_call`, source `mcp`, user B, server `utils`, tool `calculate`, outcome **`denied`**, message `Server 'utils' is disabled or unreachable`.
+- Meanwhile `woo__list_products` through the same gateway returned HTTP 200 (the other servers keep working). The same `utils__calculate` call returned `6*7 = 42` once `utils` was connected again (19.9 s after the kill, a health check every 15 s); `utils` showed `unreachable` after 3.7 s.
+- A different case, not captured: if the pod dies **during** a call (the server still looks `connected`), the caller gets `Upstream 'utils' is unreachable: <reason>`, outcome `error`, and the server is marked unreachable at once (`manager.ts:224-227`, **tested**).
+
+Source: the run is recorded in [demo-script.md](../demo-script.md#kill-the-pod-of-one-upstream-server).
 
 ## 6. Likely interview questions (short answers)
 

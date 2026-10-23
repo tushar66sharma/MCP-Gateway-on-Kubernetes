@@ -11,7 +11,7 @@ If you are new to the project, read in this order:
 3. **The architecture overview:** [architecture.md](architecture.md). The components, how they connect, and which namespaces they live in (everything in it is built: the store, the three MCP servers, the gateway with its Postgres database, the dashboard and the chat agent, plus the NetworkPolicies, Pod Security `restricted` and the production values, which were rehearsed on a second k3d cluster and not run on a real VPS).
 4. **The Kubernetes primer:** [learning/01-kubernetes-primer.md](learning/01-kubernetes-primer.md). The Kubernetes concepts the project uses, each tied to a command you can run against the local cluster.
 5. **The MCP protocol:** [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md). What MCP is and how our server speaks it, with real captured requests and responses.
-6. **The gateway:** [learning/03-gateway.md](learning/03-gateway.md) (client and server at once, cached catalog, naming, hashing versus encryption, real captured gateway traffic), then [system-design.md](system-design.md).
+6. **The gateway:** [learning/03-gateway.md](learning/03-gateway.md) (client and server at once, cached catalog, naming with a worked example, hashing versus encryption, real captured gateway traffic including a dead upstream), then [system-design.md](system-design.md).
 7. **The chat agent:** [learning/04-chat-agent.md](learning/04-chat-agent.md) (the tool loop, acting as the user, a real captured LLM request and response), then [ai-integration.md](ai-integration.md).
 8. **The decision records:** [decisions/README.md](decisions/README.md). One short ADR per significant choice, with alternatives and trade-offs.
 
