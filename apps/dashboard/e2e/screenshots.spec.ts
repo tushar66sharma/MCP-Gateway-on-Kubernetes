@@ -13,7 +13,10 @@ async function shot(page: Page, name: string): Promise<void> {
   // Let loading skeletons and fonts settle, then capture the viewport.
   await page.waitForLoadState('networkidle');
   await page.evaluate(() => document.fonts.ready);
-  await page.screenshot({ path: path.join(OUT, `${name}.png`) });
+  // Any email that is not a demo address (example.com) is painted over, so a real personal address that
+  // happens to be on the page never reaches a committed image.
+  const realEmails = page.locator('text=/[\\w.+-]+@(?!example\\.com)[\\w-]+\\.[\\w.]+/');
+  await page.screenshot({ path: path.join(OUT, `${name}.png`), mask: [realEmails], maskColor: '#9ca3af' });
 }
 
 async function heading(page: Page, name: string): Promise<void> {
