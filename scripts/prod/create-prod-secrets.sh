@@ -101,7 +101,8 @@ ensure_secret() {
       esac
       b64v=$(b64 "$value")
     fi
-    data="$data  $key: $b64v"$'\n'
+    # Quoted, so YAML always reads the base64 text as a string (an all-digit value would otherwise be a number).
+    data="$data  $key: \"$b64v\""$'\n'
   done
   value=""
 

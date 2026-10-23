@@ -12,7 +12,9 @@ export interface LimitResult {
  * In-memory fixed-window limiter (spec §6.7: login 10 per minute per IP+email; chat; /mcp auth failures
  * per IP). `hit` counts, allowed or not; `check` only reads. Expired windows are swept at most once per
  * window length. Memory is capped at `maxKeys` (default 10,000): when a new key arrives at the cap, expired
- * windows are swept first, then the oldest inserted key is evicted (Map insertion order).
+ * windows are swept first, then the oldest inserted key is evicted (Map insertion order). Trade-off: a
+ * client that sends about `maxKeys` requests with fresh keys can evict its own window early (docs/security.md
+ * §8, risk 1).
  */
 export class FixedWindowLimiter {
   private readonly windows = new Map<string, Window>();
@@ -49,7 +51,11 @@ export class FixedWindowLimiter {
     return { allowed: false, retryAfterSec: this.retryAfter(w, now) };
   }
 
-  /** Whether the next `hit` would be allowed. Does not count and does not create a key. */
+  /**
+   * Whether the next `hit` would be allowed. Does not count and does not create a key.
+   * Test and diagnostic API: no request path calls it (every limited path counts with `hit`); the tests
+   * use it to read a window without changing it.
+   */
   check(key: string): LimitResult {
     const now = this.clock().getTime();
     const w = this.windows.get(key);

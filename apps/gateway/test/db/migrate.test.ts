@@ -31,4 +31,38 @@ describe('withMigrationLock', () => {
     ).rejects.toBe(boom);
     expect(bad.calls.map((c) => c.sql)).toEqual(['select pg_advisory_lock($1)', 'select pg_advisory_unlock($1)']);
   });
+
+  /** A client whose unlock query rejects (e.g. the connection died during the migration). */
+  function unlockFailsClient(unlockError: Error) {
+    return {
+      query: async (sql: string) => {
+        if (sql.includes('pg_advisory_unlock')) throw unlockError;
+      },
+    };
+  }
+
+  it('never lets an unlock failure mask the migration error', async () => {
+    const boom = new Error('migration failed');
+    const unlockError = new Error('Connection terminated');
+    const seen: unknown[] = [];
+    await expect(
+      withMigrationLock(
+        unlockFailsClient(unlockError),
+        async () => {
+          throw boom;
+        },
+        (err) => seen.push(err),
+      ),
+    ).rejects.toBe(boom);
+    expect(seen).toEqual([unlockError]);
+  });
+
+  it('returns the migration result when only the unlock fails (the session end releases the lock)', async () => {
+    const unlockError = new Error('Connection terminated');
+    const seen: unknown[] = [];
+    await expect(withMigrationLock(unlockFailsClient(unlockError), async () => 'done', (err) => seen.push(err))).resolves.toBe('done');
+    expect(seen).toEqual([unlockError]);
+    // Without a callback the unlock failure is still swallowed.
+    await expect(withMigrationLock(unlockFailsClient(unlockError), async () => 'done')).resolves.toBe('done');
+  });
 });

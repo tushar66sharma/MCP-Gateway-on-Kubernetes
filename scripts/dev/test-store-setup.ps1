@@ -69,6 +69,16 @@ $stubCase = 'touch /var/www/html/wp-config.php; PATH=/stub:$PATH sh /s/setup.sh'
 $r = Invoke-Container $stubCase ($baseEnv + @('-e','ADMIN_PASSWORD=Dummy-Admin-Pass-7q2m','-v',"${stubDir}:/stub:ro"))
 Report 'a failing version comparison stops setup with a message' (($r.Code -ne 0) -and ($r.Out -match 'could not compare WooCommerce versions') -and ($r.Out -notmatch 'SETUP COMPLETE')) "(exit $($r.Code))"
 
+# 3c. WooCommerce's database update runs on every setup, also when the plugin is already at WOO_VERSION, so an update
+# interrupted by a failed earlier run is finished by the next one ("wp wc update" is idempotent). The stub logs every call.
+$stub2Dir = Join-Path $tmp 'stub2'
+New-Item -ItemType Directory -Path $stub2Dir | Out-Null
+[IO.File]::WriteAllText((Join-Path $stub2Dir 'wp'), "#!/bin/sh`necho `"`$*`" >> /tmp/wp-calls`ncase `$* in`n  *option*get*) echo `$WP_URL ;;`n  *plugin*get*) echo 11.2.1 ;;`n  *user*meta*get*) echo 1 ;;`n  *eval*) echo 0 ;;`n  *) exit 0 ;;`nesac`n")
+$r = Invoke-Container 'touch /var/www/html/wp-config.php; PATH=/stub2:$PATH sh /s/setup.sh; echo EXIT=$?; echo CALLS; cat /tmp/wp-calls' ($baseEnv + @('-e','ADMIN_PASSWORD=Dummy-Admin-Pass-7q2m','-e','STORE_TIMEZONE=UTC','-e','STORE_CURRENCY=USD','-e','STORE_COUNTRY=US:CA','-v',"${stub2Dir}:/stub2:ro"))
+$calls = ($r.Out -split 'CALLS', 2)[-1]
+Report 'wp wc update runs when WooCommerce is already at WOO_VERSION' (($r.Out -match 'EXIT=0') -and ($r.Out -match 'SETUP COMPLETE') -and
+  ($r.Out -match 'already at 11\.2\.1') -and ($calls -match '(?m)wc update\s*$')) $r.Out
+
 # 4. Static: the password is never an argument.
 $src = Get-Content (Join-Path $dir 'setup.sh') -Raw
 Report 'setup.sh has no --admin_password= argument' ($src -notmatch '--admin_password=')

@@ -49,7 +49,11 @@ export function createPostgresHandle(logger?: Logger): DbHandle {
         // One client for the whole run: the advisory lock belongs to its session.
         const client = await migrationPool.connect();
         try {
-          await withMigrationLock(client, () => migratePg(drizzle(client, { schema }), { migrationsFolder: migrationsFolder() }));
+          await withMigrationLock(
+            client,
+            () => migratePg(drizzle(client, { schema }), { migrationsFolder: migrationsFolder() }),
+            (err) => logger?.warn({ reason: safeReason(err) }, 'migration advisory unlock failed; the lock ends with the session'),
+          );
         } finally {
           client.release();
         }

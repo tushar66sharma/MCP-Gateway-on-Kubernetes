@@ -128,8 +128,7 @@ function Row([string]$Name, [bool]$Ok, [string]$Detail = '') {
 Assert-ProdContext
 New-Item -ItemType Directory -Force -Path $scratch | Out-Null
 $cookieJar = Join-Path $scratch 'cookies.txt'
-$bodyFile = Join-Path $scratch 'login.json'
-Remove-Item -Force -ErrorAction SilentlyContinue $cookieJar, $bodyFile
+Remove-Item -Force -ErrorAction SilentlyContinue $cookieJar
 
 # 1. every pod ready under restricted
 $pods = (Kube get pods -A -o json | ConvertFrom-Json).items | Where-Object { $_.metadata.namespace -in 'store', 'mcp', 'gateway' }
@@ -182,10 +181,11 @@ Row 'store HTML: no http://store.prod references' ($mixed -eq 0 -and $https -gt 
 # 7. login with the bootstrap admin: Set-Cookie must be Secure (password never printed)
 $email = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Kube -n gateway get secret gateway-bootstrap -o 'jsonpath={.data.email}')))
 $pw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Kube -n gateway get secret gateway-bootstrap -o 'jsonpath={.data.password}')))
-[IO.File]::WriteAllText($bodyFile, (@{ email = $email; password = $pw } | ConvertTo-Json -Compress))
-$pw = $null
-$hdr = curl.exe -k -s -D - -o NUL -c $cookieJar -H "Origin: $AppUrl" -H 'Content-Type: application/json' --data-binary "@$bodyFile" "$AppUrl/api/auth/login"
-Remove-Item -Force -ErrorAction SilentlyContinue $bodyFile
+# The JSON goes to curl on stdin (--data-binary @-): the password never touches disk or the process list.
+# UTF-8 without BOM for the pipe (PowerShell 5.1 defaults to ASCII); the trailing newline is valid JSON whitespace.
+$oldEnc = $OutputEncoding; $OutputEncoding = New-Object System.Text.UTF8Encoding $false
+$hdr = (@{ email = $email; password = $pw } | ConvertTo-Json -Compress) | curl.exe -k -s -D - -o NUL -c $cookieJar -H "Origin: $AppUrl" -H 'Content-Type: application/json' --data-binary '@-' "$AppUrl/api/auth/login"
+$OutputEncoding = $oldEnc; $pw = $null
 $loginCode = ($hdr | Select-Object -First 1)
 $setCookies = @($hdr | Where-Object { $_ -match '^(?i)set-cookie:' })
 $secureAll = ($setCookies.Count -ge 1) -and (@($setCookies | Where-Object { $_ -notmatch '(?i);\s*secure' }).Count -eq 0)

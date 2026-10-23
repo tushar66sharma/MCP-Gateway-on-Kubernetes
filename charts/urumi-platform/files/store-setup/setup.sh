@@ -56,7 +56,6 @@ if $WP plugin is-installed woocommerce >/dev/null 2>&1; then
   current_woo=$($WP plugin get woocommerce --field=version)
 fi
 # Install when WooCommerce is absent or older than WOO_VERSION; never downgrade a newer one.
-woo_changed=false
 # Assign first: the status of a command substitution used as a case word is discarded, so a failing
 # helper would look like "no match" and skip the upgrade silently.
 cmp=$(woo_version_cmp "$current_woo" "$WOO_VERSION") || fail "could not compare WooCommerce versions (installed: ${current_woo:-none}, wanted: $WOO_VERSION)"
@@ -64,7 +63,6 @@ case "$cmp" in
   older)
     log "installing WooCommerce $WOO_VERSION (found: ${current_woo:-none})"
     $WP plugin install woocommerce --version="$WOO_VERSION" --force
-    woo_changed=true
     ;;
   newer)
     log "WooCommerce $current_woo is newer than $WOO_VERSION; not downgrading"
@@ -77,11 +75,11 @@ case "$cmp" in
     ;;
 esac
 $WP plugin is-active woocommerce >/dev/null 2>&1 || $WP plugin activate woocommerce
-# After an install or upgrade, run WooCommerce's database update now instead of waiting for an admin visit.
-if [ "$woo_changed" = "true" ]; then
-  log "running the WooCommerce database update"
-  $WP wc update
-fi
+# Run WooCommerce's database update now instead of waiting for an admin visit. Every run, not only after an
+# install or upgrade: it is idempotent ("No updates required"), and it finishes an update that an earlier,
+# failed run left half done.
+log "running the WooCommerce database update"
+$WP wc update
 
 log "configuring store options"
 $WP option update timezone_string "$STORE_TIMEZONE"
