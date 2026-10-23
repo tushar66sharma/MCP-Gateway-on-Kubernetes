@@ -1,8 +1,10 @@
 # Testing
 
-> **Status: end of Phase 5.** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent, the LLM layer, the `/mcp` failure limit and the migration lock), the dashboard's component tests, the Playwright browser smoke, and the Phase 5 scripts (`scripts/smoke-test.ps1`, `test-network-policies.ps1`, `validate-chart.ps1`, `check-invite-log.ps1`). The complete strategy and a coverage statement are Phase 6.
+> **Status: end of Phase 5b.** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent, the LLM layer, the `/mcp` failure limit and the migration lock), the dashboard's component tests, the Playwright browser smoke, and the Phase 5 scripts (`scripts/smoke-test.ps1`, `test-network-policies.ps1`, `validate-chart.ps1`, `check-invite-log.ps1`). Phase 5b added tests for the chat guardrails, the budget, the external-store client and the dashboard budget UI (see the table "Phase 5b tests" below). The complete strategy and a coverage statement are Phase 6.
 
-Test counts below come from the Phase 5 final-review fix wave on 2026-10-23 (`npm test` from the repository root: **606 tests, all passing**: shared 55, dashboard 123, gateway 319, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
+**Phase 5b (2026-10-23, final verification): 655 tests, all passing** (shared 55, dashboard 132, gateway 353 in 32 files, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 76). The per-run table for the three back-to-back root runs is in the "Phase 5b final verification" section at the end of this file; the older tables below are the Phase 5 numbers, kept as history.
+
+Test counts in the next paragraph and table come from the Phase 5 final-review fix wave on 2026-10-23 (`npm test` from the repository root: **606 tests, all passing**: shared 55, dashboard 123, gateway 319, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
 
 | Run | shared | dashboard | gateway | mcp-notes | mcp-utilities | mcp-woocommerce |
 |---|---|---|---|---|---|---|
@@ -141,7 +143,7 @@ Verified 2026-10-19: plain, `-Write` and `-Isolation` runs passed. Isolation tim
 - MCP Inspector 2.11.0 (`--cli`) against `http://app.localhost/mcp`: `tools/list` (15 tools) and `woo__list_orders` with `period=today` worked (Task 3.8), and `utils__calculate` with `expression=6*7` returned `42` while writing these docs.
 - Chart: `helm lint` passes with `deploy/values-local.yaml` and `deploy/values-prod.yaml`; the rendered chart has no `SSRF_ALLOW_LOOPBACK`.
 - Production rehearsal (2026-10-23, `scripts\prod-rehearsal.ps1 -Up | -Verify | -Down`): `values-prod.yaml` plus `deploy/values-prod-test.yaml` installed into a temporary second k3d cluster `urumi-prod` (the local cluster stopped meanwhile and started again after). `-Verify` prints PASS/FAIL rows: pods ready under `restricted`, both certificates `Ready=True`, the http redirect (`301`), `200` with HSTS over https, `401` JSON on `/api/auth/me`, no `http://` store assets, a `Secure` session cookie on login, `chat/status` `configured:false`, `scripts\test-network-policies.ps1` (13 of 13) and `scripts\check-gateway.ps1 -Base https://app.prod.localhost:8443` (with `NODE_EXTRA_CA_CERTS`). All passed on the second run; the first run found two real faults (the redirect Middleware dropped a non-443 port, and one NetworkPolicy probe expected `200` from a WordPress that redirects plain http). Results and what was not run: [deployment.md](deployment.md#rehearsal-results-2026-10-23). `scripts\validate-chart.ps1` gained two rows for the redirect port.
-- Not tested: Claude Code and Cursor against the gateway (snippets are in the [run guide](run-guide.md#connect-claude-code-for-you-to-try) and labelled as such), a multi-replica gateway, the production values on a real VPS (they were rehearsed on a second k3d cluster, see above).
+- Not tested: Claude Code and Cursor against the gateway (the owner's machine has no `claude` command; the steps are in the [run guide](run-guide.md#connect-claude-code) and labelled "for you to run"; `.mcp.json.example` was only checked to be valid JSON, 2026-10-23), a multi-replica gateway, the production values on a real VPS (they were rehearsed on a second k3d cluster, see above).
 
 ### `scripts\check-dashboard.ps1` (Playwright, Phase 4)
 
@@ -158,6 +160,26 @@ Verified 2026-10-22 on images `8f6b79f` (the final-review fix wave): **17 tests,
 ### Live chat checks (Phase 4)
 
 On 2026-10-19, with Groq `openai/gpt-oss-120b` and no fallback, through the browser on the deployed images: four prompts each called the expected tool with success (`woo__create_product` → draft #36, `woo__list_orders` → the COD order #33 placed by `scripts\dev\customer-order-smoke.ps1`, `notes__create_note`, `notes__list_notes`), each tool call appeared in the Audit page with source **Chat**, and the draft products showed in wp-admin. Each single-tool turn cost 3.1-3.3K tokens (two model calls); a four-tool turn 9.1K. The first round showed Markdown and a guessed ₹ currency; the system prompt was fixed (plain text, currency only from a tool result), redeployed and re-checked. The `chat turn` log lines contained no message text. On 2026-10-20 one turn was also captured at the wire level for [learning/04-chat-agent.md](learning/04-chat-agent.md) (3,151 tokens).
+
+## Phase 5b tests
+
+Counts from the final verification on 2026-10-23 (total 655; Phase 5 ended at 606: dashboard 123 to 132, gateway 319 to 353, mcp-woocommerce 70 to 76). "Cases" are the `it(...)` blocks of the file.
+
+| Area | File (cases) | Proves |
+|---|---|---|
+| Topic check | `apps/gateway/test/chat/topicCheck.test.ts` (8) | `BLOCK` blocks and `ALLOW` allows, with usage; the verbatim system prompt, no tools and the small output cap; **the topic check sees the previous assistant message**; lengths capped and the previous-assistant block omitted when there is none; a user cannot close the data block; a failing check falls back to allow (`error`), an empty or unparsable verdict allows (`unparsed`); no check without a topic model |
+| Chat guardrails end to end | `apps/gateway/test/api/chatGuardrails.test.ts` (11) | An off-topic message is blocked without calling the main model (`stoppedReason: "off_topic"`); an allowed one runs and both usages are counted; **a failing topic check falls back to the scope rule and the turn runs**; **usage of a failed turn is counted**; **a turn over the limit is refused with `CHAT_BUDGET_EXCEEDED` and `Retry-After`**; a turn that starts under the limit may overshoot and the next is refused; the status endpoint reports limit, used, remaining, `resetsAt` and `topicCheck`; a length-capped reply gets the shortened note; the `chat turn` log line carries `topicCheck` and `budgetUsed` but no content; with the budget off nothing is refused |
+| Daily usage | `apps/gateway/test/db/usageRepo.test.ts` (5) | **The budget day rolls over at midnight in the store time zone**; `nextResetAt` follows daylight saving; `getUsage` is 0 without a row; `addUsage` increments atomically |
+| Config and LLM layer | `config.test.ts` (20), `chat/llm/registry.test.ts` (13), `chat/llm/openaiCompatible.test.ts` (21) | The guardrail variable bounds and `CHAT_TOPIC_CHECK=false`; `max_completion_tokens` for Groq and `max_tokens` for OpenRouter; `CHAT_TOPIC_CHECK_MODEL` honoured (the main model on OpenRouter) and no topic model when the check is off or the key is missing; the topic call uses the topic model, no retries and the short timeout; `LLM_MAX_OUTPUT_TOKENS` applies to main-model calls; empty tool lists omitted; `finish_reason` mapped |
+| Dashboard | `apps/dashboard/test/Chat.test.tsx` (16), `ServerFormDialog.test.tsx` (9) | The budget line, the budget-exceeded box with the reset time and a disabled message box, the off-topic note (`Chat.test.tsx`); the SSRF error on the server form shows the `internalUpstreams` hint (`ServerFormDialog.test.tsx`) |
+| External store | `apps/mcp-woocommerce/test/client.test.ts` (18), `server.test.ts` (11) | Basic mode sends an `Authorization` header and no OAuth parameters; basic-mode errors never include the credentials; basic mode is refused for a non-https base URL without echoing credentials; credentials inside the base URL are rejected; the `oauth1` defaults are unchanged |
+
+Cluster checks added in Phase 5b (not part of `npm test`):
+
+- `scripts\validate-chart.ps1` renders the chart for the default values (identical to `main` except the new gateway variables), the external-store variant and every `internalUpstreams` case, and asserts the rejections (an `http://` store with Basic auth, credentials inside the URL, a bad namespace or port).
+- `scripts\dev\test-external-store.ps1` proves the Basic-auth mode live against the local WooCommerce over HTTPS (run guide, [a store hosted elsewhere](run-guide.md#a-store-hosted-elsewhere-phase-5b)); `scripts\dev\test-internal-upstream.ps1` proves an in-cluster server in two namespaces and cleans up after itself.
+- `scripts\dev\topic-probe.mjs` replays the 28 labelled prompts of `apps/gateway/test/fixtures/topic-probe-cases.json` against Groq to choose and re-check the topic-check model (it spends free-plan quota, so it is run by hand, never by `npm test`).
+- `wp search-replace --dry-run` against the local store ([deployment guide](deployment.md#when-the-public-address-changes)): count only, nothing written.
 
 ## 6. Not yet in place
 

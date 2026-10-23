@@ -370,6 +370,27 @@ Rules and limits:
 
 **Verified on 2026-10-23** (local k3d, k3s v1.35.5): `scripts\validate-chart.ps1` (render rows for the empty list, an entry in `mcp`, an entry in another namespace, duplicates and the schema rejections) and the live proof `scripts\dev\test-internal-upstream.ps1`, which deploys a test server in `mcp` and another in a new namespace `tools-test`, shows both refused or unreachable before the setting and connected with 4 tools after it, makes one `tools/call` through a temporary API key, and removes everything. Results: [security, section 15](security.md#15-networkpolicies-phase-5).
 
+## When the public address changes
+
+Say the store moves from `store.localhost` to `store.example.com` (or the dashboard and gateway from `app.localhost` to a real name). You change `global.storeHost` and `global.appHost` in your values file and run `scripts\up.ps1 -Redeploy` (or `helm upgrade`). This is what follows by itself and what does not:
+
+| Thing | Automatic? | Action |
+|---|---|---|
+| Product links | yes | follow `global.storeHost` |
+| Existing media and content links | not automatic | the one-off `wp search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid` |
+| Dashboard endpoint | yes | shown from the browser address |
+| Gateway hosts, CSRF origin and invite links | yes | from `global.appHost` |
+| MCP clients' saved URL | no | each user re-adds it once (keys keep working) |
+| Upstream server addresses | unaffected | internal names |
+| External store | not applicable | its own domain ([a store hosted elsewhere](#using-a-woocommerce-store-hosted-elsewhere)) |
+
+Notes on the rows:
+
+- **Existing links.** Pages, posts and uploaded media store their absolute addresses in the database, so old content keeps pointing at the old address until you rewrite it. `--skip-columns=guid` leaves post GUIDs alone: they are identifiers, not links, and WordPress advises against changing them. Take a backup first ([backups](#12-backups)), then run the command inside a one-off pod that has WP-CLI and the WordPress volume (the same image and settings as the `store-setup` Job). Run it once, after the DNS name and TLS work.
+- **Dry run first.** Add `--dry-run` to see what would change without writing anything. **Verified 2026-10-23 on the local store** (WooCommerce 11.2.1, a throw-away pod copied from the `wp-cron` CronJob's pod spec, then deleted): `wp search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid --dry-run` ended with `Success: 6 replacements to be made.` (3 in `wp_options`, 2 in `wp_posts.post_content`, 1 in `wp_users.user_url`). Nothing was changed, and no values were printed. The real run (without `--dry-run`) was not executed.
+- **MCP clients.** A client stores the full gateway URL, so after the change each user runs `claude mcp remove urumi-gateway` and adds it again with the new address, or changes `URUMI_GATEWAY_URL` for a `.mcp.json` ([run guide](run-guide.md#connect-claude-code)). Keys are stored in the gateway by hash and do not depend on the address.
+- **Registered MCP servers.** The gateway reaches them by cluster-internal names (`mcp-woocommerce.mcp.svc...`), which do not change with the public address.
+
 ## Production (k3s VPS)
 
 > **Status (2026-10-23).** This guide installs the same chart on one k3s server with TLS. **No real VPS, domain or Let's Encrypt certificate has been used.** What *was* run is marked **verified**; everything else is **not executed** (it needs your cloud account, domain or registry) or **expected** (taken from the tools' documentation). Task 5.7 of Phase 5 rehearses the cluster side on a second local k3d cluster with a self-signed issuer; its results are recorded in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) and the [testing guide](testing.md).
