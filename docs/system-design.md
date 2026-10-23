@@ -127,10 +127,17 @@ erDiagram
     text slug PK "a SEED_SERVERS slug seeded once"
     timestamptz seeded_at
   }
+  chat_usage_daily {
+    uuid user_id PK "FK users, on delete cascade"
+    date day PK "the budget day in STORE_TIMEZONE"
+    int total_tokens
+    int turns
+  }
 ```
 
 Points worth knowing:
 
+- **`chat_usage_daily` holds the chat token budget** (migration `0002_chat_usage_daily`, Phase 5b): one row per user and day, updated by an atomic upsert-increment after each turn. Env vars: `CHAT_DAILY_TOKEN_BUDGET` (limit, 0 = unlimited), `CHAT_TOPIC_CHECK`, `CHAT_TOPIC_CHECK_MODEL`, `CHAT_TOPIC_CHECK_TIMEOUT_MS`, `LLM_MAX_OUTPUT_TOKENS`; details in [ai-integration.md](ai-integration.md#9-guardrails-scope-topic-check-answer-cap-and-daily-budget-phase-5b).
 - **`seeded_slugs` is a tombstone list.** Seeding inserts a built-in server only if its slug is in neither `upstream_servers` nor `seeded_slugs`, and records the slug in the same transaction; `DELETE /api/servers/:id` never touches it, so **a deleted built-in server stays deleted; re-add it with `POST /api/servers`**. On the first start after the upgrade, slugs already present in `upstream_servers` were marked as seeded without being re-inserted.
 - **`invites` has no `created_at`** (the spec lists none). Pending invites are listed by `expires_at`, newest first.
 - **`audit_logs.server_id` is `ON DELETE SET NULL`.** Deleting a server keeps its history readable because `server_slug` is denormalised into every row. `audit_logs.user_id` is also `SET NULL`. `api_key_id` has no foreign key, so a key row can never block or be blocked by history.
@@ -167,11 +174,11 @@ Mounted at `/api` by `src/api/router.ts`. Order of processing: JSON body parser 
 | `DELETE /api/servers/:id` | admin | Remove | 204 |
 | `POST /api/servers/:id/refresh` | admin | Run a health check now | 200 `ServerView` |
 | `GET /api/audit` | session | Filters `userId`, `serverSlug`, `toolName`, `outcome`, `from`, `to`, `limit` (1-100, default 50), `cursor`. Admin sees all rows, a member only their own (asking for someone else's is 403). | 200 `{items, nextCursor}` |
-| `GET /api/chat/status` | session | `{configured, provider, model, fallbackProvider}`; never key material (Phase 4) | 200 |
+| `GET /api/chat/status` | session | `{configured, provider, model, fallbackProvider, topicCheck, budget}`; `budget` is `{limit, used, remaining, resetsAt}` for the caller today or `null` when unlimited; never key material (Phase 4, Phase 5b) | 200 |
 | `POST /api/chat` | session | Body `{messages: [{role: "user" \| "assistant", content}]}`: 1-20 messages, content 1-4,000 characters, the last from the user, no other fields. Runs one agent turn as the user (section 10) | 200 `{reply, toolCalls, stoppedReason, provider, model, usage}` |
 | `GET /healthz`, `GET /readyz` | public | Probes | 200 / 503 |
 
-`POST /api/chat` answers, besides the codes below: `503 LLM_NOT_CONFIGURED`, `429 LLM_RATE_LIMITED` (always with `Retry-After`, 60 s when the provider gave none), `502 LLM_AUTH_FAILED`, `502 LLM_UNAVAILABLE`, `502 LLM_BAD_RESPONSE` (each with `details.toolCalls`, the calls that already ran), `409 CONFLICT` (a turn already running for this user) and `429 RATE_LIMITED` (more than `CHAT_RATE_LIMIT_PER_MIN` turns a minute). Full table: [ai-integration.md](ai-integration.md#7-failures-retries-deadline-and-fallback).
+`POST /api/chat` answers, besides the codes below: `503 LLM_NOT_CONFIGURED`, `429 LLM_RATE_LIMITED` (always with `Retry-After`, 60 s when the provider gave none), `502 LLM_AUTH_FAILED`, `502 LLM_UNAVAILABLE`, `502 LLM_BAD_RESPONSE` (each with `details.toolCalls`, the calls that already ran), `409 CONFLICT` (a turn already running for this user) and `429 RATE_LIMITED` (more than `CHAT_RATE_LIMIT_PER_MIN` turns a minute) and `429 CHAT_BUDGET_EXCEEDED` (the user's daily token budget is used up; `Retry-After` = seconds to 00:00 in `STORE_TIMEZONE`, `details {limit, used, resetsAt}`). A turn may also return `200` with `stoppedReason: "off_topic"` (Phase 5b). Full table: [ai-integration.md](ai-integration.md#7-failures-retries-deadline-and-fallback).
 
 **`ServerView`** (never contains the credential): `id, slug, name, url, authType, authHeaderName, hasCredential, enabled, status, lastError, checkedAt, toolCount, tools[{name, description}], skippedTools[]`. `skippedTools` lists upstream tools whose prefixed name was not valid and which were therefore left out (see section 5).
 
@@ -252,6 +259,7 @@ Audit outcomes: `success`; `error` (the upstream returned `isError`, a protocol 
 | `/api` body / `/api/chat` body / `/mcp` body | 100 kb / 512 kb / 1 MB | Express JSON parsers |
 | Chat turn / one LLM request / LLM retries | 60 s / 30 s / 2 | `CHAT_TURN_TIMEOUT_MS`, `LLM_TIMEOUT_MS`, `LLM_MAX_RETRIES` |
 | `/mcp` auth failures per IP / limiter keys | 30 a minute / 10,000 per limiter | `MCP_AUTH_FAILURE_LIMIT_PER_MIN`, `FixedWindowLimiter` `maxKeys` |
+| Chat answer cap / topic-check timeout / daily token budget per user | 1024 tokens / 5 s / 50,000 | `LLM_MAX_OUTPUT_TOKENS`, `CHAT_TOPIC_CHECK_TIMEOUT_MS`, `CHAT_DAILY_TOKEN_BUDGET` |
 | Chat tool steps / turns per user | 8 per turn / 10 a minute, one at a time | `CHAT_MAX_STEPS`, `CHAT_RATE_LIMIT_PER_MIN` |
 | Chat: tool result to the model / trace preview / tool description | 6,000 / 500 / 300 characters | `chat/agent.ts` |
 | Chat loopback: connect / `tools/list` | 10 s / 20 s | `chat/mcpLoopback.ts` |

@@ -882,6 +882,11 @@ sequenceDiagram
         R-->>B: 409 CONFLICT
     else more than 10 turns this minute
         R-->>B: 429 RATE_LIMITED, Retry-After
+    else today's token budget is used up (budget check)
+        R-->>B: 429 CHAT_BUDGET_EXCEEDED, Retry-After = seconds to 00:00 in the store zone
+    else the topic check says BLOCK
+        R->>P: topic check: ALLOW or BLOCK (small model, 5 s, no retries; any failure means ALLOW)
+        R-->>B: 200 off_topic, the refusal text (main model not called)
     end
     R->>M: connect and tools/list, Bearer = fresh internal token for this user
     M-->>A: the user's tools (descriptions cut to 300 characters)
@@ -911,7 +916,7 @@ sequenceDiagram
 
 **Reading the diagram.** The first block holds the cheap refusals, in this order: not configured (before anything else, so a missing key never opens a connection), a turn already in flight for this user (checked before the limiter, so a refused double-click costs no turn), and the per-user rate limit. Then the loopback connection: a real MCP client to `http://127.0.0.1:<port>/mcp` whose every HTTP request carries a freshly minted 5-minute token for this user, so the turn sees exactly the tools the user could call from Claude Code. Inside the loop, the decision after each model call is the important one: tool calls run **one at a time** through `/mcp`, where they are authenticated, routed, timed out and audited like any external call; a final text ends the turn. The retry box lives entirely in the LLM adapter and registry: only 429, 5xx and network errors are retried (plus a Groq `tool_use_failed` once), waits honour a `retry-after` of up to 20 s but never pass the turn deadline (a longer `retry-after` fails the call at once), and the fallback is tried once without retries. Tool calls themselves are never retried anywhere.
 
-**Stop reasons.** `final` (the model answered), `max_steps` (it still wanted tools after 8 steps: "I stopped after 8 tool steps without a final answer. Try a narrower question."), `timeout` (the deadline passed or the browser closed the connection: "This took too long and was stopped. The actions listed below already ran.", with the trace so far, or "This took too long and was stopped. No actions ran." when no tool ran). All three are HTTP 200. An empty final answer is replaced by "I couldn't produce an answer. Try rephrasing your question."
+**Stop reasons.** `off_topic` (Phase 5b: the topic check blocked the message; HTTP 200 with the fixed refusal and no tool calls), `final` (the model answered), `max_steps` (it still wanted tools after 8 steps: "I stopped after 8 tool steps without a final answer. Try a narrower question."), `timeout` (the deadline passed or the browser closed the connection: "This took too long and was stopped. The actions listed below already ran.", with the trace so far, or "This took too long and was stopped. No actions ran." when no tool ran). All three are HTTP 200. An empty final answer is replaced by "I couldn't produce an answer. Try rephrasing your question."
 
 **Verified.** Live through the browser on 2026-10-19 (Groq `openai/gpt-oss-120b`, no fallback): "Create a draft product called Chat Test Mug priced 9.99" → `woo__create_product` (draft #36), "What orders came in today?" → `woo__list_orders` (found the Cash-on-delivery order #33), "Save a note: call the supplier on Monday" → `notes__create_note`, "What notes do I have?" → `notes__list_notes`, and the Playwright calculator turn → `utils__calculate`, 42. Each turn cost about 3.2K tokens, and every tool call is an audit row with source **Chat**. The not-configured, rate-limit, error-mapping, timeout, max-steps, malformed-arguments, disconnect and user-disabled-mid-turn paths are covered by `apps/gateway/test/chat/*` and `test/api/chat.test.ts` (**tested**), not forced live. The fallback was **not tested live**.
 
@@ -922,6 +927,9 @@ sequenceDiagram
 | No AI key | `deps.llm` is null | no | the Chat page's empty state "The AI provider isn't configured" (from `GET /api/chat/status`), or the same text after a send (503) | start-up warning `llm not configured`; no turn line |
 | Invalid request (a `system` or `tool` role, 21 messages, 4,001 characters, last message not from the user) | zod | no | `400 VALIDATION_FAILED` (the page never sends these; earlier assistant replies longer than 4,000 characters are cut to 4,000 before sending) | request line 400 |
 | Double send | the in-flight set | no | "A reply is already being generated." (409) | request line 409 |
+| Today's token budget used up | usage today >= `CHAT_DAILY_TOKEN_BUDGET`, checked before the turn | no | "Today's AI budget is used up. It resets at 00:00 (<zone>)." (429 `CHAT_BUDGET_EXCEEDED`, `Retry-After`) | warn `code CHAT_BUDGET_EXCEEDED` |
+| Off-topic message | the topic check answers BLOCK | no | the refusal text, 200 `off_topic`, no tools | `topicCheck checked`, `stoppedReason off_topic` |
+| Topic check fails or is unparsable | the call or its reply | no | nothing; the turn runs under the scope rule | `topicCheck error` / `unparsed` |
 | More than 10 turns a minute | per-user limiter | no | "You're sending messages too quickly." (429; Retry stays disabled until `Retry-After` passes) | request line 429 |
 | Provider rate limit | provider 429 | yes: up to 2 retries honouring a `retry-after` of up to 20 s (never past the deadline); a longer `retry-after` is not waited for; then the fallback once if configured | "The AI provider is rate limited. Try again in N seconds." with a countdown; `Retry-After` is the provider's value or 60 s | `chat turn` warn: `code LLM_RATE_LIMITED`, `httpStatus 429`, `providerCode`, `fallbackProvider`, `fallbackCode` |
 | Provider down, 5xx, network error, request timeout (30 s) | the adapter | yes: backoff about 0.5 s then 1 s (plus jitter), then the fallback once | "The AI provider is unavailable right now." (502) | `code LLM_UNAVAILABLE`, `httpStatus` |

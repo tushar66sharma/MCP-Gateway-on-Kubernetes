@@ -1039,6 +1039,8 @@ then run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Re
 
 **Change or remove the key.** Edit `.env` and run step 3 again (the script restarts the gateway). The script refuses to run with both keys empty; to switch the chat off completely, delete the Secret and restart the gateway: `kubectl -n gateway delete secret llm-api-keys`, then `kubectl -n gateway rollout restart deploy/gateway` (**expected**: the chat then says it is not configured; not run).
 
+**Guardrails (Phase 5b).** The chat only helps with the store, your notes and small utility tasks. Off-topic messages get a fixed refusal (a small model checks each message first), answers are capped at 1024 tokens, and each user has 50,000 tokens a day (resets at 00:00 in the store time zone; `GET /api/chat/status` shows `used` and `remaining`). To change them: `gateway.chat.dailyTokenBudget` (0 = unlimited), `gateway.chat.topicCheck`, `gateway.llm.maxOutputTokens` in the Helm values, then `up.ps1 -Redeploy`. Details: [ai-integration.md](ai-integration.md#9-guardrails-scope-topic-check-answer-cap-and-daily-budget-phase-5b).
+
 Problems: [chat says not configured](troubleshooting.md#chat-says-the-ai-provider-isnt-configured), [the key is rejected](troubleshooting.md#chat-says-the-ai-provider-rejected-the-api-key-llm_auth_failed), [rate limited](troubleshooting.md#chat-says-the-ai-provider-is-rate-limited-429).
 
 ## 11. Each part of the project

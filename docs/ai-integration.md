@@ -84,11 +84,16 @@ In the cluster these are set by the Helm chart (`charts/urumi-platform/templates
 | `CHAT_TURN_TIMEOUT_MS` | `gateway.chat.turnTimeoutMs` | `60000` | 10000-120000 | The whole turn, model calls and tool calls included. |
 | `CHAT_MAX_STEPS` | `gateway.chat.maxSteps` | `8` | 1-16 | Model responses with tool calls per turn. |
 | `CHAT_RATE_LIMIT_PER_MIN` | `gateway.chat.rateLimitPerMin` | `10` | 1-120 | Turns per user per minute. |
+| `LLM_MAX_OUTPUT_TOKENS` | `gateway.llm.maxOutputTokens` | `1024` | 256-4096 | Output cap on every main-model call (section 9). |
+| `CHAT_TOPIC_CHECK` | `gateway.chat.topicCheck` | `true` | `true`, `false` | The on-topic check before each turn (section 9). |
+| `CHAT_TOPIC_CHECK_MODEL` | `gateway.chat.topicCheckModel` | `""` | any id | Empty means Groq `openai/gpt-oss-20b`; on OpenRouter the main model. |
+| `CHAT_TOPIC_CHECK_TIMEOUT_MS` | `gateway.chat.topicCheckTimeoutMs` | `5000` | 1000-15000 | Timeout of the check; no retries, no fallback provider. |
+| `CHAT_DAILY_TOKEN_BUDGET` | `gateway.chat.dailyTokenBudget` | `50000` | 0-10000000 | Tokens per user per day; 0 is unlimited (section 9). |
 | `STORE_TIMEZONE` | `storeSetup.timezone` | `UTC` (chart: `Asia/Kolkata`) | an IANA zone | The zone the system prompt uses for "today" and "this week". |
 
 Which Secret the keys come from: `llm-api-keys` in namespace `gateway`, or the name in `secrets.existing.llmApiKeys`. The reference is `optional: true`, so a missing Secret never blocks the gateway pod; chat then answers `LLM_NOT_CONFIGURED` (**live**: before the Secret existed the log said `llm not configured: chat is disabled`). `scripts\create-secrets.ps1` always writes the name `llm-api-keys` (a known limitation: it does not read `secrets.existing.llmApiKeys`).
 
-`GET /api/chat/status` (any logged-in user) returns `{configured, provider, model, fallbackProvider}` and never key material (**tested**). The dashboard's Chat page uses it to show the "not configured" state or the provider badge.
+`GET /api/chat/status` (any logged-in user) returns `{configured, provider, model, fallbackProvider, topicCheck, budget}` and never key material (**tested**). `topicCheck` is true when the check model is configured; `budget` is `{limit, used, remaining, resetsAt}` for the calling user today, or `null` when `CHAT_DAILY_TOKEN_BUDGET` is 0 (**tested**). The dashboard's Chat page uses it to show the "not configured" state or the provider badge.
 
 `.env.example` lists the variables a developer fills in; only the two keys are read from `.env` by `create-secrets.ps1`, the rest are Helm values for the cluster.
 
@@ -250,3 +255,44 @@ Each turn writes one `chat turn` log line: on success (info) `userId, steps, too
 - **What leaves the cluster.** The chat messages, the system prompt (which names the user and the store's time zone), the tool schemas and every tool result of the turn are sent to the provider (Groq, or OpenRouter when it is used). Tool results can contain store data such as customer names and order totals. Do not use the chat with data you may not share with that provider; read its data policy. The gateway itself does not log message content.
 - **Untrusted text.** Tool results and tool descriptions come from upstream servers (and, through `woo__*`, from anything a shopper typed into an order). They reach the model inside `<tool_result>` blocks; a result that contains `<tool_result` or `</tool_result` has it rewritten to `tool-result`, so it cannot close its own block; the match ignores case and allows whitespace inside the tag, so `</TOOL_RESULT>`, `</tool_result >`, `< /tool_result>` and `<tool_result` plus a line break `>` are rewritten too (**tested**: `neutralises case and whitespace variants of the tool_result tags`); the tool name in the attribute keeps only `[A-Za-z0-9_-]`; and the system prompt says text inside those blocks and in tool descriptions is untrusted data, never instructions.
 - **What can still go wrong (residual risk, accepted).** A model can still be persuaded by text in a tool result to call another tool. The damage is bounded by the user: every call goes through `/mcp` as that user, with that user's access, is visible in the trace, and is audited with source **Chat**. There is no confirmation step before a write; "change data only when the user asked" is a prompt rule, not an enforced one. The full threat model is Phase 6 (`threat-model.md`, planned).
+
+## 9. Guardrails: scope, topic check, answer cap and daily budget (Phase 5b)
+
+Why: the chat runs on one shared free quota (section 5), so it must not become a general chatbot, and one user must not spend all of it. Decision and alternatives: [ADR-020](decisions/ADR-020-chat-guardrails.md).
+
+**The four layers, in the order a turn meets them:**
+
+| # | Layer | Default | What it does | Where |
+|---|---|---|---|---|
+| 1 | **Budget check** | 50,000 tokens per user per day | After the rate limit and the in-flight check: if the user's tokens today are at or over the limit, `429 CHAT_BUDGET_EXCEEDED` and no model is called. | `chat/service.ts`, `chat/usageRepo.ts` |
+| 2 | **Topic check** | on | A small model sees the last user message and up to 500 characters of the previous assistant message and answers `ALLOW` or `BLOCK`. `BLOCK` returns the refusal (HTTP 200, `stoppedReason: "off_topic"`, no tools); the main model is not called. | `chat/topicCheck.ts` |
+| 3 | **Scope rule** | always | One line in the main system prompt tells the model to reply with exactly the refusal text for anything else. | `chat/systemPrompt.ts` |
+| 4 | **Answer cap** | 1024 tokens | `LLM_MAX_OUTPUT_TOKENS` on every main-model call. A final reply cut at the cap (`finish_reason: length`) ends with ` (Answer shortened.)`. | `chat/llm/*`, `chat/agent.ts` |
+
+The refusal text is fixed: `I can only help with this store, your notes and small utility tasks (calculations, dates and times) in this dashboard.`
+
+**Topic check details.**
+
+- Model: the primary provider only (Groq `openai/gpt-oss-20b`; OpenRouter: the main model), no retries, no fallback, `CHAT_TOPIC_CHECK_TIMEOUT_MS` (5000 ms), output capped at 64 tokens because gpt-oss spends output tokens on reasoning. The system prompt is the one validated by the Task 5b.1 probe (28 cases, `scripts/dev/topic-probe.mjs`).
+- Input: `<previous_assistant>...</previous_assistant>` (omitted when there is none) and `<user_message>...</user_message>`, as one user message. Tag-like text inside either is neutralised so a message cannot close its block (**tested**).
+- Verdict: the first word, upper-cased, letters only. `BLOCK` blocks, `ALLOW` allows, anything else (including an empty reply) allows.
+- **Fail-open rule.** A thrown error (rate limit, timeout, 5xx), an unrecognised or empty reply, or no check model: the turn runs and only layer 3 guards it. The user sees no new error; the `chat turn` log line says `topicCheck: "error"`, `"unparsed"` or `"skipped"` (**tested** with a scripted model).
+
+**What is counted.** Total tokens reported by the provider for the topic check **and** every main-model call of the turn, including turns that ended in an `LLM_*` error (the usage before the failure) or in a timeout (**tested**: `usage of a failed turn is counted`; the timeout path itself is not separately tested). A turn that starts under the limit may end over it; the next turn is refused (**tested**). Refusing an off-topic message costs only the check. Tokens are added with one atomic upsert-increment per turn into `chat_usage_daily` (**tested** with two concurrent calls). Admins have the same budget.
+
+**The budget day** is the calendar day in `STORE_TIMEZONE` (the chart passes `storeSetup.timezone`, `Asia/Kolkata` locally) and resets at 00:00 there, daylight saving included (**tested** for Asia/Kolkata, UTC and America/New_York). The 429 carries `Retry-After` (seconds to the reset) and `details: {limit, used, resetsAt}`.
+
+**Limits of these guardrails.**
+
+- A determined jailbreak can still get an answer from the main model (layer 3 is a prompt); it is bounded by the 1024-token cap and the daily budget, not prevented.
+- A false refusal is possible (the user rephrases). The probe required 100 % of its allowed prompts to pass; that is a sample, not a proof.
+- The check shares the Groq quota (8K tokens a minute); under pressure it is rate limited and fails open.
+- The budget counts what the provider reports. A call without usage counts as 0.
+
+**Verified live on the local cluster, 2026-10-23** (Groq, `openai/gpt-oss-120b` main, `openai/gpt-oss-20b` check; 3 chat turns in total):
+
+- With the budget set to 1000: "Use the calculator: what is 6 times 7?" - the check allowed it (783 ms), `utils__calculate` ran, the reply was "- 42", 3,275 tokens for the main model; the budget used was then 3,534 (check included).
+- The next request: `429 CHAT_BUDGET_EXCEEDED`, `Retry-After: 29322` (seconds to 00:00 Asia/Kolkata), `details {limit: 1000, used: 3534, resetsAt}`, no model called.
+- Budget restored to 50,000. "give me the code of binary search": the check **timed out** after 5.0 s (`topicCheck: "error"`, fail open) and the scope rule in the main prompt refused it with the exact refusal text (13.1 s, 1,629 tokens). The cause of the timeout was not investigated.
+- The same message again: `off_topic`, the refusal text, model `openai/gpt-oss-20b`, 256 tokens, check 757 ms, main model not called.
+- Not tested live: OpenRouter as the primary or as the check model; a check that returns an unrecognised reply; the reset at midnight on the real clock; `scripts\check-dashboard.ps1` (its chat prompt is the calculator turn above, which passed through the API).
