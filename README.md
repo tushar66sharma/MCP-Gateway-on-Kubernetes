@@ -53,7 +53,7 @@ Inside the cluster it uses the **WooCommerce REST API (v3) with OAuth 1.0a signa
 1. Open <http://store.localhost/shop/> and click a product, then **Add to cart**.
 2. Open the cart, go to checkout and fill in the billing details. The only payment method is **Cash on delivery**.
 3. Press **Place order**; the "Order received" page confirms it.
-4. Confirm it as the admin: <http://store.localhost/wp-admin/> then **WooCommerce, Orders** (user `admin`; get the password with the command in [step 8](#step-8-passwords-commands-only-never-printed-here)).
+4. Confirm it as the admin: <http://store.localhost/wp-admin/> then **WooCommerce, Orders** (user `admin`; get the password with the command in [step 6](#step-6-passwords-commands-only-never-printed-here)).
 
 To see the order under **My account, Orders**, register and log in *before* you check out (guest orders are not linked to a later account). More: [run guide, using the store](docs/run-guide.md#6-using-the-store).
 
@@ -61,7 +61,7 @@ To see the order under **My account, Orders**, register and log in *before* you 
 
 You need only the gateway URL, `http://app.localhost/mcp`, and a personal API key (dashboard, **API keys**, **Create key**; the key is shown once).
 
-- **MCP Inspector** (tested): `npx @modelcontextprotocol/inspector --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer <your key>" --method tools/list` lists the tools. Step by step, including the exact commands that were run: [run guide, MCP Inspector](docs/run-guide.md#call-the-gateway-with-mcp-inspector-command-line).
+- **MCP Inspector** (tested): `npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer <your key>" --method tools/list` lists the tools. Step by step, including the exact commands that were run: [run guide, MCP Inspector](docs/run-guide.md#call-the-gateway-with-mcp-inspector-command-line).
 - **Claude Code** (command line or a `.mcp.json` that keeps the key in an environment variable): [run guide, Connect Claude Code](docs/run-guide.md#connect-claude-code) and [`.mcp.json.example`](.mcp.json.example). **Not tested here:** the owner's machine has no `claude` command; only the example file's format was validated.
 - **Cursor:** [run guide, Connect Cursor](docs/run-guide.md#connect-cursor-not-tested) (**not tested**).
 
@@ -275,15 +275,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1
 
 It creates the cluster `urumi` (kube context `k3d-urumi`), builds the five images and imports them, installs the Helm release, waits until the pods are ready and prints the URLs. When it ends, `kubectl get pods -A` shows every pod `1/1 Running` (the `store-setup` Job: `Completed`). Run it again any time: it starts a stopped cluster and keeps your data. After changing the chart or a values file run it with `-Redeploy`. Pause with `scripts\stop.ps1` (keeps data); recreating the cluster deletes all data and generates new passwords.
 
-### Step 6. Open the store
-
-<http://store.localhost/> (shop at `/shop/`). The admin area is <http://store.localhost/wp-admin/>.
-
-### Step 7. Open the dashboard
-
-<http://app.localhost/>. Log in as `admin@example.com` with the password from step 8.
-
-### Step 8. Passwords (commands only, never printed here)
+### Step 6. Passwords (commands only, never printed here)
 
 Passwords are generated on first install and live only in Kubernetes Secrets. Each command copies one to your clipboard; add `-Show` to print it instead.
 
@@ -292,19 +284,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.p
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password   # dashboard admin
 ```
 
+### Step 7. Open the store
+
+<http://store.localhost/> (shop at `/shop/`). The admin area is <http://store.localhost/wp-admin/>.
+
+### Step 8. Open the dashboard
+
+<http://app.localhost/>. Log in as `admin@example.com` with the password from step 6.
+
 ### Step 9. Turn on the AI chat (optional)
 
 Needs a free Groq key; see [section 13](#13-obtaining-and-configuring-free-tier-ai-api-keys). Without it everything else works and the Chat page says the provider is not configured.
 
 ### Step 10. First login and a quick check
 
-Log in at <http://app.localhost/>, open **Servers**: `notes`, `utils` and `woo` show **Connected**. Then run the one-command check:
+Log in at <http://app.localhost/> (step 8), open **Servers**: `notes`, `utils` and `woo` show **Connected**. Then run the one-command check:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1 -Quick
 ```
 
-It prints a PASS/FAIL table (pods, WooCommerce, MCP servers, gateway end to end, network-policy probes, invite-log check). Without `-Quick` it also drives the dashboard in a browser and runs `npm audit`, and it spends one live chat turn when the AI key is set.
+It prints a PASS/FAIL table (pods, WooCommerce, MCP servers, gateway end to end, network-policy probes, invite-log check). Without `-Quick` it also drives the dashboard in a browser (this needs the `npx playwright install chromium` from step 3) and runs `npm audit`, and it spends one live chat turn when the AI key is set.
 
 The complete beginner guide (daily use, customer accounts, viewing the databases, resetting) is the [run guide](docs/run-guide.md).
 
@@ -409,7 +409,7 @@ Full detail and residual risks: [security.md](docs/security.md) and [threat-mode
 | A pod is not `1/1` | `kubectl get pods -A`, then `kubectl -n <namespace> logs <pod>`; wait a minute after a start |
 | `npm ci` prints `EBADENGINE` | Node 24 older than 24.15: a warning only; update Node to silence it |
 | The chat says the provider is not configured, rejects the key or is rate limited | [not configured](docs/troubleshooting.md#chat-says-the-ai-provider-isnt-configured), [key rejected](docs/troubleshooting.md#chat-says-the-ai-provider-rejected-the-api-key-llm_auth_failed), [rate limited](docs/troubleshooting.md#chat-says-the-ai-provider-is-rate-limited-429) |
-| Forgot a password | The two commands in [step 8](#step-8-passwords-commands-only-never-printed-here) |
+| Forgot a password | The two commands in [step 6](#step-6-passwords-commands-only-never-printed-here) |
 | Start over completely | [deployment.md, uninstall](docs/deployment.md#step-9-uninstall-and-what-is-kept) |
 
 All of them, with causes and fixes: [docs/troubleshooting.md](docs/troubleshooting.md).
