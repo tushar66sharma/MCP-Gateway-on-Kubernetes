@@ -31,7 +31,7 @@ processors=8
 swap=4GB
 ```
 
-Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and rarely gives it back. The machine has 15 GB; Windows, the editor, and the browser need roughly 5-6 GB, so Docker/k3d is limited to 9 GB. The cluster (Traefik, CoreDNS and the other k3s defaults, plus since Phase 1 WordPress and MariaDB; **(planned)** Postgres, the gateway and the MCP servers) must fit in that, which is why every project container has CPU/memory requests and limits (the store's are in the chart; later containers will follow the same rule). `swap=4GB` gives a safety valve against OOM kills at the cost of speed. Changes take effect after `wsl --shutdown` and a Docker Desktop restart. The `.wslconfig` file was written in Task 0.1; Docker Desktop's own settings were not changed.
+Why: without a cap, the WSL2 VM can grow to take about half of RAM or more and rarely gives it back. The machine has 15 GB; Windows, the editor, and the browser need roughly 5-6 GB, so Docker/k3d is limited to 9 GB. The cluster (Traefik, CoreDNS and the other k3s defaults, plus since Phase 1 WordPress and MariaDB, since Phases 2 to 4 the MCP servers, Postgres, the gateway and the dashboard, and since Phase 5 the short `wp-cron` Job every 5 minutes) must fit in that, which is why every project container has CPU/memory requests and limits (every container in the chart has them). `swap=4GB` gives a safety valve against OOM kills at the cost of speed. Changes take effect after `wsl --shutdown` and a Docker Desktop restart. The `.wslconfig` file was written in Task 0.1; Docker Desktop's own settings were not changed.
 
 ## Cluster definition
 

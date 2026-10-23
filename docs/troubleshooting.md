@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Status (end of Phase 4).** Covers the local k3d cluster, the store, the MCP servers, the gateway and its Postgres database, and the dashboard and the AI chat (the entries from [Chat says the AI provider isn't configured](#chat-says-the-ai-provider-isnt-configured) onwards).
+> **Status (end of Phase 5).** Covers the local k3d cluster, the store, the MCP servers, the gateway and its Postgres database, the dashboard and the AI chat (the entries from [Chat says the AI provider isn't configured](#chat-says-the-ai-provider-isnt-configured) onwards), and the Phase 5 layers: NetworkPolicies, Pod Security, the loopback-only cluster, production certificates and the `wp-cron` CronJob (from [A pod cannot reach X after Phase 5](#a-pod-cannot-reach-x-after-phase-5) onwards).
 
 Each entry has a **symptom**, a **diagnosis** command and a **fix**. Entries marked **(observed)** happened while building Phase 1; the others are standard Kubernetes/Helm/WooCommerce behavior that follows from the chart's settings and was not deliberately triggered. Commands run from the repository root in PowerShell; refresh `PATH` first if a tool is "not found". Deployment steps: [deployment.md](deployment.md); how the flows work: [workflows.md](workflows.md).
 
@@ -77,10 +77,13 @@ helm status urumi -n urumi-system
 - [The dashboard pod is in `ErrImagePull` (image tag not found)](#the-dashboard-pod-is-in-errimagepull-image-tag-not-found)
 - [`npm ci` prints `EBADENGINE` warnings for jsdom](#npm-ci-prints-ebadengine-warnings-for-jsdom)
 - [A pod cannot reach X after Phase 5](#a-pod-cannot-reach-x-after-phase-5)
+- [`forbidden: violates PodSecurity`](#forbidden-violates-podsecurity)
 - [Another computer or phone can no longer open the local store](#another-computer-or-phone-can-no-longer-open-the-local-store)
 - [`smoke-test.ps1` fails at one step](#smoke-testps1-fails-at-one-step)
 - [After recreating the cluster, old passwords and API keys stop working](#after-recreating-the-cluster-old-passwords-and-api-keys-stop-working)
 - [The gateway restarted once or twice on a first install](#the-gateway-restarted-once-or-twice-on-a-first-install)
+- [A certificate stays `READY False`](#a-certificate-stays-ready-false)
+- [Scheduled WordPress work does not run (`wp-cron` CronJob)](#scheduled-wordpress-work-does-not-run-wp-cron-cronjob)
 
 ---
 
@@ -833,7 +836,7 @@ Other failures of this script: `app.localhost does not resolve` (run `scripts\se
 
 **Symptom.** A connection from one pod to another pod or to the internet fails with `Connection refused` (curl exit 7) or hangs until a timeout (exit 28), although the target is running and its Service has endpoints. A new feature that calls a new host or port fails from inside the cluster.
 
-**Cause.** The `store`, `mcp` and `gateway` namespaces are default-deny for ingress and egress ([ADR-016](decisions/ADR-016-default-deny-network-policies.md)). Only the flows in the allow matrix ([security.md, section 15](security.md#15-networkpolicies-phase-5)) are open: Traefik to wordpress, gateway and dashboard; gateway to the MCP servers and Postgres; mcp-woocommerce to WordPress; WordPress and store-setup to MariaDB; and 443/80 to public IPs from the gateway, WordPress and store-setup. DNS is open for all pods. Private ranges (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`, `127/8`) are never reachable through the internet rules.
+**Cause.** The `store`, `mcp` and `gateway` namespaces are default-deny for ingress and egress ([ADR-016](decisions/ADR-016-default-deny-network-policies.md)). Only the flows in the allow matrix ([security.md, section 15](security.md#15-networkpolicies-phase-5)) are open: Traefik to wordpress, gateway and dashboard; gateway to the MCP servers and Postgres; mcp-woocommerce to WordPress; WordPress, store-setup and wp-cron to MariaDB; Traefik to cert-manager's HTTP-01 solver pods (production TLS only); and 443/80 to public IPs from the gateway, WordPress, store-setup and wp-cron. DNS is open for all pods. Private ranges (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`, `127/8`) are never reachable through the internet rules.
 
 **Fix.**
 
@@ -907,3 +910,47 @@ Set at pod level `runAsNonRoot: true`, `runAsUser: <non-zero>` and `seccompProfi
 **Cause (found 2026-10-23).** The gateway waited 30 x 2 s for Postgres and its startup probe allowed 60 x 2 s. On a new cluster the Postgres image is pulled first (`Successfully pulled image "postgres:17.11-bookworm" in 1m51s`), which is longer than the wait, so the gateway gave up and Kubernetes restarted it; the startup probe also killed it once (`Container gateway failed startup probe`). It was harmless but looked like a failure.
 
 **Fix (in the chart and the gateway since commit `027d43e`).** The gateway waits 90 x 2 s (180 s) and the startup probe allows 110 x 2 s (220 s). Verified: on the next full recreation (images pulled from the registry again, Postgres pull 1m35s) the gateway had **0 restarts**; and with Postgres scaled to 0 for 110 s while a gateway started, it stayed at 0 restarts and became ready when Postgres returned. If you still see restarts on a very slow connection, read `kubectl -n gateway describe pod -l app.kubernetes.io/name=gateway` (the Events show whether the probe or the exit caused it) and [the CrashLoopBackOff entry](#the-gateway-pod-is-in-crashloopbackoff-database-not-ready-after-90-attempts).
+
+## A certificate stays `READY False`
+
+**Symptom.** In production `kubectl get certificate -A` shows `urumi-tls-store` or `urumi-tls-app` with `READY False` for more than a few minutes. Traefik serves its default self-signed certificate, and because of the http-to-https redirect the site is unusable in a browser.
+
+**Diagnose.**
+
+```bash
+kubectl get challenges -A                       # one per host while issuance is pending
+kubectl describe challenge -n store <name>      # the Reason / Status line says what failed
+kubectl -n store get pods -l acme.cert-manager.io/http01-solver=true
+kubectl -n store get networkpolicy acme-http01-solver
+kubectl -n cert-manager logs deploy/cert-manager --tail=100
+```
+
+**Causes and fixes.**
+
+- **The self-check cannot reach the solver** (`Waiting for HTTP-01 challenge propagation: failed to perform self check GET request ... connection refused` or a timeout). Check that the policy `acme-http01-solver` exists in that namespace. The chart renders it only with `global.tls.enabled: true`, a non-empty `global.tls.clusterIssuer` and `networkPolicies.enabled: true`. Without it, the default-deny policy drops Traefik's request to the solver on port 8089. Fixed in the chart since the Phase 5 final review. The policy's effect was verified on the local cluster on 2026-10-23 with a stand-in solver pod (ADR-016); a real Let's Encrypt issuance is **expected; not tested**.
+- **DNS does not point at the server yet**, or ports 80/443 are closed in the provider's firewall. `nslookup store.yourdomain.com` must give the server's public IP, and port 80 must be open: the HTTP-01 challenge always arrives on port 80.
+- **The solver pod is refused by Pod Security** (`kubectl -n store get events` shows `violates PodSecurity`). cert-manager v1.21.2 builds the solver `restricted`-compliant by default. If you added `podTemplate.spec.securityContext` to the ClusterIssuer, it replaces the whole pod security context: repeat `runAsNonRoot: true` and `seccompProfile: {type: RuntimeDefault}` there (see the comment in `deploy/prod/cluster-issuer-letsencrypt.yaml`).
+- **Let's Encrypt rate limits** after many attempts: use the staging server while testing ([deployment.md, step 5](deployment.md#5-cert-manager-and-the-certificate-issuer)).
+
+## Scheduled WordPress work does not run (`wp-cron` CronJob)
+
+**Symptom.** Unpaid orders keep their stock reserved, scheduled sales do not start, or WooCommerce > Status > Scheduled Actions shows many **past-due** actions. Alternatively, `kubectl -n store get jobs` shows `wp-cron-...` Jobs with `Failed`.
+
+**Cause.** The chart sets `DISABLE_WP_CRON` and runs WordPress's due events every 5 minutes from the CronJob `wp-cron` ([ADR-018](decisions/ADR-018-wordpress-cron-via-cronjob.md)). WordPress's own loopback request to its public URL is blocked by the NetworkPolicies on a VPS, so nothing else runs them.
+
+**Diagnose.**
+
+```powershell
+kubectl -n store get cronjob wp-cron              # SUSPEND False; LAST SCHEDULE within the last 5 minutes
+kubectl -n store get jobs                         # the last wp-cron-<n> Job: Complete
+kubectl -n store logs job/<the last wp-cron Job>  # "Success: Executed a total of N cron events." (N can be 0)
+kubectl -n store create job wp-cron-manual --from=cronjob/wp-cron   # run it now
+kubectl -n store logs job/wp-cron-manual; kubectl -n store delete job wp-cron-manual
+```
+
+**Fixes.**
+
+- `[wp-cron] database not reachable within 60s; last error: ...`: MariaDB is down or its policy does not admit `app.kubernetes.io/name=wp-cron` (`kubectl -n store describe networkpolicy mariadb`). See [the MariaDB entry](#mariadb-crashloopbackoff-or-wordpress-cannot-reach-the-database).
+- `Error: Error establishing a database connection.` in under a second, from a chart older than the Phase 5 final review: a new pod connected before kube-router had admitted its IP (observed 2026-10-23). The current chart waits for the database first; redeploy.
+- No `wp-cron` CronJob at all: `wordpress.cron.enabled` is `false` in your values. WordPress then uses its built-in WP-Cron, which needs the loopback to its public URL.
+- `DeadlineExceeded`: one run took longer than 4 minutes (`activeDeadlineSeconds: 240`); look for a slow plugin event in the log. The next run continues with the remaining events.

@@ -53,7 +53,7 @@ flowchart TB
         subgraph NODE["k3d-urumi-server-0 = the Kubernetes node (k3s, containerd inside)"]
             P1["pod wordpress"]
             P2["pod mariadb-0"]
-            P3["pod store-setup (Job, finished)"]
+            P3["pod store-setup (Job, finished)<br/>pod wp-cron-... (every 5 min, a few seconds)"]
             P5["pods mcp-woocommerce, mcp-notes, mcp-utilities (namespace mcp, internal only)"]
             P6["pods gateway, dashboard and postgres-0 (namespace gateway)"]
             P4["Traefik, CoreDNS, ... (kube-system)"]
@@ -414,7 +414,7 @@ HPOS ("high-performance order storage") is **off** (`woocommerce_custom_orders_t
 
 ### Why it is internal-only
 
-It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server; since Phase 3 the list also shows the `gateway` Ingress, which routes only `/api` and `/mcp` on `app.localhost` to the gateway). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. The **gateway** ([section 9](#9-the-gateway-phase-3)) is the single public door: it checks who the caller is, then calls this server with the token. NetworkPolicies that restrict which pods may reach it arrive in Phase 5 (**not built yet**; today any pod in the cluster can reach the Service, but still needs the token).
+It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server; since Phase 3 the list also shows the `gateway` Ingress, which routes only `/api` and `/mcp` on `app.localhost` to the gateway). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. The **gateway** ([section 9](#9-the-gateway-phase-3)) is the single public door: it checks who the caller is, then calls this server with the token. Since Phase 5 a NetworkPolicy also limits who can reach it: only the gateway pod may open a connection to it (verified 2026-10-22: a pod in the `default` namespace was refused, the gateway got its `401`; `scripts	est-network-policies.ps1`, [security.md, section 15](security.md#15-networkpolicies-phase-5)). The token is still required on top.
 
 ### How it starts
 
@@ -510,7 +510,7 @@ Verified 2026-10-19 with SQL against the live database (section 7): one key row,
 
 - **No direct external access.** Nothing outside the cluster can call this server. Clients connect through the **gateway** ([section 9](#9-the-gateway-phase-3)), and people use it through the [dashboard](#the-dashboard-phase-4) (Phase 4).
 - **No per-user identity at the server itself.** It has one shared bearer token; per-user keys and the audit log are the gateway's job (built in Phase 3).
-- **No NetworkPolicies** yet (Phase 5).
+- **Reachable only from the gateway** (NetworkPolicy since Phase 5); `kubectl port-forward`, which `check-mcp-woocommerce.ps1` uses, is not affected by the policies.
 
 ## 9. The gateway (Phase 3)
 
@@ -1060,6 +1060,8 @@ Problems: [chat says not configured](troubleshooting.md#chat-says-the-ai-provide
 kubectl -n store get pods                                    # wordpress and mariadb-0 should be 1/1 Running; store-setup is Completed
 kubectl -n store logs deploy/wordpress -c wordpress          # Apache access log and PHP errors
 kubectl -n store logs job/store-setup                        # install log; the last line is SETUP COMPLETE
+kubectl -n store get cronjob wp-cron                         # WordPress scheduled work, every 5 minutes (since the Phase 5 final review)
+kubectl -n store get jobs                                    # the latest wp-cron-<n> Job should be Complete; read it with: kubectl -n store logs job/wp-cron-<n>
 kubectl -n mcp get pods                                      # mcp-woocommerce, mcp-notes and mcp-utilities should be 1/1 Running
 kubectl -n mcp logs deploy/mcp-woocommerce                   # MCP server log (never contains the token or keys)
 kubectl -n gateway get pods                                  # postgres-0, gateway-... and dashboard-... should be 1/1 Running

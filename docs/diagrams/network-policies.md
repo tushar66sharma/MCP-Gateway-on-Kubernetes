@@ -23,6 +23,10 @@ flowchart LR
     WP["wordpress :80"]
     DB[("mariadb :3306")]
     SS["store-setup Job"]
+    CR["wp-cron Jobs (every 5 min)"]
+  end
+  subgraph ACME["store and gateway, production TLS only"]
+    AS["cert-manager HTTP-01 solver :8089"]
   end
   TR -- "80" --> WP
   TR -- "3000" --> G
@@ -34,9 +38,12 @@ flowchart LR
   MW -- "80" --> WP
   WP -- "3306" --> DB
   SS -- "3306" --> DB
+  CR -- "3306" --> DB
+  TR -- "8089" --> AS
   G -- "443, 80" --> INET
   WP -- "443, 80" --> INET
   SS -- "443, 80" --> INET
+  CR -- "443, 80" --> INET
   GW -. "53 UDP+TCP (every pod)" .-> DNS
   MCP -. "53" .-> DNS
   ST -. "53" .-> DNS
@@ -45,9 +52,10 @@ flowchart LR
 ## How to read it
 
 - **Solid arrows** are allowed flows, labelled with the destination port. **Dotted arrows** are DNS, allowed for every pod in the three namespaces to the pods labelled `k8s-app=kube-dns` in `kube-system`, on UDP and TCP 53.
-- **Internet arrows** (`gateway`, `wordpress`, `store-setup`) go to `0.0.0.0/0` on 443 and 80 **except** `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10` and `127.0.0.0/8`. That keeps the cloud metadata address, node addresses and pod and service addresses out of reach even if a request is tricked into targeting them; in-cluster destinations are allowed only by the explicit pod and namespace selectors above. The gateway needs the internet for LLM providers and for admin-added external MCP servers (the application-level SSRF guard still applies). WordPress needs it for wp-admin update and marketplace checks (without the rule those pages hang on timeouts). `store-setup` needs it to download WooCommerce.
+- **Internet arrows** (`gateway`, `wordpress`, `store-setup`, `wp-cron`) go to `0.0.0.0/0` on 443 and 80 **except** `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10` and `127.0.0.0/8`. That keeps the cloud metadata address, node addresses and pod and service addresses out of reach even if a request is tricked into targeting them; in-cluster destinations are allowed only by the explicit pod and namespace selectors above. The gateway needs the internet for LLM providers and for admin-added external MCP servers (the application-level SSRF guard still applies). WordPress needs it for wp-admin update and marketplace checks (without the rule those pages hang on timeouts). `store-setup` needs it to download WooCommerce. `wp-cron` runs WordPress's scheduled events, which may call external APIs ([ADR-018](../decisions/ADR-018-wordpress-cron-via-cronjob.md)).
+- **The cert-manager HTTP-01 solver** (policy `acme-http01-solver`) exists only with production TLS (`global.tls.enabled` plus a `global.tls.clusterIssuer`). cert-manager starts the temporary `cm-acme-http-solver-*` pod in the namespace of the Ingress it certifies (`store`, `gateway`), and Traefik must reach it on 8089 to answer Let's Encrypt's challenge. It has no egress besides DNS. Its semantics were checked on the local cluster (2026-10-23, [ADR-016](../decisions/ADR-016-default-deny-network-policies.md)); real issuance is expected, not tested.
 - **No egress** for `mariadb`, `postgres`, `dashboard`, `mcp-notes` and `mcp-utilities` except DNS. (`mcp-utilities` and `mcp-notes` make no outbound calls: `grep "fetch(" apps/mcp-utilities/src` finds none.)
-- **Traefik** is selected by namespace `kube-system` plus pod label `app.kubernetes.io/name=traefik`. Namespaces are selected by the automatic label `kubernetes.io/metadata.name`; the app pods by the chart's selector labels (`app.kubernetes.io/instance` plus `app.kubernetes.io/name`); the `store-setup` Job by its own pod label `app.kubernetes.io/name=store-setup`.
+- **Traefik** is selected by namespace `kube-system` plus pod label `app.kubernetes.io/name=traefik`. Namespaces are selected by the automatic label `kubernetes.io/metadata.name`; the app pods by the chart's selector labels (`app.kubernetes.io/instance` plus `app.kubernetes.io/name`); the `store-setup` Job by its own pod label `app.kubernetes.io/name=store-setup`, the `wp-cron` Jobs by `app.kubernetes.io/name=wp-cron`, the solver by cert-manager's `acme.cert-manager.io/http01-solver=true`.
 - **Not covered by policy:** kubelet probes and `kubectl port-forward`/`exec` (they reach the pod through the node, not as pod traffic; verified on k3s, all pods stayed 1/1 and the check scripts that use a port-forward passed).
 
 ## Failure behaviour worth knowing

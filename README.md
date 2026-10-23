@@ -120,7 +120,7 @@ Never paste a key into a chat, an issue or a commit. Details, switching provider
 
 ## 18. Deployment Instructions
 
-Local (k3d): above. Production (one k3s VPS with TLS, backups, upgrade and rollback): the beginner guide [Production (k3s VPS)](docs/deployment.md#production-k3s-vps). Its cluster-side steps were checked on 2026-10-23 as that guide states; no real VPS, domain or certificate has been used. The full section is written in Phase 6.
+Local (k3d): above. Production (one k3s VPS with TLS, backups, upgrade and rollback): the beginner guide [Production (k3s VPS)](docs/deployment.md#production-k3s-vps). Its cluster side was rehearsed on 2026-10-23 on a second local k3d cluster with a self-signed issuer (the chart, the production values, the Secrets script, TLS redirect and HSTS, Pod Security and the NetworkPolicies). The steps that need a server, DNS, Let's Encrypt or a registry were **not executed**; no real VPS, domain or certificate has been used. The full section is written in Phase 6.
 
 ## 19. Security Considerations and Secret Management
 

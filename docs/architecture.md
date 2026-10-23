@@ -76,9 +76,10 @@ flowchart TB
   NP["Default-deny NetworkPolicy in each namespace<br/>plus the allow matrix (security.md section 15)"] -.-> cluster
 ```
 
-- **Network layer.** A default-deny ingress and egress policy in each of `store`, `mcp` and `gateway`, with explicit allows (Traefik to the three public services, the gateway to its upstreams and Postgres, WordPress to MariaDB, DNS, and public internet only for the gateway, WordPress and the store-setup Job). `scripts/test-network-policies.ps1` proves it.
+- **Network layer.** A default-deny ingress and egress policy in each of `store`, `mcp` and `gateway`, with explicit allows (Traefik to the three public services, the gateway to its upstreams and Postgres, WordPress, the store-setup Job and the wp-cron Jobs to MariaDB, DNS, and public internet only for the gateway, WordPress, store-setup and wp-cron; with production TLS also Traefik to cert-manager's HTTP-01 solver on 8089). `scripts/test-network-policies.ps1` proves it.
 - **Pod layer.** The three namespaces enforce Pod Security `restricted`: non-root, no privilege escalation, all capabilities dropped, seccomp `RuntimeDefault`, bounded `/tmp` volumes per workload. A brand-new cluster admitted every pod.
 - **Edge.** The local cluster publishes only `127.0.0.1:80` and `:443`. In production values Traefik redirects http to https, adds HSTS, and the gateway's session cookie is `Secure`; this path was rehearsed on a second k3d cluster, not on a VPS ([deployment.md](deployment.md#rehearsal-results-2026-10-23)).
+- **Scheduled work** (Phase 5 final review). WordPress no longer runs WP-Cron by requesting its own public URL, which the network layer blocks on a VPS. The CronJob `wp-cron` runs the due events every 5 minutes with WP-CLI ([ADR-018](decisions/ADR-018-wordpress-cron-via-cronjob.md)).
 - **Startup.** The gateway waits up to 180 s (90 tries, 2 s apart) for Postgres, and serialises migrations with a Postgres advisory lock, so a cold first install (Postgres image pull) no longer restarts it.
 
 ## Components and responsibilities

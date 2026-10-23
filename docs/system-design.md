@@ -257,7 +257,7 @@ Audit outcomes: `success`; `error` (the upstream returned `isError`, a protocol 
 | Chat loopback: connect / `tools/list` | 10 s / 20 s | `chat/mcpLoopback.ts` |
 | Dashboard server status refresh | 10 s | `features/servers/api.ts` |
 | Audit `error_message` / `tool_name` | 500 / 200 characters | `AuditWriter` |
-| Login attempts | 10 per minute per IP and email | `LoginRateLimiter` |
+| Login attempts | 10 per minute per IP and email | `FixedWindowLimiter` (`auth/rateLimit.ts`) |
 
 ## 8. Trade-offs and limits
 

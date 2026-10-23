@@ -76,7 +76,7 @@ All errors have the shape `{"error":{"code","message","details"?,"requestId"}}`.
 Details worth knowing:
 
 - **CSRF runs before the session check**, even on public routes, so a request without the two headers is `403` whether or not you are logged in.
-- **The login rate limit** counts every attempt, successful or not, keyed on `IP|email`. Behind Traefik the client IP is the rightmost `X-Forwarded-For` entry (the address Traefik saw) because the pod runs with `TRUST_PROXY=1`; without it every user would share the ingress IP. On k3s the ServiceLB in front of Traefik may SNAT every client to one address, so the limiter may effectively be per email (expected, not tested; Phase 5). The limiter is in memory, so a pod restart clears it.
+- **The login rate limit** counts every attempt, successful or not, keyed on `IP|email`. Behind Traefik the client IP is the rightmost `X-Forwarded-For` entry (the address Traefik saw) because the pod runs with `TRUST_PROXY=1`; without it every user would share the ingress IP. On k3s the ServiceLB in front of Traefik may SNAT every client to one address, so the limiter may effectively be per email. Observed locally on 2026-10-23: every client on the host reaches Traefik through the k3d proxy, so they share one limiter key, while a pod calling Traefik inside the cluster has its own ([security.md, section 16](security.md#which-client-address-the-gateway-sees)). On a VPS the production guide sets `externalTrafficPolicy: Local` to keep the visitor's address (expected; not tested). The limiter is in memory, so a pod restart clears it.
 - **Passwords** shorter than 10 characters are refused at invite acceptance (`VALIDATION_FAILED`), not at login.
 
 ## 3. Startup and Kubernetes

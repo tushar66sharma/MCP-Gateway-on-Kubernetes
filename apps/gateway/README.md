@@ -77,7 +77,7 @@ A missing or invalid variable stops the process at start with a message that lis
 ## Development
 
 ```powershell
-npm test -w @urumi/gateway          # 317 tests in 29 files, about 45-65 s
+npm test -w @urumi/gateway          # 319 tests in 29 files, about 45-70 s
 npm run typecheck -w @urumi/gateway
 npm run build -w @urumi/gateway
 npm run db:generate -w @urumi/gateway   # after changing src/db/schema.ts; commit the new SQL in drizzle/

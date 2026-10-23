@@ -2,15 +2,15 @@
 
 > **Status: end of Phase 5.** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent, the LLM layer, the `/mcp` failure limit and the migration lock), the dashboard's component tests, the Playwright browser smoke, and the Phase 5 scripts (`scripts/smoke-test.ps1`, `test-network-policies.ps1`, `validate-chart.ps1`, `check-invite-log.ps1`). The complete strategy and a coverage statement are Phase 6.
 
-Test counts below come from the Phase 5 final run on 2026-10-23 (`npm test` from the repository root: **604 tests, all passing**: shared 55, dashboard 123, gateway 317, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
+Test counts below come from the Phase 5 final-review fix wave on 2026-10-23 (`npm test` from the repository root: **606 tests, all passing**: shared 55, dashboard 123, gateway 319, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
 
 | Run | shared | dashboard | gateway | mcp-notes | mcp-utilities | mcp-woocommerce |
 |---|---|---|---|---|---|---|
-| 1 | 55/55 (1.64 s) | 123/123 (34.37 s) | 317/317 (56.89 s) | 12/12 | 27/27 | 70/70 |
-| 2 | 55/55 (1.73 s) | 123/123 (12.86 s) | 317/317 (54.86 s) | 12/12 | 27/27 | 70/70 |
-| 3 | 55/55 (1.70 s) | 123/123 (13.23 s) | 317/317 (55.82 s) | 12/12 | 27/27 | 70/70 |
+| 1 | 55/55 (1.50 s) | 123/123 (37.89 s) | 319/319 (66.93 s) | 12/12 | 27/27 | 70/70 |
+| 2 | 55/55 (1.46 s) | 123/123 (12.86 s) | 319/319 (63.80 s) | 12/12 | 27/27 | 70/70 |
+| 3 | 55/55 (1.42 s) | 123/123 (12.52 s) | 319/319 (62.37 s) | 12/12 | 27/27 | 70/70 |
 
-History: 570 tests at the end of Task 4.8 (2026-10-19, dashboard 113, gateway 293), 586 after the Phase 4 fix wave (2026-10-22, gateway 299), 604 now (gateway 317 in 29 files: Phase 5 added the `/mcp` auth-failure limit tests `mcp/authLimit.test.ts`, the migration-lock test `db/migrate.test.ts`, the loopback-connect cancellation test `chat/mcpLoopback.test.ts` and more chat and rate-limiter cases).
+History: 570 tests at the end of Task 4.8 (2026-10-19, dashboard 113, gateway 293), 586 after the Phase 4 fix wave (2026-10-22, gateway 299), 604 now (gateway 317 in 29 files: Phase 5 added the `/mcp` auth-failure limit tests `mcp/authLimit.test.ts`, the migration-lock test `db/migrate.test.ts`, the loopback-connect cancellation test `chat/mcpLoopback.test.ts` and more chat and rate-limiter cases), 606 after the final-review fix wave (gateway 319: two `db/migrate.test.ts` cases proving that an advisory-unlock failure never masks the migration's error or result).
 
 Known flakiness (not reproduced in those runs): twice during Phase 4 a full root run had gateway test files fail, once with "Worker exited unexpectedly" while the Vite dev server was also running, once with two database-backed files failing; each time the next run was green. Memory pressure from PGlite and argon2 in parallel workers is the suspected cause (not proven).
 
@@ -45,7 +45,7 @@ Run from the repository root.
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invite-log.ps1` | Requests `/invite/<random>` and counts the random value in the dashboard log (expected 0), with a positive control. |
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-network-policies.ps1` | 13 allowed/blocked probe pods (about 3 minutes). |
 | `helm lint charts/urumi-platform -f deploy/values-local.yaml` (and `-f deploy/values-prod.yaml`) | Chart lint. |
-| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1` | Chart schema and render rules, the TLS redirect/HSTS Middlewares (prod only), the `deploy.ps1` context guards, the `create-secrets.ps1` `.env` parser (fixtures in `scripts/dev/fixtures/`, fake values) and `kubeconform` v0.8.0 on both values files (needs Docker; custom resources such as Traefik Middlewares are skipped, not validated). Warns while `deploy/values-prod.yaml` has placeholders. No cluster needed. |
+| `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-chart.ps1` | Chart schema and render rules, the TLS redirect/HSTS Middlewares (prod only), the `deploy.ps1` context guards, the `create-secrets.ps1` `.env` parser (fixtures in `scripts/dev/fixtures/`, fake values), the cert-manager HTTP-01 solver policy (prod only), the `wp-cron` CronJob, its policy and `DISABLE_WP_CRON` (and their absence with `wordpress.cron.enabled=false`), and `kubeconform` v0.8.0 on both values files (needs Docker; custom resources such as Traefik Middlewares are skipped, not validated). Warns while `deploy/values-prod.yaml` has placeholders. No cluster needed. |
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-gateway.ps1` | Cluster end-to-end check, read-only calls. Add `-Write` and/or `-Isolation`. |
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-mcp-woocommerce.ps1` | The WooCommerce MCP server check through a port-forward (`-Write` also creates a draft product). |
 
@@ -70,7 +70,7 @@ Run from the repository root.
 | `mcp-utilities` | 27 | The hand-written calculator (precedence, `^` right-associative, `-2^2`, nesting depth, division by zero, no `eval`), the time tools, header auth |
 | `mcp-woocommerce` | 70 | OAuth1 signing against a known vector, the REST client (timeouts, redirects not followed, redaction), the six tools, the server |
 
-### `apps/gateway` (317 tests in 29 files)
+### `apps/gateway` (319 tests in 29 files)
 
 | Area | Files (tests) | Proves |
 |---|---|---|

@@ -42,6 +42,6 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 | The LLM layer | Route, service, agent, registry, the one OpenAI-compatible adapter configured for Groq and OpenRouter | [ai-integration.md](../ai-integration.md#1-the-layer) | Available (Phase 4) |
 | Admin edits a server sequence | The form's origin check, `PATCH` with SSRF and the origin rule, encryption, upsert and health check | [workflows.md](../workflows.md#16-an-admin-edits-a-server-and-the-url-origin-rule) | Available (Phase 4; component and API tests, not run live) |
 | NetworkPolicy map | Which pods may talk to which | [network-policies.md](network-policies.md) | Available (Phase 5, Task 5.3; verified live by `scripts/test-network-policies.ps1` on 2026-10-22) |
-| Helm / Kubernetes resource map | Resources created by the chart per namespace | Planned | (planned) — Phases 5-6 |
+| Helm / Kubernetes resource map | Resources created by the chart per namespace | Planned | (planned) — Phase 6 (Phase 5 added the [NetworkPolicy map](network-policies.md) instead) |
 
 Planned diagrams will be added to this directory (or to the relevant document) in the phase shown, and this index updated at the same time.
