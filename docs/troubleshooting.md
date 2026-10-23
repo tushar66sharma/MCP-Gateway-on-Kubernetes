@@ -699,9 +699,9 @@ The seeded servers are created once from the Helm values. Changing the Helm seed
 
 ## An in-cluster MCP server is refused or unreachable
 
-**Symptom.** Adding your own server whose URL ends in `.svc.cluster.local` gives the inline error `Upstream URL rejected: ...` followed by `In-cluster servers must be listed in the chart setting gateway.internalUpstreams.` (API: `400 SSRF_REJECTED`), or the server is saved but stays `unreachable` with `connection refused`.
+**Symptom.** Adding your own server whose URL ends in `.svc.cluster.local` gives the inline error `Upstream URL rejected: ...` followed by `If this server runs inside this cluster, list its namespace in the chart setting gateway.internalUpstreams.` (API: `400 SSRF_REJECTED`), or the server is saved but stays `unreachable` with `connection refused`.
 
-**Cause.** The gateway only trusts `*.mcp.svc.cluster.local` and may only open connections to the three built-in servers; every other in-cluster destination needs an entry in the chart value `gateway.internalUpstreams` (namespace, port, optional pod labels).
+**Cause.** The gateway only trusts `*.mcp.svc.cluster.local` and may only open connections to the three built-in servers; every other in-cluster destination needs an entry in the chart value `gateway.internalUpstreams` (namespace, port, optional pod labels). If the URL is not a cluster name but a public host name that resolves to a private (LAN) address, the guard refuses it on purpose and `internalUpstreams` cannot help: use the server's in-cluster Service name, or a public address.
 
 **Fix.**
 

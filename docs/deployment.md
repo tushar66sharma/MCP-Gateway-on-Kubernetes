@@ -302,12 +302,22 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 Phase 5b (Task 5b.5, [ADR-019](decisions/ADR-019-external-woocommerce-store.md)). The WooCommerce MCP server can talk to a store that is not installed by this chart. It then uses **HTTP Basic over HTTPS** (the consumer key as user name, the consumer secret as password). **Verified 2026-10-23:** the MCP server in this mode against the local WooCommerce 11.2.1 over HTTPS with TLS verification on (`scripts\dev\test-external-store.ps1`). **Rendered, not installed:** the chart's external mode was rendered and linted but not installed on a cluster. A real remote store is **not tested**.
 
 1. **Create the REST key on that store.** In its admin: WooCommerce > Settings > Advanced > REST API > Add key. Choose a user that may manage the shop (a shop manager is enough) and the permission **Read/Write**. WooCommerce shows the key and secret once.
-2. **Create the Secret in the `mcp` namespace.** Put the two values in files that are not in the repository, create the Secret from the files, then delete them. The commands contain no secret values:
+2. **Create the Secret in the `mcp` namespace.** Put the two values in files that are not in the repository, create the Secret from the files, then delete them. Write each file with **no trailing newline and no BOM**: in Windows PowerShell 5.1, `echo x > ck.txt` writes UTF-16 with a line break, and those extra bytes end up in the Basic-auth header (the store then answers 401). `Read-Host -AsSecureString` asks for the value without showing it, so nothing is echoed or kept in the command history:
 
    ```powershell
+   function Write-SecretFile([string]$Path, [string]$Prompt) {
+     $s = Read-Host -AsSecureString $Prompt
+     $p = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)
+     try { [IO.File]::WriteAllText($Path, [Runtime.InteropServices.Marshal]::PtrToStringBSTR($p)) }   # UTF-8, no BOM, no newline
+     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p) }
+   }
+   Write-SecretFile "$PWD\ck.txt" 'Consumer key'
+   Write-SecretFile "$PWD\cs.txt" 'Consumer secret'
    kubectl -n mcp create secret generic my-store-woo --from-file=consumer-key=.\ck.txt --from-file=consumer-secret=.\cs.txt
    Remove-Item .\ck.txt, .\cs.txt
    ```
+
+   The commands contain no secret values. Since the Phase 5b review the MCP server also trims spaces, line breaks and a BOM from both values (**tested**: `apps/mcp-woocommerce/test/server.test.ts`), so a file with a trailing newline no longer breaks it; writing the file cleanly is still the safe habit. **Checked 2026-10-23:** the file-writing part of `Write-SecretFile`, with a dummy value passed in place of the prompt, wrote exactly the value's 19 bytes (no BOM, no line break). The interactive prompt and creating a Secret this way against a real store are **not tested**.
 
    The key names must be exactly `consumer-key` and `consumer-secret`. The chart owns the namespace `mcp`: on a first install create it with Helm's ownership metadata as described under [Pre-created Secrets](#pre-created-secrets-advanced-mostly-for-production), or install first and create the Secret afterwards (the MCP pod then waits with `CreateContainerConfigError` until it exists).
 3. **Set the values** (a values file, for example appended to `deploy/values-prod.yaml`):
@@ -362,7 +372,7 @@ What each entry changes (an empty list, the default, renders exactly the objects
 
 Rules and limits:
 
-- Do not list system namespaces such as `kube-system` or `gateway`: each entry lets the gateway reach that namespace's pods on the port you give.
+- Do not list system namespaces: each entry lets the gateway reach that namespace's pods on the port you give. The chart refuses `kube-system`, `kube-public` and `kube-node-lease` (schema) and the gateway's own namespace, `namespaces.gateway`, where Postgres runs (template `fail`); **tested** by `scripts\validate-chart.ps1`. Other namespaces that are not yours, such as `default`, are not checked: leave them out.
 - The pod must speak the MCP Streamable HTTP protocol on the given port. The gateway still applies the SSRF guard to the resolved address (loopback and link-local stay refused), and the new egress rule is limited to the one port you list.
 - Apply the value with `scripts\up.ps1 -Redeploy` (put it in your values file), then add the server: dashboard Servers > Add server with the URL `http://<service>.<namespace>.svc.cluster.local:<port>/mcp`. Step by step: [run guide](run-guide.md#add-an-mcp-server-that-runs-inside-the-cluster).
 - The schema rejects a `port` outside 1-65535, a `namespace` that is not a DNS label (for example `Bad_NS`), an entry without a port, unknown keys and non-string label values.
@@ -386,8 +396,24 @@ Say the store moves from `store.localhost` to `store.example.com` (or the dashbo
 
 Notes on the rows:
 
-- **Existing links.** Pages, posts and uploaded media store their absolute addresses in the database, so old content keeps pointing at the old address until you rewrite it. `--skip-columns=guid` leaves post GUIDs alone: they are identifiers, not links, and WordPress advises against changing them. Take a backup first ([backups](#12-backups)), then run the command inside a one-off pod that has WP-CLI and the WordPress volume (the same image and settings as the `store-setup` Job). Run it once, after the DNS name and TLS work.
-- **Dry run first.** Add `--dry-run` to see what would change without writing anything. **Verified 2026-10-23 on the local store** (WooCommerce 11.2.1, a throw-away pod copied from the `wp-cron` CronJob's pod spec, then deleted): `wp search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid --dry-run` ended with `Success: 6 replacements to be made.` (3 in `wp_options`, 2 in `wp_posts.post_content`, 1 in `wp_users.user_url`). Nothing was changed, and no values were printed. The real run (without `--dry-run`) was not executed.
+- **Existing links.** Pages, posts and uploaded media store their absolute addresses in the database, so old content keeps pointing at the old address until you rewrite it. `--skip-columns=guid` leaves post GUIDs alone: they are identifiers, not links, and WordPress advises against changing them. Take a backup first ([backups](#12-backups)), then run the command inside a one-off pod made from the **`wp-cron` CronJob's pod template**: it has WP-CLI (`wordpress:cli`), the WordPress volume, the database settings (the password comes from the Secret by reference, it is never copied) and the labels the MariaDB NetworkPolicy admits, and it passes the `restricted` Pod Security level. Run it once, after the DNS name and TLS work.
+- **The steps** (PowerShell, from any folder, on the cluster's context). The first command copies the template and replaces only the container command with `sleep 900`, so the pod waits for you:
+
+  ```powershell
+  $t = (kubectl -n store get cronjob wp-cron -o json | ConvertFrom-Json).spec.jobTemplate.spec.template
+  $t.spec.containers[0].command = @('sleep', '900')
+  $pod = @{ apiVersion = 'v1'; kind = 'Pod'; metadata = @{ name = 'wp-search-replace'; namespace = 'store'; labels = $t.metadata.labels }; spec = $t.spec }
+  $pod | ConvertTo-Json -Depth 30 | kubectl apply -f -
+  kubectl -n store wait --for=condition=Ready pod/wp-search-replace --timeout=120s
+  # 1) Dry run: shows the counts per table, writes nothing
+  kubectl -n store exec wp-search-replace -- wp --path=/var/www/html search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid --dry-run --report-changed-only
+  # 2) For real, after the backup: the same command without --dry-run
+  kubectl -n store exec wp-search-replace -- wp --path=/var/www/html search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid --report-changed-only
+  kubectl -n store delete pod wp-search-replace
+  ```
+
+  Put your own old and new addresses in both commands. If the pod is not deleted, it ends by itself after 900 seconds (it stays `Completed` until you delete it).
+- **Verified 2026-10-23 on the local store** (WooCommerce 11.2.1): the steps above with the dry run (1), then the delete. Output: `wp_options option_value 3`, `wp_posts post_content 2`, `wp_users user_url 1`, `Success: 6 replacements to be made.`; the pod was created, became Ready and was deleted, and the store's pods were the same before and after. No values were printed. (An earlier dry run in Task 5b.7 used a pod copied by hand from the same `wp-cron` pod spec, with the same result.) **Not executed:** the real run (2).
 - **MCP clients.** A client stores the full gateway URL, so after the change each user runs `claude mcp remove urumi-gateway` and adds it again with the new address, or changes `URUMI_GATEWAY_URL` for a `.mcp.json` ([run guide](run-guide.md#connect-claude-code)). Keys are stored in the gateway by hash and do not depend on the address.
 - **Registered MCP servers.** The gateway reaches them by cluster-internal names (`mcp-woocommerce.mcp.svc...`), which do not change with the public address.
 
