@@ -16,6 +16,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1 -Quic
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password   # copies the admin password to the clipboard
 ```
 
+Each user's chat budget is 50,000 tokens a day, so on a recording day check the Chat page's `Today: used / limit` line first; it resets at 00:00 in the store's time zone.
+
 The chat steps spend the free-tier LLM quota (about 3,000 to 5,500 tokens per turn, observed). The per-user daily chat budget is 50,000 tokens (`gateway.chat.dailyTokenBudget`); the five turns of this run cost about 15,000 to 18,000 in total (the failed turn's usage is not reported).
 
 ## 1. Store: storefront to checkout to wp-admin
@@ -65,7 +67,7 @@ npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --t
 **Two-server prompt.** Chaining two servers needs an LLM client; MCP Inspector cannot do it.
 
 - **Run here, through the chat as user B (one turn):** `Show today's orders and save a note listing their numbers`. Observed: the reply was `Order numbers today: 20, 15` and `Note saved with ID 2 titled "Today's orders"`; tool calls `woo__list_orders` then `notes__create_note`, both **success**; both are in the audit log as source `chat`, user B (step 5). The first attempt of this turn returned `502 LLM_BAD_RESPONSE` after `woo__list_orders` had succeeded (the model's reply could not be used; this is the documented provider-error path, and the executed tool call is returned with the error). The second attempt, as a second fresh invited member, succeeded. Both users are in the Team list, enabled.
-- **Owner's live step (not run, no `claude` CLI on the owner's machine):** the same prompt in **Claude Code**, using the `.mcp.json` + `URUMI_GATEWAY_KEY` route from [Connect Claude Code](run-guide.md#connect-claude-code). Expected (not tested): `/mcp` lists `urumi-gateway` as connected; the prompt calls `woo__list_orders` and `notes__create_note` as user B. Cursor is an alternative.
+- **Owner's live step (not run, no `claude` CLI on the owner's machine):** the same prompt in **Claude Code**, using the `.mcp.json` + `URUMI_GATEWAY_KEY` route from [Connect Claude Code](run-guide.md#connect-claude-code). Expected (not tested): `/mcp` lists `urumi-gateway` as connected; the prompt calls `woo__list_orders` and `notes__create_note` as user B. Cursor is an alternative. `URUMI_GATEWAY_KEY` (Claude Code's `.mcp.json`) and `UGW_KEY` (the Inspector commands here) are just two environment variable names for the same key.
 
 ## 4. Team and control
 
@@ -115,21 +117,24 @@ Observed rows (oldest first; user B in the rows is the first invited member, `de
 
 For the second member (`demo-b-...160224`): `woo/list_orders` and `notes/create_note` as source `chat`, both success (ids 121 and 122), then three `auth_rejected` / `unauthorized` rows for the revoked key (ids 123 to 125). The disabled-notes chat turn (user A) wrote no audit row, because no tool call was made. Every call above is attributed to the right user and source; the filter by `userId` returned 7 rows for the first member and 5 for the second.
 
-## 6. Traceability: assignment definition of done to this script
+## 6. Traceability: the assignment's definition of done to this script
 
-The bullets are the assignment's definition of done as listed in the Phase 6 plan (the PDF could not be rendered in the session that wrote this table; check the wording against page 3).
+The left column quotes the assignment's "Definition of done" (page 3) word for word. "Evidence" says how strong the proof is: **observed** (a value seen on the live run), **inferred**, or **owner's live step**.
 
-| Definition of done | Demo step | Evidence |
+| Definition of done (verbatim) | Demo step | Evidence |
 |---|---|---|
-| A customer can order from the storefront and the order appears in WooCommerce | 1 | Order #20, COD, `processing` (via API); wp-admin click-through not run |
-| User A, in the chat agent, manages the store (creates a product that shows on the storefront) | 2 | Product 19 `publish`; `/product/demo-lamp/` HTTP 200; chat tool call success |
-| The chat answers a store question with real data | 2 | "What orders came in today?" listed #20 |
-| User B connects an external MCP client with only the gateway URL and a key | 3 | Inspector `tools/list`: 15 tools of 3 servers; `woo__list_orders` returned #20 |
-| A two-server task from a client | 3 | Chat as B: `woo__list_orders` + `notes__create_note`, both success; Claude Code: owner's live step |
-| Revoking a key cuts access | 4 | Revoke 204; next call HTTP 401 |
-| Disabling a server removes its tools for the external client and the chat | 4 | `tools/list` 15 to 10 to 15; chat made no `notes__*` call |
-| A dead server does not break the others and recovers | 4 | `utils` unreachable at 3.7 s; `woo__list_products` OK; connected at 19.9 s |
-| Every action is audited with user, source, server, tool, outcome | 5 | Rows 110 to 125 above |
+| Store: "Open the storefront, add a product to the cart and check out with a test-friendly method (COD or a dummy gateway is fine)." | 1 | Observed via the Store API with COD: order #20 (`customer-order-smoke.ps1`); browser click-through not run |
+| Store: "Confirm the order is visible in WooCommerce admin." | 1 | Not click-verified in wp-admin. The order was read back through the gateway (`woo__list_orders`, status `processing`); open **WooCommerce > Orders** in the video |
+| Chat agent, as user A: "Ask the agent to create a product with a name and price. The product appears on the storefront." | 2 | Observed: product 19 `publish`; `GET /product/demo-lamp/` HTTP 200 with the name |
+| Chat agent, as user A: "Place an order for it on the storefront by hand, then ask the agent what orders came in today. It returns that order." | 2 | Order placed by script (`customer-order-smoke.ps1 -ProductId 19`); by hand in the video. Observed: the chat listed #20 |
+| External MCP client, as user B: "Connect Claude Code, Cursor or MCP Inspector to the gateway using only the gateway URL and user B's API key." | 3 | Observed with MCP Inspector (URL and key only); Claude Code is the owner's live step |
+| External MCP client, as user B: "See the tools of every enabled server, ..." | 3 | Observed: `tools/list` returned 15 tools of 3 servers |
+| External MCP client, as user B: "... and ask the same orders question successfully." | 3 | Observed: `woo__list_orders period=today` returned #20 |
+| External MCP client, as user B: "Run one prompt that needs tools from two different upstream servers." | 3 | Observed through the chat as user B (`woo__list_orders` + `notes__create_note`); in Claude Code it is the owner's live step |
+| Team and control: "Revoke user B's key. Their next call is rejected." | 4 | Observed: revoke 204, next call HTTP 401 |
+| Team and control: "Disable one upstream server. Its tools disappear from both the chat agent and the external client." | 4 | External client observed (`tools/list` 15 to 10 to 15). Chat agent: inferred (no `notes__*` tool call; generic scope refusal), not a clear "notes is disabled" answer; show the chat failing to save a note in the video |
+| Team and control: "Kill the pod of one upstream server. The other servers keep working, and the dashboard shows the dead one as unreachable." | 4 | Observed: `woo__list_products` HTTP 200 meanwhile; `utils` `unreachable` at 3.7 s, connected at 19.9 s (dashboard view not click-verified; status via API) |
+| Team and control: "Every call above appears in the audit log, attributed to the right user." | 5 | Observed: rows 110 to 125 above, right user and source |
 
 ## Clean up (optional)
 
