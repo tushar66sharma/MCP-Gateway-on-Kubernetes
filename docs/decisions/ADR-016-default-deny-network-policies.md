@@ -44,3 +44,13 @@ Until Phase 4 every pod could connect to every other pod and to the whole intern
 - The cluster moves to a CNI that supports FQDN policies (restrict LLM and external MCP egress to named hosts).
 - Another controller or workload is added to the three namespaces (it needs its own allow rules).
 - The new-pod enforcement delay matters (for example before running untrusted workloads).
+
+## Addendum (Phase 5b): `gateway.internalUpstreams`
+
+The matrix above allows the gateway to reach only the three built-in MCP servers on 3001-3003, and the SSRF guard accepts only `*.mcp.svc.cluster.local`. An admin who runs another MCP server in the cluster therefore got either `400 SSRF_REJECTED` (other namespace) or an `unreachable` server (`connection refused`, namespace `mcp`). Decision (Task 5b.6): a chart list, empty by default, one entry per server (`namespace`, `port`, optional `podLabels`).
+
+- **What an entry opens, and only that:** the namespace in the gateway's SSRF allow-list (`*.<namespace>.svc.cluster.local`, comma-joined, unique namespaces), a gateway egress rule to that namespace (narrowed to the pods matching `podLabels` when given) on that TCP port, and, when the namespace is the chart's `mcp` namespace, an ingress policy there from the gateway pods on that port.
+- **What it does not do:** it does not edit policies in other namespaces (the chart does not own them; the docs tell the operator to admit the gateway there), it does not open a port range, and it does not touch the internet rule or the private-range exclusion. The SSRF guard still refuses loopback and link-local addresses.
+- **Why a chart value and not a runtime setting:** the egress policy and the allow-list must change together, and both are deploy-time security boundaries; a dashboard switch would let a stolen admin session widen the network.
+- **Default:** `[]`, and the rendered objects are identical to the release before Phase 5b (asserted by `scripts\validate-chart.ps1`).
+- **Verified 2026-10-23** on the local cluster with `scripts\dev\test-internal-upstream.ps1`: refused or unreachable before, `connected` with 4 tools after, policy count 16 -> 17 -> 16. Details: [security, section 15](../security.md#15-networkpolicies-phase-5); use: [deployment.md](../deployment.md#registering-mcp-servers-that-run-inside-the-cluster).

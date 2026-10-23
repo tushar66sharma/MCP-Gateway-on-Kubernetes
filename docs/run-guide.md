@@ -642,6 +642,39 @@ $body = $null
 
 The seeds of the other two: `woo` is `bearer` at `http://mcp-woocommerce.mcp.svc.cluster.local:3001/mcp` (Secret `mcp-woocommerce-token`, key `token`), `notes` is `bearer` at `http://mcp-notes.mcp.svc.cluster.local:3002/mcp` (Secret `mcp-notes-token`, key `token`). Which slugs have been seeded: query 9 below.
 
+### Add an MCP server that runs inside the cluster
+
+A server of your own that runs in this cluster (not one of `woo`, `notes`, `utils`) needs two things the chart controls: permission in the gateway's SSRF allow-list and a NetworkPolicy path. Without them the dashboard form shows the inline error `In-cluster servers must be listed in the chart setting gateway.internalUpstreams.` (the API answers `400 SSRF_REJECTED`), or, for a server in the `mcp` namespace, the server is saved but shows `unreachable` with `connection refused`. Both were observed on 2026-10-23.
+
+1. Run your server with a Service in a namespace of your choice. For the namespace `mcp` the pod must carry labels you can select on, for example `app.kubernetes.io/name: my-mcp-server`; the namespace `mcp` enforces the `restricted` Pod Security level, so the pod must be non-root with a RuntimeDefault seccomp profile, dropped capabilities and no privilege escalation.
+2. Add the entry to your values file (the full description is in [deployment.md](deployment.md#registering-mcp-servers-that-run-inside-the-cluster)) and apply it:
+
+   ```yaml
+   gateway:
+     internalUpstreams:
+       - namespace: mcp
+         port: 3010
+         podLabels:
+           app.kubernetes.io/name: my-mcp-server
+   ```
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy
+   ```
+
+   The gateway restarts (Recreate strategy), so log in again afterwards.
+3. In the dashboard open Servers > Add server (or `POST /api/servers` with the login and CSRF headers from the section above): URL `http://my-mcp-server.mcp.svc.cluster.local:3010/mcp`, then the authentication your server needs. Click Refresh on the server; it should become `connected` with its tool count. If it says `connection refused` right after a deploy, wait ten seconds and refresh again.
+4. For a namespace other than `mcp` the chart only opens the SSRF allow-list and the gateway's egress. If that namespace has its own default-deny policy, add an ingress policy there that admits the pods labelled `app.kubernetes.io/name=gateway` in the namespace `gateway` on the port.
+5. To remove it: delete the server (dashboard or `DELETE /api/servers/<id>`), delete the entry from the values and run `up.ps1 -Redeploy` again.
+
+**The whole procedure is exercised by a script** (it creates its own throw-away servers and removes them; it prints no keys):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\test-internal-upstream.ps1
+```
+
+Verified 2026-10-23: before the setting the server in `mcp` was saved (HTTP 201) and `unreachable` (`connection refused`), and a server in the new namespace `tools-test` was refused with `400 SSRF_REJECTED`; after the setting both refreshed to `connected` with 4 tools, and `calculate` with `6*7` through a temporary API key returned `6*7 = 42`; after the cleanup and `up.ps1 -Redeploy` the NetworkPolicy count (16), `SSRF_ALLOWED_INTERNAL_HOSTS` (`*.mcp.svc.cluster.local`) and the namespace list were the same as before.
+
 ### Call the gateway with MCP Inspector (command line)
 
 Verified 2026-10-19 in Windows PowerShell 5.1 with a key from the steps above in `$env:UGW_KEY` (needs Node; the first run downloads the Inspector through `npx`):

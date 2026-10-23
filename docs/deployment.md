@@ -338,6 +338,37 @@ Phase 5b (Task 5b.5, [ADR-019](decisions/ADR-019-external-woocommerce-store.md))
 
 **If the store answers 401 or 403**, see [troubleshooting](troubleshooting.md#the-external-store-answers-401-or-403-or-the-mcp-server-cannot-reach-it): some hosts strip the `Authorization` header before it reaches WordPress.
 
+## Registering MCP servers that run inside the cluster
+
+Phase 5b (Task 5b.6, [ADR-016 addendum](decisions/ADR-016-default-deny-network-policies.md#addendum-phase-5b-gatewayinternalupstreams)). The gateway reaches the three built-in MCP servers out of the box. An admin can also add another server that runs in this cluster (dashboard Servers > Add server, or `POST /api/servers`), but two guards block it until the chart is told about it: the gateway's SSRF allow-list (`SSRF_ALLOWED_INTERNAL_HOSTS`, default `*.mcp.svc.cluster.local`) and the default-deny NetworkPolicies. The chart value `gateway.internalUpstreams` opens both, one entry per server:
+
+```yaml
+gateway:
+  internalUpstreams:
+    - namespace: tools                       # a DNS label: the namespace the server's Service lives in
+      port: 3010                             # 1-65535: the TCP port the pod listens on
+      podLabels:                             # optional: only pods with these labels; omit it for every pod in the namespace
+        app.kubernetes.io/name: my-mcp-server
+```
+
+What each entry changes (an empty list, the default, renders exactly the objects of the release before Phase 5b):
+
+| Where | Effect |
+|---|---|
+| Gateway env `SSRF_ALLOWED_INTERNAL_HOSTS` | `*.<namespaces.mcp>.svc.cluster.local` plus `*.<namespace>.svc.cluster.local` for each unique namespace, comma-joined. It lets the URL `http://<service>.<namespace>.svc.cluster.local:<port>/mcp` through the SSRF guard; nothing else. |
+| NetworkPolicy `gateway` (namespace `gateway`) | One more egress rule: to that namespace (`kubernetes.io/metadata.name`), to the pods matching `podLabels` when given, on TCP `port` only. |
+| NetworkPolicy `mcp-internal-upstream-<n>` (namespace `mcp`) | Rendered only when `namespace` equals `namespaces.mcp` (default `mcp`): ingress to the pods matching `podLabels` (all pods when omitted) from the gateway pods only, on TCP `port`. |
+| Any other namespace | **Not touched.** Create the workload and its Service yourself; if that namespace has a default-deny policy, add a policy of your own that admits the pods labelled `app.kubernetes.io/name=gateway` from the namespace `gateway` on that port. A namespace without a policy needs nothing. |
+
+Rules and limits:
+
+- The pod must speak the MCP Streamable HTTP protocol on the given port. The gateway still applies the SSRF guard to the resolved address (loopback and link-local stay refused), and the new egress rule is limited to the one port you list.
+- Apply the value with `scripts\up.ps1 -Redeploy` (put it in your values file), then add the server: dashboard Servers > Add server with the URL `http://<service>.<namespace>.svc.cluster.local:<port>/mcp`. Step by step: [run guide](run-guide.md#add-an-mcp-server-that-runs-inside-the-cluster).
+- The schema rejects a `port` outside 1-65535, a `namespace` that is not a DNS label (for example `Bad_NS`), an entry without a port, unknown keys and non-string label values.
+- Policies are enforced a few seconds after a pod starts (see [security, section 15](security.md#15-networkpolicies-phase-5)); a refresh right after a deploy can still say `connection refused`.
+
+**Verified on 2026-10-23** (local k3d, k3s v1.35.5): `scripts\validate-chart.ps1` (render rows for the empty list, an entry in `mcp`, an entry in another namespace, duplicates and the schema rejections) and the live proof `scripts\dev\test-internal-upstream.ps1`, which deploys a test server in `mcp` and another in a new namespace `tools-test`, shows both refused or unreachable before the setting and connected with 4 tools after it, makes one `tools/call` through a temporary API key, and removes everything. Results: [security, section 15](security.md#15-networkpolicies-phase-5).
+
 ## Production (k3s VPS)
 
 > **Status (2026-10-23).** This guide installs the same chart on one k3s server with TLS. **No real VPS, domain or Let's Encrypt certificate has been used.** What *was* run is marked **verified**; everything else is **not executed** (it needs your cloud account, domain or registry) or **expected** (taken from the tools' documentation). Task 5.7 of Phase 5 rehearses the cluster side on a second local k3d cluster with a self-signed issuer; its results are recorded in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) and the [testing guide](testing.md).

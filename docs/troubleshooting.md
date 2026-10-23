@@ -63,6 +63,7 @@ helm status urumi -n urumi-system
 - [`/api` answers 403 `CSRF_REJECTED`](#api-answers-403-csrf_rejected)
 - [Login answers 429 (too many attempts)](#login-answers-429-too-many-attempts)
 - [A server shows `unreachable` in the gateway](#a-server-shows-unreachable-in-the-gateway)
+- [An in-cluster MCP server is refused or unreachable](#an-in-cluster-mcp-server-is-refused-or-unreachable)
 - [`app.localhost` does not resolve in Node tools](#applocalhost-does-not-resolve-in-node-tools)
 - [Postgres does not start: `PGDATA` permission errors](#postgres-does-not-start-pgdata-permission-errors)
 - [Gateway, Notes or Utilities pod in `ErrImagePull`](#gateway-notes-or-utilities-pod-in-errimagepull)
@@ -684,17 +685,32 @@ $servers | Select-Object slug, status, lastError, checkedAt | Format-Table -Auto
 
 | `lastError` | Cause | Fix |
 |---|---|---|
-| `connection refused` | The upstream pod is down, restarting or listens elsewhere | `kubectl -n mcp get pods`; wait for the next check (15 s) or `POST /api/servers/<id>/refresh` |
+| `connection refused` | The upstream pod is down, restarting or listens elsewhere; or, for your own in-cluster server, the NetworkPolicy blocks the gateway (seen 2026-10-23: `connection refused`, not a timeout) | `kubectl -n mcp get pods`; wait for the next check (15 s) or `POST /api/servers/<id>/refresh`; for your own server see [the section below](#an-in-cluster-mcp-server-is-refused-or-unreachable) |
 | `DNS lookup failed` | The URL's name does not resolve | Correct the URL (`http://<service>.mcp.svc.cluster.local:<port>/mcp`) and `kubectl -n mcp get svc` |
 | `timeout after 5000ms` | The upstream is up but too slow to list tools | `kubectl -n mcp logs deploy/<name>`; check the pod's CPU |
 | `HTTP 401 from upstream` | The stored credential is wrong or was rotated | `PATCH /api/servers/<id>` with a new `credential`; for the seeded servers compare with `scripts\get-secret.ps1 -Namespace mcp -Name <secret> -Key token` (`key` for utilities) |
 | `HTTP 404 from upstream` | The URL path is wrong (it must end in `/mcp`) | Correct the URL |
 | `HTTP 302 from upstream (redirects are not followed)` | The URL redirects; the gateway never follows redirects | Use the final URL |
-| `blocked by SSRF guard (private)` | The name resolves to a private address and is not on `SSRF_ALLOWED_INTERNAL_HOSTS` | Use a `*.mcp.svc.cluster.local` name or extend the allow-list in the chart |
+| `blocked by SSRF guard (private)` | The name resolves to a private address and is not on `SSRF_ALLOWED_INTERNAL_HOSTS` | Use a `*.mcp.svc.cluster.local` name, or for another namespace list it in the chart value `gateway.internalUpstreams` ([how](#an-in-cluster-mcp-server-is-refused-or-unreachable)) |
 | `blocked by SSRF guard (loopback)` / `(link_local)` | The URL points at the pod itself or a metadata address | Use the real Service name; loopback is never allowed on the cluster |
 | `error: ...` | Something else, for example a reset | `kubectl -n gateway logs deploy/gateway` shows the `upstream status` line |
 
 The seeded servers are created once from the Helm values. Changing the Helm seed later does **not** change an existing row; edit it through the API. Full list of texts: [error-handling.md](error-handling.md#1-mcp-the-aggregated-endpoint). `lastError` strings are **tested**; `connection refused` and the disappearing tools were also **live** (scaling `mcp-utilities` to 0).
+
+## An in-cluster MCP server is refused or unreachable
+
+**Symptom.** Adding your own server whose URL ends in `.svc.cluster.local` gives the inline error `Upstream URL rejected: ...` followed by `In-cluster servers must be listed in the chart setting gateway.internalUpstreams.` (API: `400 SSRF_REJECTED`), or the server is saved but stays `unreachable` with `connection refused`.
+
+**Cause.** The gateway only trusts `*.mcp.svc.cluster.local` and may only open connections to the three built-in servers; every other in-cluster destination needs an entry in the chart value `gateway.internalUpstreams` (namespace, port, optional pod labels).
+
+**Fix.**
+
+1. Add the entry (see [deployment.md](deployment.md#registering-mcp-servers-that-run-inside-the-cluster)) and run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`.
+2. Check what the gateway received: `kubectl -n gateway get deploy gateway -o json` and look for `SSRF_ALLOWED_INTERNAL_HOSTS` in the container env (it must list `*.<your namespace>.svc.cluster.local`), and `kubectl -n gateway get networkpolicy gateway -o yaml` for the egress rule to your namespace and port.
+3. For the `mcp` namespace also check `kubectl -n mcp get networkpolicy` for `mcp-internal-upstream-<n>`, and that `podLabels` match your pod (`kubectl -n mcp get pods --show-labels`).
+4. For any other namespace the chart does not create the ingress side: admit the gateway pods in that namespace's own policy.
+5. The URL must use the Service name and the port listed in the entry, and must end in the path your server serves (usually `/mcp`).
+6. Right after a new pod starts, policies can take a few seconds to apply: refresh again after ten seconds.
 
 ## `app.localhost` does not resolve in Node tools
 
