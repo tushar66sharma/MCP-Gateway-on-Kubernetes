@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Chat } from '../src/pages/Chat';
 import { admin, errorResponse, jsonResponse, mockFetch, Providers } from './helpers';
 
-const configured = { configured: true, provider: 'groq', model: 'openai/gpt-oss-120b', fallbackProvider: null };
+const configured = { configured: true, provider: 'groq', model: 'openai/gpt-oss-120b', fallbackProvider: null, topicCheck: true, budget: null };
+const withBudget = (used: number, limit = 50000) => ({
+  ...configured,
+  budget: { limit, used, remaining: Math.max(0, limit - used), resetsAt: '2026-10-24T00:00:00.000Z' },
+});
 const final = (reply: string, stoppedReason = 'final') =>
   jsonResponse(200, { reply, toolCalls: [], stoppedReason, provider: 'groq', model: 'm', usage: {} });
 
@@ -33,7 +37,7 @@ afterEach(() => {
 
 describe('Chat', () => {
   it('not configured shows setup state', async () => {
-    renderChat({ configured: false, provider: null, model: null, fallbackProvider: null });
+    renderChat({ configured: false, provider: null, model: null, fallbackProvider: null, topicCheck: false, budget: null });
     expect(await screen.findByText(/AI provider isn.t configured/i)).toBeInTheDocument();
     expect(screen.getByText(/Set up the AI chat/)).toBeInTheDocument();
     expect(screen.getByText(/create-secrets\.ps1/)).toBeInTheDocument();
@@ -112,5 +116,55 @@ describe('Chat', () => {
     await user.type(box, '{Shift>}{Enter}{/Shift}line two');
     expect(box).toHaveValue('line one\nline two');
     expect(fetchFn.mock.calls.some((c) => c[1]?.method === 'POST')).toBe(false);
+  });
+
+  it("shows today's usage from the status", async () => {
+    renderChat(withBudget(1234));
+    expect(await screen.findByText('Today: 1,234 / 50,000 tokens')).toBeInTheDocument();
+  });
+
+  it('hides the usage line when the budget is unlimited', async () => {
+    renderChat(configured);
+    await screen.findByLabelText('Message');
+    expect(screen.queryByText(/^Today:/)).toBeNull();
+  });
+
+  it('an off_topic reply shows the scope note', async () => {
+    renderChat(configured, () => final('I can only help with this store.', 'off_topic'));
+    await sendMessage('write me a poem');
+    expect(await screen.findByText('I can only help with this store.')).toBeInTheDocument();
+    expect(screen.getByText("Outside this assistant's scope")).toBeInTheDocument();
+    expect(screen.queryByText(/step limit/i)).toBeNull();
+  });
+
+  it('CHAT_BUDGET_EXCEEDED disables the composer until resetsAt', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], shouldAdvanceTime: true });
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    renderChat(configured, () =>
+      errorResponse(429, 'CHAT_BUDGET_EXCEEDED', "Today's AI budget is used up. It resets at 00:00 (Asia/Kolkata).", {
+        headers: { 'Retry-After': '60' },
+        details: { limit: 50000, used: 50100, resetsAt },
+      }),
+    );
+    await sendMessage('hello');
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).getByText(/AI budget is used up/)).toBeInTheDocument();
+    expect(within(alert).getByText(/^Resets at /)).toBeInTheDocument();
+    expect(within(alert).queryByRole('button', { name: /retry/i })).toBeNull();
+    expect(screen.getByText('Daily AI budget used up')).toBeInTheDocument();
+    expect(screen.getByLabelText('Message')).toBeDisabled();
+    act(() => {
+      vi.advanceTimersByTime(60_100);
+    });
+    await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled());
+    expect(screen.queryByText('Daily AI budget used up')).toBeNull();
+  });
+
+  it('status is refetched after a turn', async () => {
+    const fetchFn = renderChat(configured, () => final('ok'));
+    const statusCalls = () => fetchFn.mock.calls.filter((c) => c[0] === '/api/chat/status').length;
+    await sendMessage('hello');
+    await screen.findByText('ok');
+    await waitFor(() => expect(statusCalls()).toBe(2));
   });
 });

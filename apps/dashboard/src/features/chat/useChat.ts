@@ -64,11 +64,13 @@ export interface UseChat {
 }
 
 /**
+ * `onSettled` runs after every turn that ends (reply or error), e.g. to refetch the chat status.
+ *
  * The conversation lives in React state only (never browser storage): message text is private to the
  * session. Only `{role, content}` of the last 20 messages is sent (see toWire); the gateway rejects any
  * other field.
  */
-export function useChat(): UseChat {
+export function useChat(onSettled?: () => void): UseChat {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -78,6 +80,10 @@ export function useChat(): UseChat {
   const inFlight = useRef(false);
   const generation = useRef(0);
   const abort = useRef<AbortController | null>(null);
+  const settled = useRef(onSettled);
+  useEffect(() => {
+    settled.current = onSettled;
+  }, [onSettled]);
 
   const commit = (next: ChatMessage[]) => {
     history.current = next;
@@ -118,6 +124,7 @@ export function useChat(): UseChat {
       if (turn === generation.current) {
         inFlight.current = false;
         setPending(false);
+        settled.current?.();
       }
     }
   }, []);

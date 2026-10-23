@@ -8,6 +8,7 @@ import type { ChatMessage } from './useChat';
 const STOP_NOTE: Record<Exclude<StoppedReason, 'final'>, string> = {
   max_steps: 'The assistant reached its step limit before finishing, so this answer may be incomplete.',
   timeout: 'The assistant ran out of time before finishing, so this answer may be incomplete.',
+  off_topic: "Outside this assistant's scope",
 };
 
 function Bubble({ message }: { message: ChatMessage }) {

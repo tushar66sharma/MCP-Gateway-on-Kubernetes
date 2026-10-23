@@ -9,7 +9,7 @@ test('chat page fits a phone screen without sending anything', async ({ page }) 
 
   const status = await page.request.get('/api/chat/status');
   expect(status.ok(), `GET /api/chat/status answered ${status.status()}`).toBe(true);
-  const { configured } = (await status.json()) as { configured: boolean };
+  const { configured, budget } = (await status.json()) as { configured: boolean; budget: unknown };
 
   await page.goto('/chat');
   await expect(page.getByRole('heading', { level: 1, name: 'Chat' })).toBeVisible();
@@ -20,6 +20,7 @@ test('chat page fits a phone screen without sending anything', async ({ page }) 
     await expect(page.getByText('Try asking')).toBeVisible();
     await expect(page.getByRole('button', { name: 'What orders came in today?' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'New conversation' })).toBeVisible();
+    if (budget) await expect(page.getByText(/^Today: [\d,]+ \/ [\d,]+ tokens$/)).toBeVisible();
   } else {
     await expect(page.getByText('The AI provider isn’t configured')).toBeVisible();
   }

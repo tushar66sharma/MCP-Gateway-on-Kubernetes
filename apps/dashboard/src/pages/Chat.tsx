@@ -1,3 +1,5 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { Bot, MessageSquarePlus, Sparkles } from 'lucide-react';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -5,7 +7,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Skeleton } from '../components/ui/Skeleton';
-import { useChatStatus } from '../features/chat/api';
+import { budgetLine, budgetResetAt, chatStatusKey, useChatStatus } from '../features/chat/api';
 import { ChatComposer } from '../features/chat/ChatComposer';
 import { ChatError } from '../features/chat/ChatError';
 import { ChatThread } from '../features/chat/ChatThread';
@@ -35,9 +37,25 @@ function NotConfigured() {
   );
 }
 
+/** True from a CHAT_BUDGET_EXCEEDED error until its `resetsAt`; the timer lifts it at that moment. */
+function useBudgetBlock(error: unknown): boolean {
+  const resetAt = budgetResetAt(error);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (resetAt === null) return;
+    const timer = setTimeout(() => setNow(Math.max(Date.now(), resetAt)), Math.max(0, resetAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [resetAt]);
+  return resetAt !== null && now < resetAt;
+}
+
 export function Chat() {
   const status = useChatStatus();
-  const chat = useChat();
+  const queryClient = useQueryClient();
+  // The budget line follows every turn, including one that ended in an error (it may have spent tokens).
+  const chat = useChat(() => void queryClient.invalidateQueries({ queryKey: chatStatusKey }));
+  const blocked = useBudgetBlock(chat.error);
+  const budgetEnded = budgetResetAt(chat.error) !== null && !blocked;
 
   if (status.isPending) {
     return (
@@ -71,7 +89,7 @@ export function Chat() {
     );
   }
 
-  const { provider, model } = status.data;
+  const { provider, model, budget } = status.data;
   const empty = chat.messages.length === 0;
   return (
     <>
@@ -92,6 +110,7 @@ export function Chat() {
           </>
         }
       />
+      {budget ? <p className="mb-2 text-sm text-fg-muted tabular-nums">{budgetLine(budget)}</p> : null}
       <div className="flex flex-col gap-4 rounded-card border border-border bg-surface p-4 sm:p-5">
         {empty && !chat.pending ? (
           <div className="py-6">
@@ -109,8 +128,8 @@ export function Chat() {
           </div>
         ) : null}
         <ChatThread messages={chat.messages} pending={chat.pending} />
-        {chat.error ? <ChatError error={chat.error} pending={chat.pending} onRetry={() => void chat.retry()} /> : null}
-        <ChatComposer disabled={chat.pending} onSend={(text) => void chat.send(text)} />
+        {chat.error && !budgetEnded ? <ChatError error={chat.error} pending={chat.pending} onRetry={() => void chat.retry()} /> : null}
+        <ChatComposer disabled={chat.pending} {...(blocked && { blockedText: 'Daily AI budget used up' })} onSend={(text) => void chat.send(text)} />
       </div>
     </>
   );

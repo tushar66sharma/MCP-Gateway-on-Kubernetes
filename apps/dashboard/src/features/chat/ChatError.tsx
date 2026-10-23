@@ -2,7 +2,7 @@ import { RefreshCw, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button } from '../../components/ui/Button';
 import { ApiError, errorMessage } from '../../lib/api';
-import { toolCallsFromDetails } from './api';
+import { budgetResetAt, formatResetTime, toolCallsFromDetails } from './api';
 import { ToolCallTrace } from './ToolCallTrace';
 
 const secondsLabel = (n: number) => `${n} ${n === 1 ? 'second' : 'seconds'}`;
@@ -23,6 +23,8 @@ function friendlyMessage(error: unknown, remaining: number): string {
       return 'The AI provider isn’t configured.';
     case 'RATE_LIMITED':
       return 'You’re sending messages too quickly.';
+    case 'CHAT_BUDGET_EXCEEDED':
+      return errorMessage(error);
     case 'CONFLICT':
       return 'A reply is already being generated.';
     default:
@@ -60,6 +62,8 @@ export interface ChatErrorProps {
 export function ChatError({ error, onRetry, pending }: ChatErrorProps) {
   const remaining = useCountdown(error);
   const ran = error instanceof ApiError ? toolCallsFromDetails(error.details) : [];
+  const resetAt = budgetResetAt(error);
+  const budget = error instanceof ApiError && error.code === 'CHAT_BUDGET_EXCEEDED';
   return (
     <div role="alert" className="rounded-card border border-danger/40 bg-danger-subtle p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -67,10 +71,13 @@ export function ChatError({ error, onRetry, pending }: ChatErrorProps) {
           <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
           <span>{friendlyMessage(error, remaining)}</span>
         </p>
-        <Button size="sm" icon={<RefreshCw aria-hidden />} disabled={pending || remaining > 0} onClick={onRetry}>
-          Retry
-        </Button>
+        {budget ? null : (
+          <Button size="sm" icon={<RefreshCw aria-hidden />} disabled={pending || remaining > 0} onClick={onRetry}>
+            Retry
+          </Button>
+        )}
       </div>
+      {resetAt !== null ? <p className="mt-2 text-[0.8125rem] text-fg-muted">Resets at {formatResetTime(resetAt)}</p> : null}
       {error instanceof ApiError && error.requestId ? (
         <p className="mt-2 text-xs text-fg-muted">
           Request ID <span className="font-mono select-all">{error.requestId}</span>
