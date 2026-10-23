@@ -16,6 +16,8 @@ Statements are either **verified** (run on the reference machine, with the date)
 > 6. The team dashboard is <http://app.localhost/>: log in as `admin@example.com` with the password that `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password` copies to your clipboard ([the dashboard](#the-dashboard-phase-4)). For the AI chat, follow [Set up the AI chat](#set-up-the-ai-chat) once.
 > 7. Done for the day: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1` (keeps your data).
 
+The repository [README](../README.md#11-complete-local-installation-and-setup) has the short beginner sequence and links here for detail.
+
 All commands are run from the repository root in **Windows PowerShell 5.1**. The folder path contains spaces on the reference machine; the scripts quote their own paths, so just `cd` into the folder first.
 
 **Script invocation convention.** Where these docs write `scripts\x.ps1 [args]` for short, run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\x.ps1 [args]` from the repository root. Typing `scripts\x.ps1` directly is usually blocked by Windows' default execution policy (see [troubleshooting](troubleshooting.md#running-scripts-is-disabled-on-this-system)).
