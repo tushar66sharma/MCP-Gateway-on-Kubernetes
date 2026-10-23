@@ -4,6 +4,25 @@
   "required": ["global", "namespaces"],
   "if": { "properties": { "global": { "properties": { "tls": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["tls"] } }, "required": ["global"] },
   "then": { "properties": { "global": { "properties": { "publicScheme": { "const": "https" } } } } },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "store": { "properties": { "enabled": { "const": false } }, "required": ["enabled"] },
+          "mcpWoocommerce": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }
+        },
+        "required": ["store", "mcpWoocommerce"]
+      },
+      "then": {
+        "properties": {
+          "mcpWoocommerce": {
+            "properties": { "externalStore": { "properties": { "url": { "type": "string", "minLength": 1 } }, "required": ["url"] } },
+            "required": ["externalStore"]
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "global": {
       "type": "object",
@@ -27,6 +46,11 @@
           }
         }
       }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
     },
     "podSecurity": {
       "type": "object",
@@ -78,6 +102,24 @@
             "gatewaySecrets": { "type": "string" },
             "gatewayBootstrap": { "type": "string" },
             "llmApiKeys": { "type": "string" }
+          }
+        }
+      }
+    },
+    "mcpWoocommerce": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "externalStore": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "pattern": "^(https://[^/@\\s]+(/.*)?)?$" },
+            "existingSecret": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?)?$" },
+            "extraEgressCIDRs": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$" }
+            }
           }
         }
       }

@@ -1,3 +1,4 @@
+{{- if .Values.store.enabled }}
 {{- if .Values.networkPolicies.enabled }}
 {{- $ns := .Values.namespaces.store }}
 {{- $mcp := .Values.namespaces.mcp }}
@@ -110,5 +111,6 @@ spec:
       ports:
         - { protocol: TCP, port: 3306 }
     {{- include "urumi.internetEgress" . | nindent 4 }}
+{{- end }}
 {{- end }}
 {{- end }}

@@ -5,7 +5,10 @@ This admits Traefik -> solver on TCP 8089 (cert-manager's fixed acmesolver port)
 beyond the allow-dns-egress rule every pod already has: it only answers the challenge request.
 */ -}}
 {{- if and .Values.networkPolicies.enabled .Values.global.tls.enabled .Values.global.tls.clusterIssuer }}
-{{- $namespaces := list .Values.namespaces.store }}
+{{- $namespaces := list }}
+{{- if .Values.store.enabled }}
+{{- $namespaces = append $namespaces .Values.namespaces.store }}
+{{- end }}
 {{- if .Values.gateway.enabled }}
 {{- $namespaces = append $namespaces .Values.namespaces.gateway }}
 {{- end }}

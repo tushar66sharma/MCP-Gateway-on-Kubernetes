@@ -1,5 +1,6 @@
 {{- if .Values.networkPolicies.enabled }}
 {{- range $key, $ns := .Values.namespaces }}
+{{- if or $.Values.store.enabled (ne $key "store") }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -22,5 +23,6 @@ spec:
       ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
+{{- end }}
 {{- end }}
 {{- end }}

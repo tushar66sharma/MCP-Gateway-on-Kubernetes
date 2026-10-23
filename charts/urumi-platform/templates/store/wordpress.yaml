@@ -1,3 +1,4 @@
+{{- if .Values.store.enabled }}
 {{- $ns := .Values.namespaces.store -}}
 {{- $dbSecret := default "store-db" .Values.secrets.existing.storeDb -}}
 apiVersion: v1
@@ -142,3 +143,4 @@ spec:
           emptyDir:
             # PHP and WooCommerce uploads pass through /tmp; exceeding the limit would evict the storefront.
             sizeLimit: 128Mi
+{{- end }}

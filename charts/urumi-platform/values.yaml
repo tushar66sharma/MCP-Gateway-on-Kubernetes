@@ -22,6 +22,11 @@ namespaces:
   mcp: mcp
   gateway: gateway
 
+# false = no store in this cluster (no WordPress, MariaDB, setup Job, wp-cron, store Ingress, store namespace
+# or store policies). Then mcpWoocommerce.externalStore.url is required. See docs/deployment.md and ADR-019.
+store:
+  enabled: true
+
 # Pod Security Admission level enforced (and warned/audited) on the three app namespaces. See ADR-017.
 podSecurity:
   level: restricted           # restricted | baseline | privileged
@@ -97,6 +102,12 @@ mcpWoocommerce:
   port: 3001
   timeoutMs: 10000
   logLevel: info
+  # A WooCommerce store hosted elsewhere (ADR-019). "" = the in-cluster store with OAuth 1.0a (today's mode).
+  # Set url (https only) to use HTTP Basic over https instead; the REST key and secret come from existingSecret.
+  externalStore:
+    url: ""                   # e.g. https://shop.example.com
+    existingSecret: ""        # a Secret in the mcp namespace; keys: consumer-key, consumer-secret. Required with url.
+    extraEgressCIDRs: []      # IPv4 CIDRs reachable on 443 in addition to the public internet (a store on a private network)
   resources:
     requests: { cpu: 20m, memory: 64Mi }
     limits: { cpu: 200m, memory: 160Mi }
