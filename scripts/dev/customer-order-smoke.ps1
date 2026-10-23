@@ -24,6 +24,7 @@
 param(
   [string]$BaseUrl = 'http://store.localhost',
   [switch]$CheckGuestLinking,
+  [ValidateRange(0, [int]::MaxValue)]
   [int]$ProductId = 0
 )
 
@@ -82,6 +83,14 @@ function Get-FirstProductId {
   $first = @($products)[0]
   if ($null -eq $first -or -not $first.id) { throw 'Store API returned no products' }
   return [int]$first.id
+}
+
+function Assert-ProductExists([int]$id) {
+  try {
+    Invoke-RestMethod -UseBasicParsing -Uri "$BaseUrl/wp-json/wc/store/v1/products/$id" | Out-Null
+  } catch {
+    throw "product $id not found at $BaseUrl (check the id; list products at $BaseUrl/wp-json/wc/store/v1/products)"
+  }
 }
 
 function New-CodOrder($session, [string]$email, [int]$productId) {
@@ -145,7 +154,7 @@ try {
   Register-Customer $session $email $password
 
   Write-Host '2/3 placing a cash-on-delivery order through the Store API'
-  if ($ProductId -gt 0) { $productId = $ProductId } else { $productId = Get-FirstProductId }
+  if ($ProductId -gt 0) { Assert-ProductExists $ProductId; $productId = $ProductId } else { $productId = Get-FirstProductId }
   $orderId = New-CodOrder $session $email $productId
 
   Write-Host "3/3 checking My Orders for order #$orderId"
