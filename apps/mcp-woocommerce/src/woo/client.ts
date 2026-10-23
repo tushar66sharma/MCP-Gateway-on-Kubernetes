@@ -11,8 +11,9 @@ export interface WooApi {
 }
 
 export interface WooClientOptions {
-  baseUrl: string;          // in-cluster, e.g. http://wordpress.store.svc.cluster.local
-  signingBaseUrl: string;   // public store URL with scheme http, e.g. http://store.localhost
+  baseUrl: string;          // oauth1: in-cluster, e.g. http://wordpress.store.svc.cluster.local; basic: https://shop.example.com
+  signingBaseUrl: string;   // oauth1: public store URL with scheme http, e.g. http://store.localhost; ignored in basic mode
+  authMode?: 'oauth1' | 'basic'; // default 'oauth1'
   consumerKey: string;
   consumerSecret: string;
   timeoutMs: number;
@@ -38,20 +39,27 @@ export class WooClient implements WooApi {
     for (const [k, v] of Object.entries(query ?? {})) {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
-    const signed = signOAuth1({
-      method,
-      url: url.toString(),
-      signingBaseUrl: this.o.signingBaseUrl,
-      consumerKey: this.o.consumerKey,
-      consumerSecret: this.o.consumerSecret,
-    });
+    const basic = this.o.authMode === 'basic';
+    const target = basic
+      ? url.toString()
+      : signOAuth1({
+        method,
+        url: url.toString(),
+        signingBaseUrl: this.o.signingBaseUrl,
+        consumerKey: this.o.consumerKey,
+        consumerSecret: this.o.consumerSecret,
+      });
+    const headers: Record<string, string> = body === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' };
+    if (basic) {
+      headers.authorization = `Basic ${Buffer.from(`${this.o.consumerKey}:${this.o.consumerSecret}`).toString('base64')}`;
+    }
     const doFetch = this.o.fetchImpl ?? fetch;
     let res: Response;
     try {
-      res = await doFetch(signed, {
+      res = await doFetch(target, {
         method,
         redirect: 'manual',
-        headers: body === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(this.o.timeoutMs),
       });
@@ -99,7 +107,8 @@ export class WooClient implements WooApi {
   /** Strips OAuth params and the configured credentials from text that may echo the signed URL. */
   private redact(text: string): string {
     let out = text.replace(/oauth_[a-z_]+=[^&\s"'<]*/gi, 'oauth_…=[redacted]');
-    for (const secret of [this.o.consumerKey, this.o.consumerSecret]) {
+    const basicHeader = Buffer.from(`${this.o.consumerKey}:${this.o.consumerSecret}`).toString('base64');
+    for (const secret of [basicHeader, this.o.consumerKey, this.o.consumerSecret]) {
       if (secret.length > 0) out = out.split(secret).join('[redacted]');
     }
     return out;

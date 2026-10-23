@@ -124,4 +124,35 @@ describe('config', () => {
     expect(() => loadConfig({ ...base, STORE_TIMEZONE: 'Mars/Base' })).toThrow(/STORE_TIMEZONE/);
     expect(() => loadConfig({ ...base, WOO_SIGNING_BASE_URL: 'https://store.localhost' })).toThrow(/WOO_SIGNING_BASE_URL/);
   });
+  it('oauth1 defaults are unchanged', () => {
+    const c = loadConfig(base);
+    expect(c.WOO_AUTH_MODE).toBe('oauth1');
+    const noSigning: Record<string, string> = { ...base };
+    delete noSigning.WOO_SIGNING_BASE_URL;
+    expect(() => loadConfig(noSigning)).toThrow(/WOO_SIGNING_BASE_URL/);
+    expect(() => loadConfig({ ...base, WOO_BASE_URL: 'https://store.example.com' })).not.toThrow();
+  });
+  it('basic mode requires an https base URL', () => {
+    const noSigning: Record<string, string> = { ...base };
+    delete noSigning.WOO_SIGNING_BASE_URL;
+    const basic = { ...noSigning, WOO_AUTH_MODE: 'basic' };
+    expect(() => loadConfig({ ...basic, WOO_BASE_URL: 'http://store.example.com' })).toThrow(/WOO_BASE_URL/);
+    expect(() => loadConfig({ ...basic, WOO_BASE_URL: 'http://wordpress.store.svc.cluster.local' })).toThrow(/WOO_BASE_URL/);
+    const ok = loadConfig({ ...basic, WOO_BASE_URL: 'https://store.example.com' });
+    expect(ok.WOO_AUTH_MODE).toBe('basic');
+    // The signing URL is optional and ignored in basic mode, even if it is not http://.
+    expect(() => loadConfig({ ...basic, WOO_BASE_URL: 'https://store.example.com', WOO_SIGNING_BASE_URL: 'https://x.example.com' })).not.toThrow();
+    expect(() => loadConfig({ ...base, WOO_AUTH_MODE: 'digest' })).toThrow(/WOO_AUTH_MODE/);
+  });
+  it('credentials in WOO_BASE_URL are rejected', () => {
+    for (const mode of ['oauth1', 'basic']) {
+      const env = { ...base, WOO_AUTH_MODE: mode, WOO_BASE_URL: 'https://user:hunter2pass@store.example.com' };
+      let message = '';
+      try { loadConfig(env); } catch (e) { message = (e as Error).message; }
+      expect(message).toMatch(/WOO_BASE_URL/);
+      expect(message).not.toContain('hunter2pass');
+      expect(message).not.toContain('user:');
+    }
+    expect(() => loadConfig({ ...base, WOO_BASE_URL: 'http://ck_abc@wordpress.store.svc.cluster.local' })).toThrow(/WOO_BASE_URL/);
+  });
 });

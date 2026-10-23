@@ -24,6 +24,7 @@ logger.info(
     version,
     port: server.port,
     wooBaseUrl: config.WOO_BASE_URL,
+    wooAuthMode: config.WOO_AUTH_MODE,
     wooSigningBaseUrl: config.WOO_SIGNING_BASE_URL,
     storeTimeZone: config.STORE_TIMEZONE,
   },
