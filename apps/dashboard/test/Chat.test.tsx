@@ -167,4 +167,40 @@ describe('Chat', () => {
     await screen.findByText('ok');
     await waitFor(() => expect(statusCalls()).toBe(2));
   });
+
+  it('a status with nothing remaining locks the composer on first render', async () => {
+    const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+    renderChat({ ...configured, budget: { limit: 50000, used: 50000, remaining: 0, resetsAt } });
+    expect(await screen.findByText('Daily AI budget used up')).toBeInTheDocument();
+    expect(screen.getByText(/^Resets at /)).toBeInTheDocument();
+    expect(screen.getByLabelText('Message')).toBeDisabled();
+    expect(screen.getByLabelText('Message')).toHaveAccessibleDescription(/Daily AI budget used up/);
+  });
+
+  it('New conversation keeps the composer locked while the budget is used up', async () => {
+    const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+    renderChat({ ...configured, budget: { limit: 50000, used: 50100, remaining: 0, resetsAt } });
+    await screen.findByText('Daily AI budget used up');
+    await userEvent.setup().click(screen.getByRole('button', { name: /new conversation/i }));
+    expect(screen.getByText('Daily AI budget used up')).toBeInTheDocument();
+    expect(screen.getByLabelText('Message')).toBeDisabled();
+  });
+
+  it('a status lock lifts at resetsAt, refetches the status and announces it', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], shouldAdvanceTime: true });
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    let calls = 0;
+    renderChat({ ...configured, budget: { limit: 50000, used: 50000, remaining: 0, resetsAt } });
+    const fetchFn = vi.mocked(fetch);
+    await screen.findByText('Daily AI budget used up');
+    expect(screen.getByLabelText('Message')).toBeDisabled();
+    calls = fetchFn.mock.calls.filter((c) => c[0] === '/api/chat/status').length;
+    act(() => {
+      vi.advanceTimersByTime(60_100);
+    });
+    await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled());
+    expect(screen.queryByText('Daily AI budget used up')).toBeNull();
+    expect(screen.getByText(/budget has reset/i)).toBeInTheDocument();
+    await waitFor(() => expect(fetchFn.mock.calls.filter((c) => c[0] === '/api/chat/status').length).toBeGreaterThan(calls));
+  });
 });
