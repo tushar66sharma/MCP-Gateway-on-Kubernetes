@@ -112,6 +112,25 @@ Report 'redirect-https has no port at the default 443' ($redir -notmatch '(?m)^ 
 Report 'local values render no Middleware and no router.middlewares annotation' (($r.Out -notmatch '(?m)^kind: Middleware') -and ($r.Out -notmatch 'router\.middlewares'))
 Report 'prod values use customerRegistration false' ($rp.Out -match 'name: CUSTOMER_REGISTRATION, value: "false"')
 
+# --- Final review C1: cert-manager's HTTP-01 solver pods are admitted through default-deny (TLS + issuer only) ---
+function Get-SolverPolicy([string[]]$docList, [string]$ns) {
+  return $docList | Where-Object { $_ -match '(?m)^kind: NetworkPolicy' -and $_ -match '(?m)^  name: acme-http01-solver\s*$' -and $_ -match "(?m)^  namespace: $ns\s*$" } | Select-Object -First 1
+}
+foreach ($ns in 'store', 'gateway') {
+  $d = Get-SolverPolicy $prodDocs $ns
+  $ok = [bool]($d -and $d -match 'acme\.cert-manager\.io/http01-solver: "true"' -and $d -match 'policyTypes: \[Ingress\]' -and
+    $d -match 'kubernetes\.io/metadata\.name: kube-system' -and $d -match 'app\.kubernetes\.io/name: traefik' -and $d -match 'protocol: TCP, port: 8089')
+  Report "prod renders NetworkPolicy acme-http01-solver in $ns (solver label, from Traefik, TCP 8089)" $ok
+}
+Report 'local values render no acme-http01-solver policy' ($r.Out -notmatch 'acme-http01-solver')
+$rs = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $prod, '--set', 'gateway.enabled=false')
+$rsDocs = $rs.Out -split '(?m)^---\s*$'
+Report 'prod with gateway.enabled=false renders the solver policy in store only' ([bool]((Get-SolverPolicy $rsDocs 'store') -and -not (Get-SolverPolicy $rsDocs 'gateway')))
+$rs = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $prod, '--set', 'global.tls.clusterIssuer=')
+Report 'prod without a clusterIssuer renders no solver policy' (($rs.Code -eq 0) -and ($rs.Out -notmatch 'acme-http01-solver')) $rs.Out
+$rs = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $prod, '--set', 'networkPolicies.enabled=false')
+Report 'prod with networkPolicies.enabled=false renders no solver policy' (($rs.Code -eq 0) -and ($rs.Out -notmatch 'acme-http01-solver')) $rs.Out
+
 # --- Task 5.6: deploy.ps1 guards, run against a throw-away kubeconfig so no real cluster is touched -----------
 function Invoke-DeployGuard([string]$contextName, [string]$valuesFile) {
   $kc = Join-Path $tmp ('kc-' + [guid]::NewGuid().ToString('N') + '.yaml')
