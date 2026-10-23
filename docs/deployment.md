@@ -299,7 +299,7 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 
 ## Using a WooCommerce store hosted elsewhere
 
-Phase 5b (Task 5b.5, [ADR-019](decisions/ADR-019-external-woocommerce-store.md)). The WooCommerce MCP server can talk to a store that is not installed by this chart. It then uses **HTTP Basic over HTTPS** (the consumer key as user name, the consumer secret as password). **Verified 2026-10-23:** the MCP server in this mode against the local WooCommerce 11.2.1 over HTTPS with TLS verification on (`scripts\dev	est-external-store.ps1`). **Rendered, not installed:** the chart's external mode was rendered and linted but not installed on a cluster. A real remote store is **not tested**.
+Phase 5b (Task 5b.5, [ADR-019](decisions/ADR-019-external-woocommerce-store.md)). The WooCommerce MCP server can talk to a store that is not installed by this chart. It then uses **HTTP Basic over HTTPS** (the consumer key as user name, the consumer secret as password). **Verified 2026-10-23:** the MCP server in this mode against the local WooCommerce 11.2.1 over HTTPS with TLS verification on (`scripts\dev\test-external-store.ps1`). **Rendered, not installed:** the chart's external mode was rendered and linted but not installed on a cluster. A real remote store is **not tested**.
 
 1. **Create the REST key on that store.** In its admin: WooCommerce > Settings > Advanced > REST API > Add key. Choose a user that may manage the shop (a shop manager is enough) and the permission **Read/Write**. WooCommerce shows the key and secret once.
 2. **Create the Secret in the `mcp` namespace.** Put the two values in files that are not in the repository, create the Secret from the files, then delete them. The commands contain no secret values:

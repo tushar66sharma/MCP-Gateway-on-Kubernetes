@@ -514,7 +514,7 @@ Verified 2026-10-19 with SQL against the live database (section 7): one key row,
 
 ### A store hosted elsewhere (Phase 5b)
 
-`scripts\dev	est-external-store.ps1 [-Write]` proves the HTTPS Basic mode against the local store: it creates a throw-away CA, a temporary TLS Secret and Ingress (`ext-proof*`) in `store`, runs the built server on the host with TLS verification on, runs the smoke client, runs a negative control without the CA, and removes everything. It prints no key, secret or token. Setting up a real external store: [deployment guide](deployment.md#using-a-woocommerce-store-hosted-elsewhere).
+`scripts\dev\test-external-store.ps1 [-Write]` proves the HTTPS Basic mode against the local store: it creates a throw-away CA, a temporary TLS Secret and Ingress (`ext-proof*`) in `store`, runs the built server on the host with TLS verification on, runs the smoke client, runs a negative control without the CA, and removes everything. It prints no key, secret or token. Setting up a real external store: [deployment guide](deployment.md#using-a-woocommerce-store-hosted-elsewhere).
 
 ## 9. The gateway (Phase 3)
 
