@@ -1,6 +1,7 @@
 // Topic-check probe: sends each case in apps/gateway/test/fixtures/topic-probe-cases.json to Groq
 // with the topic-check system prompt and prints ALLOW/BLOCK per case.
-// Usage: node scripts/dev/topic-probe.mjs [--model llama-3.1-8b-instant] [--runs 1] [--effort low] [--max 8]
+// Defaults reproduce the recorded result for the chosen model: openai/gpt-oss-20b, reasoning effort low, max 64 tokens (ADR-020).
+// Usage: node scripts/dev/topic-probe.mjs [--model openai/gpt-oss-20b] [--runs 1] [--effort low] [--max 64]
 // The key is read from the git-ignored .env (or the environment) and never printed.
 // Output has no prompt text and no model text beyond the one-word verdict.
 import { readFileSync } from 'node:fs';
@@ -11,10 +12,10 @@ const argValue = (name, fallback) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : fallback;
 };
-const model = argValue('--model', 'llama-3.1-8b-instant');
+const model = argValue('--model', 'openai/gpt-oss-20b');
 const runs = Number(argValue('--runs', '1'));
-const effort = argValue('--effort');
-const maxTokens = Number(argValue('--max', '8'));
+const effort = argValue('--effort', 'low');
+const maxTokens = Number(argValue('--max', '64'));
 const BASE_URL = 'https://api.groq.com/openai/v1';
 const KEY_ENV = 'GROQ_API_KEY';
 const MIN_GAP_MS = 2500;

@@ -32,7 +32,7 @@ const toolNames = (traces: AgentToolTrace[]): string[] => traces.map((t) => t.na
 /**
  * One agent turn per call, as `user` (ADR-010): a loopback MCP client whose every request carries a
  * fresh internal token for this user, the per-user limits (one turn in flight, CHAT_RATE_LIMIT_PER_MIN
- * a minute), the daily token budget (checked before the turn), the on-topic check (ADR-018), the turn
+ * a minute), the daily token budget (checked before the turn), the on-topic check (ADR-020), the turn
  * timeout, and one `chat turn` log line. Message content is never logged.
  * `deps.llm` is read on each call (null → LLM_NOT_CONFIGURED before any MCP connection).
  */

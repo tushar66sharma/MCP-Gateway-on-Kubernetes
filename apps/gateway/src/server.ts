@@ -24,7 +24,7 @@ export interface GatewayDeps {
   repo: UpstreamRepository;
   /** The chat model (Phase 4); null when no LLM key is configured (chat answers LLM_NOT_CONFIGURED). */
   llm: LlmProvider | null;
-  /** The small model for the on-topic check (ADR-018); null = no check. */
+  /** The small model for the on-topic check (ADR-020); null = no check. */
   topicLlm: LlmProvider | null;
 }
 

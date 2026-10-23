@@ -152,7 +152,7 @@ spec:
               value: {{ $g.chat.maxSteps | quote }}
             - name: CHAT_RATE_LIMIT_PER_MIN
               value: {{ $g.chat.rateLimitPerMin | quote }}
-            # Guardrails (ADR-018): the on-topic check and the per-user daily token budget.
+            # Guardrails (ADR-020): the on-topic check and the per-user daily token budget.
             - name: CHAT_TOPIC_CHECK
               value: {{ $g.chat.topicCheck | quote }}
             - name: CHAT_TOPIC_CHECK_MODEL

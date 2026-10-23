@@ -109,7 +109,7 @@ export const auditLogs = pgTable(
 export type User = typeof users.$inferSelect;
 export type UpstreamServerRow = typeof upstreamServers.$inferSelect;
 
-/** Chat tokens spent per user and budget day (the day is computed in STORE_TIMEZONE, ADR-018). */
+/** Chat tokens spent per user and budget day (the day is computed in STORE_TIMEZONE, ADR-020). */
 export const chatUsageDaily = pgTable(
   'chat_usage_daily',
   {
