@@ -1,6 +1,6 @@
 # Definition-of-done demo script
 
-This is the end-to-end walk-through that shows the whole platform working. Every step has the exact command or click and the result expected. **Every step was run on 2026-10-23** on a freshly recreated cluster (the numbers in "Expected" are what that run printed); the clicks in the dashboard use the same API calls the commands below use, which the Playwright smoke (`scripts\check-dashboard.ps1`) also exercises. Claude Code is left for you to try (step 6b), because it changes your Claude configuration.
+This is the end-to-end walk-through that shows the whole platform working. Every step has the exact command or click and the result expected. **What was actually run on 2026-10-23**, on a freshly recreated cluster: the steps were executed at **API level** (login, chat, invite, accept, key creation, revoke, disable, listing servers, audit) with a scratch PowerShell script, plus the real MCP Inspector CLI for steps 6 and 9.3, plus `kubectl` for the pod kill. The numbers in "Expected" are what those calls returned. The dashboard pages use the same API calls, and `scripts\check-dashboard.ps1` (Playwright) separately exercises the Overview, Servers, a key dialog and a chat page in Chromium; but **nobody clicked through this exact script in a browser**. Click-level expectations that were not observed are marked "(not click-verified)". Claude Code is left for you to try (step 6b), because it changes your Claude configuration.
 
 Two people are used: **user A** is the administrator (`admin@example.com`), **user B** is a team member invited in step 4.
 
@@ -27,13 +27,13 @@ Nothing here prints a password, key or invite link. Commands read secrets into v
 ## 1. User A logs in to the dashboard
 
 1. Open <http://app.localhost/> and sign in as `admin@example.com`, pasting the password.
-2. Expected: the Overview page lists three connected servers (`woo`, `notes`, `utils`) and 15 tools.
+2. Expected: the Overview page lists three connected servers (`woo`, `notes`, `utils`) and 15 tools (the API returns this; the Overview page itself is covered by the Playwright smoke, not by clicking this script: not click-verified).
 
 ## 2. User A asks the chat for a cross-server task
 
 1. Click **Chat** and send: `Create a draft product called Demo Lamp priced 25 and save a note reminding me to publish it.`
 2. Expected: the reply says the draft was created and the note saved, and the trace shows two calls, both **Succeeded**: `woo__create_product` (arguments `name: "Demo Lamp"`, `regular_price: "25"`, `status: "draft"`) and `notes__create_note`. Observed 2026-10-23: product #14 as a draft, note #2, provider `groq`, model `openai/gpt-oss-120b`, 5,159 tokens.
-3. Check in the store: <http://store.localhost/wp-admin/edit.php?post_type=product> shows **Demo Lamp** as a **Draft** at 25.
+3. Check in the store: <http://store.localhost/wp-admin/edit.php?post_type=product> shows **Demo Lamp** as a **Draft** at 25 (the API reply said draft #14 at 25; the wp-admin page was not opened: not click-verified).
 
 This step spends free-tier LLM tokens (about 5,000). The chat acts as user A: the same permissions, audit log and tools as `/mcp`.
 
@@ -46,12 +46,12 @@ This step spends free-tier LLM tokens (about 5,000). The chat acts as user A: th
 
 1. Click **Team** > **Invite**, enter an email such as `demo-b@example.com`, role **member**, and create the invite. Copy the one-time link (it is shown once).
 2. Open the link in a **private window**, enter a name and a password of at least 10 characters, and accept.
-3. Expected: user B lands in the dashboard, logged in; the Team page (user A) no longer lists the invite as pending. The nginx log of the dashboard shows the page only as `/invite/:token` (check: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invite-log.ps1` prints `Invite-log check passed`).
+3. Expected: user B lands in the dashboard, logged in; the invite is no longer pending (`GET /api/invites` returned 0 pending invites after the accept; the Team page itself: not click-verified). The nginx log of the dashboard shows the page only as `/invite/:token` (check: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-invite-log.ps1` prints `Invite-log check passed`).
 
 ## 5. User B creates an API key
 
 1. As user B, open **API keys** > **Create key**, name it `demo-inspector`, and create it.
-2. Expected: a dialog shows the key (starts with `ugw_`) once; tick "I have copied the key" to close it. Put it into an environment variable **without printing it**, for example by pasting it at the prompt:
+2. Expected: the API returns the key once (observed: `201`); the one-time dialog (starts with `ugw_`, Close disabled until ticked) is covered by the Playwright smoke but was not clicked in this script (not click-verified); tick "I have copied the key" to close it. Put it into an environment variable **without printing it**, for example by pasting it at the prompt:
 
    ```powershell
    $sec = Read-Host "Paste user B's key" -AsSecureString
@@ -92,7 +92,7 @@ The run guide has the command, [Connect Claude Code](run-guide.md#connect-claude
 
 1. User A: **Team**, row of user B, **Disable**.
 2. In user B's browser window click any page (or reload).
-3. Expected: user B is sent to the login page; `GET /api/auth/me` with B's session answers **401** (observed: `200` before, `401` after). B cannot log in again until re-enabled.
+3. Expected: `GET /api/auth/me` with B's session answers **401** (observed: `200` before, `401` after). That B is then sent to the login page in the browser, and cannot log in again until re-enabled, were not click-verified.
 
 ## 9. A server pod dies and recovers
 
