@@ -8,6 +8,9 @@ export interface OpenAiCompatibleOptions {
   model: string;
   timeoutMs: number;
   maxRetries: number;
+  maxTokensParam: 'max_completion_tokens' | 'max_tokens';
+  /** Output cap used when a request sets none. */
+  defaultMaxOutputTokens: number;
   extraHeaders?: Record<string, string>;
   extraBody?: Record<string, unknown>;
 }
@@ -84,6 +87,11 @@ function errorCodeOf(text: string): string | undefined {
   }
 }
 
+function finishReasonOf(raw: unknown): LlmChatResult['finishReason'] {
+  if (typeof raw !== 'string') return undefined;
+  return raw === 'stop' || raw === 'length' || raw === 'tool_calls' ? raw : 'other';
+}
+
 function retryAfterOf(res: Response): number | undefined {
   const v = Number(res.headers.get('retry-after'));
   return Number.isFinite(v) && v > 0 ? Math.ceil(v) : undefined;
@@ -129,12 +137,13 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
     const toolCalls = isRecord(msg) ? parseToolCalls(msg.tool_calls) : null;
     if (!isRecord(msg) || toolCalls === null) return { error: badResponse(), retryable: false };
     const usage = parseUsage(isRecord(json) ? json.usage : undefined);
+    const finishReason = finishReasonOf(isRecord(first) ? first.finish_reason : undefined);
     const message: ChatMessage = {
       role: 'assistant',
       content: typeof msg.content === 'string' ? msg.content : null,
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
     };
-    return { result: { message, toolCalls, ...(usage ? { usage } : {}), provider: opts.name, model: opts.model } };
+    return { result: { message, toolCalls, ...(usage ? { usage } : {}), ...(finishReason ? { finishReason } : {}), provider: opts.name, model: opts.model } };
   }
 
   async function attemptOnce(r: LlmChatRequest, headers: Record<string, string>, body: string): Promise<Attempt> {
@@ -171,10 +180,11 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
     const body = JSON.stringify({
       model: opts.model,
       messages: r.messages.map(toWireMessage),
-      tools: r.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
-      tool_choice: 'auto',
+      ...(r.tools.length > 0
+        ? { tools: r.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })), tool_choice: 'auto' }
+        : {}),
       temperature: 0.2,
-      max_completion_tokens: 2048,
+      [opts.maxTokensParam]: r.maxOutputTokens ?? opts.defaultMaxOutputTokens,
       ...opts.extraBody,
     });
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}`, ...opts.extraHeaders };

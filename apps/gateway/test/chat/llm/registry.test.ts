@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { createLlmFromConfig, llmStatusOf, type LlmConfig } from '../../../src/chat/llm/registry.js';
+import { describe, expect, it, vi } from 'vitest';
+import { createLlmFromConfig, createTopicCheckLlm, TOPIC_CHECK_MAX_OUTPUT_TOKENS, llmStatusOf, type LlmConfig } from '../../../src/chat/llm/registry.js';
 import { LlmError } from '../../../src/chat/llm/errors.js';
 
 const BASE: LlmConfig = {
@@ -12,6 +12,10 @@ const BASE: LlmConfig = {
   OPENROUTER_API_KEY: 'or-secret-key',
   LLM_TIMEOUT_MS: 30000,
   LLM_MAX_RETRIES: 0,
+  LLM_MAX_OUTPUT_TOKENS: 1024,
+  CHAT_TOPIC_CHECK: true,
+  CHAT_TOPIC_CHECK_MODEL: '',
+  CHAT_TOPIC_CHECK_TIMEOUT_MS: 5000,
 };
 
 const okResponse = () => new Response(JSON.stringify({ choices: [{ message: { content: 'from fallback' } }] }), { status: 200 });
@@ -27,7 +31,57 @@ function fakeFetch(handler: (url: string) => Response) {
 
 const request = () => ({ messages: [{ role: 'user' as const, content: 'hi' }], tools: [], signal: new AbortController().signal, deadline: Date.now() + 60000 });
 
+describe('createTopicCheckLlm', () => {
+  it('uses the topic model, no retries and the short timeout', async () => {
+    const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const f = (async (url: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return new Response('{}', { status: 503 });
+    }) as typeof fetch;
+    const llm = createTopicCheckLlm({ ...BASE, LLM_MAX_RETRIES: 2, LLM_TIMEOUT_MS: 30000 }, { fetch: f, sleep: async () => {}, random: () => 0 })!;
+    expect(llm.name).toBe('groq');
+    expect(llm.model).toBe('openai/gpt-oss-20b');
+    await expect(llm.chat({ ...request(), maxOutputTokens: TOPIC_CHECK_MAX_OUTPUT_TOKENS })).rejects.toMatchObject({ code: 'LLM_UNAVAILABLE' });
+    expect(seen).toHaveLength(1); // no retry, no fallback
+    expect(seen[0]!.url).toContain('groq');
+    expect(seen[0]!.body.model).toBe('openai/gpt-oss-20b');
+    expect(seen[0]!.body.reasoning_effort).toBe('low');
+    expect(seen[0]!.body.max_completion_tokens).toBe(64);
+    expect(TOPIC_CHECK_MAX_OUTPUT_TOKENS).toBe(64);
+  });
+
+  it('uses the short timeout, not LLM_TIMEOUT_MS', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout');
+    const f = (async () => okResponse()) as typeof fetch;
+    await createTopicCheckLlm({ ...BASE, LLM_TIMEOUT_MS: 30000, CHAT_TOPIC_CHECK_TIMEOUT_MS: 1234 }, { fetch: f })!.chat(request());
+    expect(spy).toHaveBeenCalledWith(1234);
+    spy.mockRestore();
+  });
+
+  it('honours CHAT_TOPIC_CHECK_MODEL and uses the main model for openrouter', () => {
+    expect(createTopicCheckLlm({ ...BASE, CHAT_TOPIC_CHECK_MODEL: 'custom/model' })!.model).toBe('custom/model');
+    const or = createTopicCheckLlm({ ...BASE, LLM_PROVIDER: 'openrouter', LLM_MODEL: 'main/model', LLM_FALLBACK_PROVIDER: 'groq' })!;
+    expect(or.name).toBe('openrouter');
+    expect(or.model).toBe('main/model');
+  });
+
+  it('returns null when CHAT_TOPIC_CHECK is false or the primary has no key', () => {
+    expect(createTopicCheckLlm({ ...BASE, CHAT_TOPIC_CHECK: false })).toBeNull();
+    expect(createTopicCheckLlm({ ...BASE, GROQ_API_KEY: '' })).toBeNull();
+  });
+});
+
 describe('LLM registry', () => {
+  it('applies LLM_MAX_OUTPUT_TOKENS to main-model calls', async () => {
+    let body: Record<string, unknown> = {};
+    const f = (async (_u: string | URL | Request, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return okResponse();
+    }) as typeof fetch;
+    await createLlmFromConfig({ ...BASE, LLM_MAX_OUTPUT_TOKENS: 300 }, { fetch: f })!.chat(request());
+    expect(body.max_completion_tokens).toBe(300);
+  });
+
   it('returns null without a primary key', () => {
     expect(createLlmFromConfig({ ...BASE, GROQ_API_KEY: '' })).toBeNull();
   });

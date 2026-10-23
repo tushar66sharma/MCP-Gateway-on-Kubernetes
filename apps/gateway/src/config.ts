@@ -34,6 +34,8 @@ export interface Config extends LlmConfig {
   CHAT_TURN_TIMEOUT_MS: number;
   CHAT_MAX_STEPS: number;
   CHAT_RATE_LIMIT_PER_MIN: number;
+  /** Tokens one user may spend on chat per day (topic check included); 0 = unlimited. */
+  CHAT_DAILY_TOKEN_BUDGET: number;
   /** Audited /mcp authentication failures allowed per client IP per minute before 429. */
   MCP_AUTH_FAILURE_LIMIT_PER_MIN: number;
   /** IANA zone the chat agent uses to resolve "today"; validated, default UTC. */
@@ -166,6 +168,11 @@ const appFields = z.object({
   OPENROUTER_API_KEY: z.string().trim().default(''),
   LLM_TIMEOUT_MS: intRange(30000, 5000, 120000),
   LLM_MAX_RETRIES: intRange(2, 0, 5),
+  LLM_MAX_OUTPUT_TOKENS: intRange(1024, 256, 4096),
+  CHAT_TOPIC_CHECK: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
+  CHAT_TOPIC_CHECK_MODEL: z.string().trim().default(''),
+  CHAT_TOPIC_CHECK_TIMEOUT_MS: intRange(5000, 1000, 15000),
+  CHAT_DAILY_TOKEN_BUDGET: intRange(50000, 0, 10_000_000),
   CHAT_TURN_TIMEOUT_MS: intRange(60000, 10000, 120000),
   CHAT_MAX_STEPS: intRange(8, 1, 16),
   CHAT_RATE_LIMIT_PER_MIN: intRange(10, 1, 120),

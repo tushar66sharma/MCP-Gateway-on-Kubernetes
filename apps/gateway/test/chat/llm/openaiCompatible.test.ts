@@ -11,7 +11,7 @@ interface Call {
   body: Record<string, unknown>;
 }
 
-function setup(responses: Array<Response | Error>, opts: { maxRetries?: number } = {}) {
+function setup(responses: Array<Response | Error>, opts: { maxRetries?: number; maxTokensParam?: 'max_completion_tokens' | 'max_tokens'; defaultMaxOutputTokens?: number } = {}) {
   const calls: Call[] = [];
   const delays: number[] = [];
   let i = 0;
@@ -26,7 +26,7 @@ function setup(responses: Array<Response | Error>, opts: { maxRetries?: number }
     return r.clone();
   }) as typeof fetch;
   const provider = createOpenAiCompatible(
-    { name: 'groq', baseUrl: 'https://llm.test/v1', apiKey: 'test-key', model: 'm1', timeoutMs: 30000, maxRetries: opts.maxRetries ?? 2, extraBody: { reasoning_effort: 'low' } },
+    { name: 'groq', baseUrl: 'https://llm.test/v1', apiKey: 'test-key', model: 'm1', timeoutMs: 30000, maxRetries: opts.maxRetries ?? 2, maxTokensParam: opts.maxTokensParam ?? 'max_completion_tokens', defaultMaxOutputTokens: opts.defaultMaxOutputTokens ?? 1024, extraBody: { reasoning_effort: 'low' } },
     {
       fetch: fetchFn,
       sleep: async (ms) => {
@@ -94,10 +94,42 @@ describe('openai-compatible provider', () => {
     expect(b.tools[0]!.type).toBe('function');
     expect(b.tools[0]!.function.name).toBe('woo__list_orders');
     expect(b.temperature).toBe(0.2);
-    expect(b.max_completion_tokens).toBe(2048);
+    expect(b.max_completion_tokens).toBe(1024);
     expect(b.reasoning_effort).toBe('low');
     expect(b.messages[2]).toEqual({ role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'woo__list_orders', arguments: '{}' } }] });
     expect(b.messages[3]).toEqual({ role: 'tool', tool_call_id: 'c1', content: '{"orders":[]}' });
+  });
+
+  it('sends max_completion_tokens to groq and max_tokens to openrouter', async () => {
+    const g = setup([json(okBody({ content: 'ok' }))]);
+    await g.provider.chat(req());
+    expect(g.calls[0]!.body.max_completion_tokens).toBe(1024);
+    expect(g.calls[0]!.body).not.toHaveProperty('max_tokens');
+    await g.provider.chat(req({ maxOutputTokens: 64 }));
+    expect(g.calls[1]!.body.max_completion_tokens).toBe(64);
+
+    const o = setup([json(okBody({ content: 'ok' }))], { maxTokensParam: 'max_tokens', defaultMaxOutputTokens: 512 });
+    await o.provider.chat(req());
+    expect(o.calls[0]!.body.max_tokens).toBe(512);
+    expect(o.calls[0]!.body).not.toHaveProperty('max_completion_tokens');
+    await o.provider.chat(req({ maxOutputTokens: 64 }));
+    expect(o.calls[1]!.body.max_tokens).toBe(64);
+  });
+
+  it('omits tools when the list is empty', async () => {
+    const { provider, calls } = setup([json(okBody({ content: 'ok' }))]);
+    await provider.chat(req({ tools: [] }));
+    expect(calls[0]!.body).not.toHaveProperty('tools');
+    expect(calls[0]!.body).not.toHaveProperty('tool_choice');
+  });
+
+  it('maps finish_reason', async () => {
+    const reasons: Array<[unknown, string | undefined]> = [['stop', 'stop'], ['length', 'length'], ['tool_calls', 'tool_calls'], ['content_filter', 'other'], [undefined, undefined]];
+    for (const [raw, want] of reasons) {
+      const { provider } = setup([json({ choices: [{ message: { content: 'x' }, ...(raw !== undefined ? { finish_reason: raw } : {}) }] })]);
+      const r = await provider.chat(req());
+      expect(r.finishReason).toBe(want);
+    }
   });
 
   it('parses tool_calls and usage', async () => {

@@ -151,6 +151,11 @@ describe('loadConfig', () => {
       CHAT_TURN_TIMEOUT_MS: 60000,
       CHAT_MAX_STEPS: 8,
       CHAT_RATE_LIMIT_PER_MIN: 10,
+      LLM_MAX_OUTPUT_TOKENS: 1024,
+      CHAT_TOPIC_CHECK: true,
+      CHAT_TOPIC_CHECK_MODEL: '',
+      CHAT_TOPIC_CHECK_TIMEOUT_MS: 5000,
+      CHAT_DAILY_TOKEN_BUDGET: 50000,
       STORE_TIMEZONE: 'UTC',
     });
   });
@@ -162,9 +167,14 @@ describe('loadConfig', () => {
   });
 
   it('bounds the LLM and chat numbers and the provider id', () => {
-    for (const [k, v] of [['CHAT_TURN_TIMEOUT_MS', '9999'], ['CHAT_MAX_STEPS', '17'], ['CHAT_RATE_LIMIT_PER_MIN', '0'], ['LLM_TIMEOUT_MS', '4999'], ['LLM_MAX_RETRIES', '6'], ['LLM_PROVIDER', 'gemini'], ['LLM_BASE_URL', 'not a url']] as const) {
+    for (const [k, v] of [['CHAT_TURN_TIMEOUT_MS', '9999'], ['CHAT_MAX_STEPS', '17'], ['CHAT_RATE_LIMIT_PER_MIN', '0'], ['LLM_TIMEOUT_MS', '4999'], ['LLM_MAX_RETRIES', '6'], ['LLM_PROVIDER', 'gemini'], ['LLM_MAX_OUTPUT_TOKENS', '255'], ['LLM_MAX_OUTPUT_TOKENS', '4097'], ['CHAT_TOPIC_CHECK', 'maybe'], ['CHAT_TOPIC_CHECK_TIMEOUT_MS', '999'], ['CHAT_TOPIC_CHECK_TIMEOUT_MS', '15001'], ['CHAT_DAILY_TOKEN_BUDGET', '-1'], ['CHAT_DAILY_TOKEN_BUDGET', '10000001'], ['LLM_BASE_URL', 'not a url']] as const) {
       expect(errorOf(validEnv({ [k]: v })).message, k).toContain(k);
     }
+  });
+
+  it('accepts the guardrail variable bounds and CHAT_TOPIC_CHECK=false', () => {
+    const c = loadConfig(validEnv({ LLM_MAX_OUTPUT_TOKENS: '256', CHAT_TOPIC_CHECK: 'false', CHAT_TOPIC_CHECK_MODEL: ' m ', CHAT_TOPIC_CHECK_TIMEOUT_MS: '15000', CHAT_DAILY_TOKEN_BUDGET: '0' }));
+    expect(c).toMatchObject({ LLM_MAX_OUTPUT_TOKENS: 256, CHAT_TOPIC_CHECK: false, CHAT_TOPIC_CHECK_MODEL: 'm', CHAT_TOPIC_CHECK_TIMEOUT_MS: 15000, CHAT_DAILY_TOKEN_BUDGET: 0 });
   });
 
   it('LLM_BASE_URL accepts only http(s) or empty, naming the variable only', () => {
