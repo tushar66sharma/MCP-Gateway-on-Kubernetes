@@ -14,6 +14,9 @@
 #      certificate error;
 #   6. cleanup: stops the processes, deletes the temporary Ingress and Secret and the CA files, and shows
 #      `kubectl -n store get ingress,secret` before and after.
+# Preflight (before anything is created or deleted): refuses with exit 1 and changes nothing unless the tools and
+# the build output are present, the current kubectl context is k3d-urumi, and neither ingress ext-proof nor secret
+# ext-proof-tls exists in namespace store (an existing one is left in place; the cleanup only runs after the preflight).
 # Never prints the key, the secret or the token. NODE_TLS_REJECT_UNAUTHORIZED is never set.
 [CmdletBinding()]
 param([switch]$Write, [string]$WorkDir = '')
@@ -25,6 +28,7 @@ $tlsSecret = 'ext-proof-tls'
 if (-not $WorkDir) { $WorkDir = Join-Path ([IO.Path]::GetTempPath()) ('urumi-ext-proof-' + [guid]::NewGuid().ToString('N')) }
 $script:procs = @()
 $script:failed = $false
+$script:armed = $false
 
 function Stop-WithError([string]$Message) { Write-Host "ERROR: $Message" -ForegroundColor Red; $script:failed = $true; throw $Message }
 function Step([string]$m) { Write-Host "`n== $m" -ForegroundColor Cyan }
@@ -70,15 +74,27 @@ function Invoke-Smoke([int]$port, [string]$token, [bool]$withWrite) {
   finally { Remove-Item Env:MCP_TOKEN -ErrorAction SilentlyContinue }
 }
 
-try {
-  foreach ($t in 'kubectl', 'node') { if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { Stop-WithError "'$t' not found on PATH." } }
-  $openssl = (Get-Command openssl -ErrorAction SilentlyContinue).Source
-  if (-not $openssl) { $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe' }
-  if (-not (Test-Path $openssl)) { Stop-WithError 'openssl not found (it ships with Git for Windows: usr\bin\openssl.exe).' }
-  if (-not (Test-Path (Join-Path $root 'apps\mcp-woocommerce\dist\main.js'))) { Stop-WithError 'apps/mcp-woocommerce is not built: run `npm run build` from the repository root.' }
-  if (-not (Test-Path (Join-Path $root 'node_modules/@modelcontextprotocol/client'))) { Stop-WithError 'Dependencies not installed: run `npm ci` from the repository root.' }
-  if (& kubectl -n store get ingress $ingressName 2>$null) { Stop-WithError "ingress $ingressName already exists in namespace store; delete it first." }
+# Preflight: runs BEFORE the try block, so a refusal exits without touching the cluster (no cleanup runs).
+function Stop-Preflight([string]$m) { Write-Host "ERROR: $m" -ForegroundColor Red; exit 1 }
+foreach ($t in 'kubectl', 'node') { if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { Stop-Preflight "'$t' not found on PATH." } }
+$openssl = (Get-Command openssl -ErrorAction SilentlyContinue).Source
+if (-not $openssl) { $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe' }
+if (-not (Test-Path $openssl)) { Stop-Preflight 'openssl not found (it ships with Git for Windows: usr\bin\openssl.exe).' }
+if (-not (Test-Path (Join-Path $root 'apps\mcp-woocommerce\dist\main.js'))) { Stop-Preflight 'apps/mcp-woocommerce is not built: run `npm run build` from the repository root.' }
+if (-not (Test-Path (Join-Path $root 'node_modules/@modelcontextprotocol/client'))) { Stop-Preflight 'Dependencies not installed: run `npm ci` from the repository root.' }
+# The context is the first kubectl call: nothing is read from or written to any other cluster.
+$ctx = ''
+$ctxOut = (& kubectl config current-context 2>$null)
+if ($LASTEXITCODE -eq 0 -and $ctxOut) { $ctx = ([string]$ctxOut).Trim() }
+if ($ctx -ne 'k3d-urumi') { Stop-Preflight "Refusing to run against context '$ctx' (use k3d-urumi). Nothing was changed." }
+foreach ($kind in @(@('ingress', $ingressName), @('secret', $tlsSecret))) {
+  $found = (& kubectl -n store get $kind[0] $kind[1] --ignore-not-found --no-headers 2>$null)
+  if ($LASTEXITCODE -ne 0) { Stop-Preflight "Could not query $($kind[0]) $($kind[1]) in namespace store (is the cluster running?). Nothing was changed." }
+  if ($found) { Stop-Preflight "$($kind[0]) $($kind[1]) already exists in namespace store; it was left in place. Delete it yourself if it is a leftover, then re-run. Nothing was changed." }
+}
 
+$script:armed = $true   # set only after the preflight passed: the cleanup in finally runs only then
+try {
   Step 'Before'
   Show-Store 'before'
 
@@ -193,14 +209,16 @@ catch {
   Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
 }
 finally {
-  Step '6. Cleanup'
-  foreach ($p in $script:procs) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
-  & kubectl -n store delete ingress $ingressName --ignore-not-found 2>&1 | Write-Host
-  & kubectl -n store delete secret $tlsSecret --ignore-not-found 2>&1 | Write-Host
-  Start-Sleep -Milliseconds 500
-  if (Test-Path $WorkDir) { Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue }
-  Write-Host ("work directory removed: " + (-not (Test-Path $WorkDir)))
-  Show-Store 'after'
+  if ($script:armed) {
+    Step '6. Cleanup'
+    foreach ($p in $script:procs) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+    & kubectl -n store delete ingress $ingressName --ignore-not-found 2>&1 | Write-Host
+    & kubectl -n store delete secret $tlsSecret --ignore-not-found 2>&1 | Write-Host
+    Start-Sleep -Milliseconds 500
+    if (Test-Path $WorkDir) { Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue }
+    Write-Host ("work directory removed: " + (-not (Test-Path $WorkDir)))
+    Show-Store 'after'
+  }
 }
 if ($script:failed) { exit 1 }
 Write-Host "`nExternal-store proof passed." -ForegroundColor Green
