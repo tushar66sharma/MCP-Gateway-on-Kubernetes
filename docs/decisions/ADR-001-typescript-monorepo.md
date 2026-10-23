@@ -28,7 +28,7 @@ We use one repository and one language, TypeScript, organised as an **npm worksp
 - Type-safe sharing: a change to the shared MCP bootstrap is checked by the compiler in every service.
 - Docker builds must be careful about the build context (each image needs the root lockfile and `packages/shared`), which makes the multi-stage Dockerfiles slightly more involved than for isolated repos.
 - npm workspaces provide no build caching or task graph; with five packages this is acceptable.
-- The repository structure is a decision here; the workspaces and packages are created in later phases.
+- The repository structure is a decision here; the workspaces and packages are created in later phases. (Update 2026-10-23: the workspaces and packages were created in Phases 1-5.)
 
 ## Revisit if
 

@@ -93,7 +93,7 @@ npm start -w @urumi/mcp-woocommerce          # listens on http://127.0.0.1:3001/
 From the repository root:
 
 ```powershell
-npm test               # all workspaces (2026-10-19: 33 shared + 77 mcp-woocommerce tests)
+npm test               # all workspaces (2026-10-23: 55 shared + 77 mcp-woocommerce tests; all workspaces 671)
 npm run typecheck
 npm run lint
 ```

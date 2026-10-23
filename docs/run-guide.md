@@ -1,6 +1,6 @@
 # Run guide
 
-How to run, use and inspect every part of the project, written for someone new to Kubernetes. Every phase extends this guide. Parts that are not built yet are marked **(planned — Phase N)** and contain no commands.
+How to run, use and inspect every part of the project, written for someone new to Kubernetes. Every phase extended this guide; it is final as of Phase 6 and nothing in it is planned. Statements about things that were not run are labelled **expected** or **not tested**.
 
 Statements are either **verified** (run on the reference machine, with the date) or labelled **expected**.
 
@@ -15,6 +15,8 @@ Statements are either **verified** (run on the reference machine, with the date)
 > 5. Need the admin password? `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-admin-password.ps1` copies it to your clipboard (user `admin`).
 > 6. The team dashboard is <http://app.localhost/>: log in as `admin@example.com` with the password that `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password` copies to your clipboard ([the dashboard](#the-dashboard-phase-4)). For the AI chat, follow [Set up the AI chat](#set-up-the-ai-chat) once.
 > 7. Done for the day: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop.ps1` (keeps your data).
+
+The repository [README](../README.md#11-complete-local-installation-and-setup) has the short beginner sequence and links here for detail.
 
 All commands are run from the repository root in **Windows PowerShell 5.1**. The folder path contains spaces on the reference machine; the scripts quote their own paths, so just `cd` into the folder first.
 
@@ -701,6 +703,8 @@ Remove-Item "$env:TEMP\mcp-body.json"
 Without an `MCP-Protocol-Version` header the answer arrives as one server-sent event (`event: message` then `data: {...}`); with `MCP-Protocol-Version: 2026-07-28` and a `_meta` block it is plain JSON, as in the captured examples in [learning/03-gateway.md](learning/03-gateway.md#5-captured-traffic). Without the `Authorization` header you get `401`.
 
 ### Connect Claude Code
+
+The full definition-of-done walk-through, including the two-server prompt to run in Claude Code, is [demo-script.md](demo-script.md).
 
 Claude Code is Anthropic's coding assistant. It can use the gateway as an MCP server, so its 15 tools (`notes__...`, `utils__...`, `woo__...`) become available inside Claude Code. You need a gateway key first (create one as shown above, or on the dashboard's Keys page).
 

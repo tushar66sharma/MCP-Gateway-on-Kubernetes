@@ -6,14 +6,14 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 
 - Every diagram is a fenced `mermaid` code block in a Markdown file.
 - Every diagram is accompanied by text that explains the **actors or components involved, the sequence of operations, and the important decision points** (including what happens on failure).
-- A diagram is updated in the same change that alters the workflow it depicts. A diagram must never describe behavior that is not implemented; planned diagrams stay marked as planned until the code exists.
+- A diagram is updated in the same change that alters the workflow it depicts. A diagram must never describe behavior that is not implemented.
 - Diagrams that belong to a single narrative (for example the architecture overview) may live in the document that explains them, and are indexed here.
 
 ## Diagram index
 
 | Diagram | Shows | Where | Status |
 |---|---|---|---|
-| Architecture overview | Clients, Traefik, the three namespaces, upstream MCP servers, LLM | [architecture.md](../architecture.md) | Available (target architecture; everything in it is built since Phase 4 except the NetworkPolicies, Phase 5) |
+| Architecture overview | Clients, Traefik, the three namespaces, upstream MCP servers, LLM | [architecture.md](../architecture.md) | Available (everything in it is built and was run on the local cluster; the NetworkPolicies, Pod Security and the production values were added in Phase 5) |
 | Hello-world request path | How a request reaches a pod through Traefik, Ingress and Service on the local cluster | [learning/01-kubernetes-primer.md](../learning/01-kubernetes-primer.md) | Available |
 | Store install sequence | `deploy.ps1` to Helm to the hook Job, with decision points | [workflows.md](../workflows.md) | Available (Phase 1) |
 | Store checkout sequence | A customer placing a Cash-on-delivery order on the store | [workflows.md](../workflows.md) | Available (Phase 1; expected flow, verified by the manual exit check) |
@@ -42,6 +42,6 @@ Diagrams are written in [Mermaid](https://mermaid.js.org/) inside Markdown files
 | The LLM layer | Route, service, agent, registry, the one OpenAI-compatible adapter configured for Groq and OpenRouter | [ai-integration.md](../ai-integration.md#1-the-layer) | Available (Phase 4) |
 | Admin edits a server sequence | The form's origin check, `PATCH` with SSRF and the origin rule, encryption, upsert and health check | [workflows.md](../workflows.md#16-an-admin-edits-a-server-and-the-url-origin-rule) | Available (Phase 4; component and API tests, not run live) |
 | NetworkPolicy map | Which pods may talk to which | [network-policies.md](network-policies.md) | Available (Phase 5, Task 5.3; verified live by `scripts/test-network-policies.ps1` on 2026-10-22) |
-| Helm / Kubernetes resource map | Resources created by the chart per namespace | Planned | (planned) — Phase 6 (Phase 5 added the [NetworkPolicy map](network-policies.md) instead) |
+| Helm / Kubernetes resource map | Every object the chart renders per namespace (`store`, `mcp`, `gateway`, the release namespace `urumi-system`), the hook Job and the CronJob, with a table and the objects that depend on values | [helm-resource-map.md](helm-resource-map.md) | Available (Phase 6; generated from `helm template` on 2026-10-23, not read from a live cluster) |
 
-Planned diagrams will be added to this directory (or to the relevant document) in the phase shown, and this index updated at the same time.
+Every diagram in this index exists; none is planned. A new diagram is added here in the same change that creates it.
