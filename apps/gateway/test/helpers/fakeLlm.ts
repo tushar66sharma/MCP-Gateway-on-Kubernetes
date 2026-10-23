@@ -9,14 +9,15 @@ export interface SeenRequest {
   tools: ToolSpec[];
   deadline: number;
   signal: AbortSignal;
+  maxOutputTokens: number | undefined;
 }
 
 const USAGE: Usage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 };
 
 /** A provider that answers from a script, one step per chat() call; an exhausted script throws. */
 export class ScriptedLlm implements LlmProvider {
-  readonly name = 'fake';
-  readonly model = 'fake-model';
+  name = 'fake';
+  model = 'fake-model';
   requests: SeenRequest[] = [];
   private steps: LlmStep[] = [];
 
@@ -32,7 +33,7 @@ export class ScriptedLlm implements LlmProvider {
   }
 
   async chat(r: LlmChatRequest): Promise<LlmChatResult> {
-    this.requests.push({ messages: structuredClone(r.messages), tools: structuredClone(r.tools), deadline: r.deadline, signal: r.signal });
+    this.requests.push({ messages: structuredClone(r.messages), tools: structuredClone(r.tools), deadline: r.deadline, signal: r.signal, maxOutputTokens: r.maxOutputTokens });
     const step = this.steps.shift();
     if (step === undefined) throw new Error('ScriptedLlm: script exhausted');
     if (step instanceof Error) throw step;

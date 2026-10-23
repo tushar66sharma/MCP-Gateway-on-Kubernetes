@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt } from '../../src/chat/systemPrompt.js';
+import { buildSystemPrompt, REFUSAL_TEXT } from '../../src/chat/systemPrompt.js';
 
 describe('buildSystemPrompt', () => {
   it('gives the date, time and weekday in the store time zone', () => {
@@ -33,5 +33,13 @@ describe('buildSystemPrompt', () => {
     const text = buildSystemPrompt({ now: new Date('2026-10-19T08:00:00Z'), storeTimeZone: 'Asia/Kolkata', userName: 'Bo' });
     expect(text).toMatch(/currency/i);
     expect(text).toMatch(/never infer it from the time zone/i);
+  });
+
+  it("the system prompt contains the scope rule and the refusal text", () => {
+    const text = buildSystemPrompt({ now: new Date("2026-10-19T08:00:00Z"), storeTimeZone: "UTC", userName: "Bo" });
+    expect(REFUSAL_TEXT).toBe("I can only help with this store, your notes and small utility tasks (calculations, dates and times) in this dashboard.");
+    expect(text).toContain(
+      `- Only help with this store, the user's notes, small utility tasks and how to use this dashboard. For anything else, reply with exactly: "${REFUSAL_TEXT}"`,
+    );
   });
 });

@@ -15,6 +15,8 @@ export const TIMEOUT_REPLY = 'This took too long and was stopped. The actions li
 export const TIMEOUT_NO_ACTIONS_REPLY = 'This took too long and was stopped. No actions ran.';
 /** Replaces an empty final answer: the API rejects empty messages, so an empty reply would break the next request. */
 export const EMPTY_REPLY = "I couldn't produce an answer. Try rephrasing your question.";
+/** Appended to a final reply the model had to cut at the output cap (finish reason `length`). */
+export const SHORTENED_NOTE = ' (Answer shortened.)';
 export const maxStepsReply = (n: number): string => `I stopped after ${n} tool steps without a final answer. Try a narrower question.`;
 
 export interface AgentToolTrace {
@@ -28,7 +30,7 @@ export interface AgentToolTrace {
 export interface AgentTurnResult {
   reply: string;
   toolCalls: AgentToolTrace[];
-  stoppedReason: 'final' | 'max_steps' | 'timeout' | 'client_closed';
+  stoppedReason: 'final' | 'max_steps' | 'timeout' | 'client_closed' | 'off_topic';
   usage: Usage;
   provider: string;
   model: string;
@@ -164,7 +166,11 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<AgentTurnResult
       usage.totalTokens += res.usage.totalTokens;
     }
 
-    if (res.toolCalls.length === 0) return result((res.message.content ?? '').trim() || EMPTY_REPLY, 'final');
+    if (res.toolCalls.length === 0) {
+      const text = (res.message.content ?? '').trim();
+      if (text === '') return result(EMPTY_REPLY, 'final');
+      return result(res.finishReason === 'length' ? text + SHORTENED_NOTE : text, 'final');
+    }
     if (steps >= o.maxSteps) return result(maxStepsReply(o.maxSteps), 'max_steps');
     steps += 1;
 
