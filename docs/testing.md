@@ -2,7 +2,7 @@
 
 > **Status: end of Phase 5b.** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent, the LLM layer, the `/mcp` failure limit and the migration lock), the dashboard's component tests, the Playwright browser smoke, and the Phase 5 scripts (`scripts/smoke-test.ps1`, `test-network-policies.ps1`, `validate-chart.ps1`, `check-invite-log.ps1`). Phase 5b added tests for the chat guardrails, the budget, the external-store client and the dashboard budget UI (see the table "Phase 5b tests" below). The complete strategy and a coverage statement are Phase 6.
 
-**Phase 5b (2026-10-23, final verification): 655 tests, all passing** (shared 55, dashboard 132, gateway 353 in 32 files, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 76). The per-run table for the three back-to-back root runs is in the "Phase 5b final verification" section at the end of this file; the older tables below are the Phase 5 numbers, kept as history.
+**Phase 5b (2026-10-23, final verification): 655 tests, all passing** (shared 55, dashboard 132, gateway 353 in 32 files, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 76). The three back-to-back root runs are in the "Phase 5b final verification" section below; the older tables below are the Phase 5 numbers, kept as history.
 
 Test counts in the next paragraph and table come from the Phase 5 final-review fix wave on 2026-10-23 (`npm test` from the repository root: **606 tests, all passing**: shared 55, dashboard 123, gateway 319, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
 
@@ -180,6 +180,23 @@ Cluster checks added in Phase 5b (not part of `npm test`):
 - `scripts\dev\test-external-store.ps1` proves the Basic-auth mode live against the local WooCommerce over HTTPS (run guide, [a store hosted elsewhere](run-guide.md#a-store-hosted-elsewhere-phase-5b)); `scripts\dev\test-internal-upstream.ps1` proves an in-cluster server in two namespaces and cleans up after itself.
 - `scripts\dev\topic-probe.mjs` replays the 28 labelled prompts of `apps/gateway/test/fixtures/topic-probe-cases.json` against Groq to choose and re-check the topic-check model (it spends free-plan quota, so it is run by hand, never by `npm test`).
 - `wp search-replace --dry-run` against the local store ([deployment guide](deployment.md#when-the-public-address-changes)): count only, nothing written.
+
+## Phase 5b final verification (2026-10-23)
+
+Run on branch `phase-5b-guardrails-external-store` after the last code change, on the local k3d cluster:
+
+| Check | Result |
+|---|---|
+| `npm test` from the root, three runs back to back | 655/655 each time (shared 55, dashboard 132, gateway 353 in 32 files, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 76). Gateway durations 61.9 s, 60.9 s, 55.2 s |
+| `npm run typecheck`, `npm run lint`, `npm run build` | all clean |
+| `scripts\validate-chart.ps1` (Docker running) | 116 PASS, 0 FAIL, "All checks passed"; kubeconform valid for both values files; the only WARN is the known placeholder warning for `deploy/values-prod.yaml` |
+| `helm lint` with the default, local and prod values | 0 charts failed (only the "icon is recommended" note) |
+| `scripts\up.ps1 -Redeploy` | all pods 1/1 (the `store-setup` and `wp-cron` Job pods are Completed, as designed) |
+| `scripts\smoke-test.ps1` | 8 of 8 steps PASS (it sends 1 live chat turn) |
+| Link check over `docs/` and `README.md` (relative links and anchors) | 797 links, 0 broken |
+| Secret scan of the diff from `d57c8ae` to `HEAD` | no key, token, private key or password value found; five pattern hits were all test fixtures or Secret names |
+
+**One flaky run, recorded honestly.** In an earlier set of three runs, run 2 reported one gateway test file failing (346 of 353 tests passed) while I was running other work (a link checker, a secret scan and `kubectl`) on the same machine; the output of that file was not kept, and runs 1 and 3 of that set passed. A clean set of three further runs, with nothing else running, passed 655/655 each time. This matches the "Known flakiness" note above (memory pressure from PGlite and argon2 in parallel workers is suspected, not proven); the cause of that one failure is **not known**.
 
 ## 6. Not yet in place
 
