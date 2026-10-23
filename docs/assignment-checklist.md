@@ -1,6 +1,6 @@
 # Assignment checklist
 
-Every mandatory requirement and every "definition of done" bullet of the assignment, with where it is in the repository and how it was verified. Wording of the definition of done is the assignment's, word for word (page 3); requirement wording is shortened.
+Every mandatory requirement and every "definition of done" bullet of the assignment, with where it is in the repository and how it was verified. The definition of done is quoted verbatim from the assignment (page 3); one two-part bullet ("See the tools of every enabled server, and ask the same orders question successfully.") is split across two rows; requirement wording is shortened.
 
 Labels: **tested** = pinned by an automated test (`npm test`, 671 tests, 2026-10-23, [testing.md](testing.md)); **live** = run on the local k3d cluster on the date given; **rendered** = checked on the output of `helm template` with `deploy/values-local.yaml` on 2026-10-23; **expected** = follows from the code or documentation, not run; **owner's live step** = to be done in the demo video, not by a script. `scripts\smoke-test.ps1` (8 steps) passed 8 of 8 on 2026-10-23 and runs the `check-*.ps1` scripts named below.
 
