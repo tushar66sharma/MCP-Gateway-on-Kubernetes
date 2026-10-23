@@ -249,7 +249,7 @@ Then run `wsl --shutdown` and restart Docker Desktop. Why: [setup log](docs/lear
 ### Step 3. Get the code and install the packages
 
 ```powershell
-git clone <repository URL> MCP-Gateway-on-Kubernetes
+git clone https://github.com/tushar66sharma/MCP-Gateway-on-Kubernetes.git MCP-Gateway-on-Kubernetes
 cd MCP-Gateway-on-Kubernetes
 npm ci
 npx playwright install chromium   # optional, once: only for the browser checks
@@ -303,6 +303,8 @@ Log in at <http://app.localhost/> (step 8), open **Servers**: `notes`, `utils` a
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1 -Quick
 ```
+
+Step 4 (the hosts entries) is needed here: the gateway check (`check-gateway.ps1`, which runs `node` against `http://app.localhost`) and, without `-Quick`, the dashboard check stop with a "does not resolve" error if `app.localhost` does not resolve on your machine. The WooCommerce, MCP-server and network-policy checks use `kubectl` and port-forwards and do not need it.
 
 It prints a PASS/FAIL table (pods, WooCommerce, MCP servers, gateway end to end, network-policy probes, invite-log check). Without `-Quick` it also drives the dashboard in a browser (this needs the `npx playwright install chromium` from step 3) and runs `npm audit`, and it spends one live chat turn when the AI key is set.
 

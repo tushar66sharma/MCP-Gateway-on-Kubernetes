@@ -22,7 +22,7 @@ The Phase 2 spike (Task 2.1) tested this. It built servers and clients in a scra
 **Limitations of the evidence:**
 
 - **Clients covered:** the v1 SDK client (`@modelcontextprotocol/sdk` 1.32.1, which speaks `2025-11-25`), the v2 client (`legacy`, `auto` and `pin`/modern modes) and MCP Inspector 2.11.0 CLI (`legacy`, `auto` and `modern` eras).
-- **Claude Code and Cursor are not yet tested.** The `claude` CLI is not on PATH on the spike machine. (Update 2026-10-23: Claude Code was not verified in Phase 3 or later; neither it nor Cursor has been tested against the gateway, see [testing.md](../testing.md#5-cluster-checks).)
+- **Claude Code and Cursor are not yet tested.** The `claude` CLI is not on PATH on the spike machine. Claude Code is verified against the gateway in Phase 3. (Update 2026-10-23: that did not happen; neither Claude Code nor Cursor has been tested against the gateway, see [testing.md](../testing.md#5-cluster-checks).)
 - **Two kinds of client behaviour were not covered:**
   - clients that require an `Mcp-Session-Id` (the server never issues one);
   - clients that require the GET SSE stream (the server answers `405`).
@@ -45,7 +45,7 @@ The Phase 2 spike (Task 2.1) tested this. It built servers and clients in a scra
 
 - **Serve HTTP with `createMcpHandler(factory)`, mounted through `toNodeHandler`.** The default `legacy: 'stateless'` posture serves 2026-07-28 clients on the modern path. It also answers 2025-era clients (`initialize` handshake) with a fresh stateless instance per request, from the same tool definition. GET and DELETE on `/mcp` get `405`.
 
-  On one endpoint this was verified with the v1 SDK client, the v2 client (auto/legacy/modern) and MCP Inspector 2.11.0. Claude Code and Cursor are not tested (still the case on 2026-10-23).
+  On one endpoint this was verified with the v1 SDK client, the v2 client (auto/legacy/modern) and MCP Inspector 2.11.0. Claude Code and Cursor are not yet tested. (Update 2026-10-23: still not tested.)
 - **Do not** use `NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined })` (the example in the express/node READMEs). It serves the 2025 era only (see matrix).
 - **Do not** use `legacy: 'reject'`. It locks out every 2025-era client.
 - **Clients set `versionNegotiation: { mode: 'auto' }`.** The v2 `Client` defaults to `'legacy'`, the plain 2025 handshake. `'auto'` probes `server/discover` and falls back to `initialize`, so the gateway can reach both v2 and v1 upstreams. Pinning `{ pin: '2026-07-28' }` fails against any 2025-era server.

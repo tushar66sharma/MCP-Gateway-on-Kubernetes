@@ -239,7 +239,7 @@ data: {"result":{"content":[{"type":"text","text":"Server 'utils' is disabled or
 What it shows:
 
 - It is **HTTP 200** with `isError: true`, not an HTTP error: the call reached the gateway, was authenticated and was routed, and the tool itself failed. The model (or a person) reads the text and decides.
-- The text is the gateway's own `Server '<slug>' is disabled or unreachable` (`apps/gateway/src/upstreams/manager.ts:201-203`). The upstream was **not contacted**: no connection is open to a server in that state, so the answer is instant and the other servers are not slowed.
+- The text is the gateway's own `Server '<slug>' is disabled or unreachable` (`apps/gateway/src/upstreams/manager.ts:201-203`). The upstream was **not contacted**: no connection is open to a server in that state, so the code returns this text before any connection is attempted (reading the code path; no timing was measured) and nothing waits on that server.
 - The audit row for it: `tool_call`, source `mcp`, user B, server `utils`, tool `calculate`, outcome **`denied`**, message `Server 'utils' is disabled or unreachable`.
 - Meanwhile `woo__list_products` through the same gateway returned HTTP 200 (the other servers keep working). The same `utils__calculate` call returned `6*7 = 42` once `utils` was connected again (19.9 s after the kill, a health check every 15 s); `utils` showed `unreachable` after 3.7 s.
 - A different case, not captured: if the pod dies **during** a call (the server still looks `connected`), the caller gets `Upstream 'utils' is unreachable: <reason>`, outcome `error`, and the server is marked unreachable at once (`manager.ts:224-227`, **tested**).
