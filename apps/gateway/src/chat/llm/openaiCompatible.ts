@@ -23,6 +23,8 @@ export interface LlmRuntime {
 }
 
 const MAX_RETRY_AFTER_SEC = 20;
+/** Used when a request sets no temperature (every main-model call). */
+const DEFAULT_TEMPERATURE = 0.2;
 
 /** Resolves after ms; rejects as soon as the signal aborts. */
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -183,7 +185,7 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
       ...(r.tools.length > 0
         ? { tools: r.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })), tool_choice: 'auto' }
         : {}),
-      temperature: 0.2,
+      temperature: r.temperature ?? DEFAULT_TEMPERATURE,
       [opts.maxTokensParam]: r.maxOutputTokens ?? opts.defaultMaxOutputTokens,
       ...opts.extraBody,
     });

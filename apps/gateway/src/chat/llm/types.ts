@@ -34,6 +34,8 @@ export interface LlmChatRequest {
   deadline: number;
   /** Output cap for this call; undefined = the provider's configured default (LLM_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
+  /** Sampling temperature for this call; undefined = 0.2 (every main-model call). The topic check uses 0. */
+  temperature?: number;
 }
 
 export interface LlmChatResult {

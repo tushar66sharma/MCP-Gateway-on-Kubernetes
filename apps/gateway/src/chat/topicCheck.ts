@@ -24,26 +24,36 @@ const neutralise = (text: string): string => text.replace(/<\s*(\/?)\s*(previous
 const clip = (text: string, max: number, keep: 'start' | 'end'): string => (text.length <= max ? text : keep === 'start' ? text.slice(0, max) : text.slice(-max));
 
 /**
+ * The exact user message the topic check sends: the previous assistant message (only when the message just
+ * before the last one is a non-empty assistant message) and the last message, both neutralised and clipped.
+ * Shared with scripts/dev/topic-probe.mjs (through the build output), so the probe measures what production sends.
+ */
+export function buildTopicInput(history: ChatMessage[]): string {
+  const last = history.at(-1);
+  const before = history.at(-2);
+  const message = clip(neutralise(last?.content ?? ''), USER_MESSAGE_MAX_CHARS, 'start');
+  const previous = before?.role === 'assistant' && before.content ? clip(neutralise(before.content), PREVIOUS_ASSISTANT_MAX_CHARS, 'end') : '';
+  return `${previous ? `<previous_assistant>${previous}</previous_assistant>\n` : ''}<user_message>${message}</user_message>`;
+}
+
+/**
  * Asks the small model whether the last user message is on topic. Fails open: any error, timeout or
  * unrecognised reply allows the turn (the scope rule in the system prompt still applies). Never logs.
  */
 export async function checkTopic(llm: LlmProvider | null, history: ChatMessage[], signal: AbortSignal, deadline = Date.now() + DEFAULT_WINDOW_MS): Promise<TopicCheckResult> {
   if (!llm) return { verdict: 'allow', outcome: 'skipped' };
-  const last = history.at(-1);
-  const before = history.at(-2);
-  const message = clip(neutralise(last?.content ?? ''), USER_MESSAGE_MAX_CHARS, 'start');
-  const previous = before?.role === 'assistant' && before.content ? clip(neutralise(before.content), PREVIOUS_ASSISTANT_MAX_CHARS, 'end') : '';
-  const content = `${previous ? `<previous_assistant>${previous}</previous_assistant>\n` : ''}<user_message>${message}</user_message>`;
   try {
     const res = await llm.chat({
       messages: [
         { role: 'system', content: TOPIC_SYSTEM_PROMPT },
-        { role: 'user', content },
+        { role: 'user', content: buildTopicInput(history) },
       ],
       tools: [],
       signal,
       deadline,
       maxOutputTokens: TOPIC_CHECK_MAX_OUTPUT_TOKENS,
+      // Deterministic verdicts; the topic probe measures the prompt at temperature 0 too.
+      temperature: 0,
     });
     const word = (res.message.content ?? '').trim().split(/\s+/)[0]?.toUpperCase().replace(/[^A-Z]/g, '') ?? '';
     const usage = res.usage;

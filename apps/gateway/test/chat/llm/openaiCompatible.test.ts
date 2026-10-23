@@ -116,6 +116,16 @@ describe('openai-compatible provider', () => {
     expect(o.calls[1]!.body.max_tokens).toBe(64);
   });
 
+  it('sends the request temperature when given; the default stays 0.2', async () => {
+    const { provider, calls } = setup([json(okBody({ content: 'ok' }))]);
+    await provider.chat(req());
+    expect(calls[0]!.body.temperature).toBe(0.2);
+    await provider.chat(req({ temperature: 0 }));
+    expect(calls[1]!.body.temperature).toBe(0);
+    await provider.chat(req({ temperature: 0.7 }));
+    expect(calls[2]!.body.temperature).toBe(0.7);
+  });
+
   it('omits tools when the list is empty', async () => {
     const { provider, calls } = setup([json(okBody({ content: 'ok' }))]);
     await provider.chat(req({ tools: [] }));

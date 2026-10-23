@@ -10,6 +10,7 @@ export interface SeenRequest {
   deadline: number;
   signal: AbortSignal;
   maxOutputTokens: number | undefined;
+  temperature: number | undefined;
 }
 
 const USAGE: Usage = { promptTokens: 10, completionTokens: 5, totalTokens: 15 };
@@ -33,7 +34,7 @@ export class ScriptedLlm implements LlmProvider {
   }
 
   async chat(r: LlmChatRequest): Promise<LlmChatResult> {
-    this.requests.push({ messages: structuredClone(r.messages), tools: structuredClone(r.tools), deadline: r.deadline, signal: r.signal, maxOutputTokens: r.maxOutputTokens });
+    this.requests.push({ messages: structuredClone(r.messages), tools: structuredClone(r.tools), deadline: r.deadline, signal: r.signal, maxOutputTokens: r.maxOutputTokens, temperature: r.temperature });
     const step = this.steps.shift();
     if (step === undefined) throw new Error('ScriptedLlm: script exhausted');
     if (step instanceof Error) throw step;
