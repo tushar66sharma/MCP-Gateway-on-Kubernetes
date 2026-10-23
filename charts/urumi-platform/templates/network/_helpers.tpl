@@ -31,3 +31,14 @@
         matchLabels:
           app.kubernetes.io/name: traefik
 {{- end }}
+
+{{/* SSRF_ALLOWED_INTERNAL_HOSTS: the mcp namespace plus each unique gateway.internalUpstreams namespace. */}}
+{{- define "urumi.ssrfAllowedHosts" -}}
+{{- $nss := list .Values.namespaces.mcp }}
+{{- range $u := (.Values.gateway.internalUpstreams | default list) }}
+{{- if not (has $u.namespace $nss) }}{{ $nss = append $nss $u.namespace }}{{ end }}
+{{- end }}
+{{- $hosts := list }}
+{{- range $n := $nss }}{{ $hosts = append $hosts (printf "*.%s.svc.cluster.local" $n) }}{{ end }}
+{{- join "," $hosts -}}
+{{- end }}

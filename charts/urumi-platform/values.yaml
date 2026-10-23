@@ -153,6 +153,16 @@ gateway:
   healthTimeoutMs: 5000
   callTimeoutMs: 20000    # must stay greater than mcpWoocommerce.timeoutMs (10000)
   mcpAuthFailureLimitPerMin: 30   # audited /mcp auth failures per client IP per minute, then 429
+  # MCP servers that run inside this cluster, outside the three built-in ones. Each entry opens its namespace
+  # in the gateway's SSRF allow-list (*.<namespace>.svc.cluster.local) and gives the gateway egress to that
+  # namespace on TCP <port> (only pods matching podLabels when given). For a namespace equal to namespaces.mcp the
+  # chart also renders the Ingress NetworkPolicy; other namespaces must admit the gateway in their own policies.
+  # Default: none.
+  internalUpstreams: []
+  #  - namespace: tools          # DNS label
+  #    port: 3010                # TCP port of the server (1-65535)
+  #    podLabels:                # optional: only pods with these labels
+  #      app.kubernetes.io/name: my-mcp-server
   # AI chat model. Names only: the API keys live in the llm-api-keys Secret (secrets.existing.llmApiKeys).
   llm:
     provider: groq          # groq | openrouter

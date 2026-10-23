@@ -90,7 +90,7 @@ spec:
             - name: MCP_AUTH_FAILURE_LIMIT_PER_MIN
               value: {{ $g.mcpAuthFailureLimitPerMin | quote }}
             - name: SSRF_ALLOWED_INTERNAL_HOSTS
-              value: {{ printf "*.%s.svc.cluster.local" .Values.namespaces.mcp | quote }}
+              value: {{ include "urumi.ssrfAllowedHosts" . | quote }}
             - name: GATEWAY_ENCRYPTION_KEY
               valueFrom: { secretKeyRef: { name: {{ $sec }}, key: encryption-key } }
             - name: GATEWAY_INTERNAL_TOKEN_SECRET

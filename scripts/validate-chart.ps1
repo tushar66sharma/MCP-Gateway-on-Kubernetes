@@ -329,6 +329,63 @@ Case-Set 'external store: a /33 CIDR is rejected' @('--set', $okUrl, '--set', $o
 Case-Set 'external store: an https URL with a path and a Secret name is accepted' @('--set', 'mcpWoocommerce.externalStore.url=https://shop.example.com/blog', '--set', $okSecret) $true
 Case-Set 'non-boolean store.enabled is rejected' @('--set-string', 'store.enabled=yes') $false 'store'
 
+# --- Task 5b.6: gateway.internalUpstreams (in-cluster MCP servers; ADR-016 addendum) ---------------------------
+function Write-Values([string]$yaml) {
+  $f = Join-Path $tmp ([guid]::NewGuid().ToString('N') + '.yaml')
+  [IO.File]::WriteAllText($f, $yaml)
+  return $f
+}
+function Get-SsrfValue([string]$text) {
+  if ($text -match '(?m)^\s+- name: SSRF_ALLOWED_INTERNAL_HOSTS\r?\n\s+value: "([^"]*)"') { return $Matches[1] }
+  return $null
+}
+function Get-NetpolDocs([string]$text) {
+  return @($text -split '(?m)^---\s*$' | Where-Object { $_ -match '(?m)^kind: NetworkPolicy' })
+}
+$emptyVals = Write-Values "gateway:`n  internalUpstreams: []`n"
+$cmpEmpty = Compare-ToMainRender 'internalUpstreams-empty' $emptyVals
+Report "internalUpstreams: [] renders exactly main $mainCommit's objects ($($cmpEmpty.Count) objects, $($cmpEmpty.Network) NetworkPolicies)" $cmpEmpty.Ok $cmpEmpty.Detail
+Report 'default SSRF_ALLOWED_INTERNAL_HOSTS is *.mcp.svc.cluster.local only' ((Get-SsrfValue $r.Out) -eq '*.mcp.svc.cluster.local')
+$defNetpols = (Get-NetpolDocs $r.Out).Count
+
+$mcpVals = Write-Values "gateway:`n  internalUpstreams:`n    - namespace: mcp`n      port: 3010`n      podLabels:`n        app.kubernetes.io/name: mcp-extra`n"
+$ri = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '-f', $mcpVals)
+Report 'internalUpstreams entry in mcp renders' ($ri.Code -eq 0) $ri.Out
+$riNp = Get-NetpolDocs $ri.Out
+$riGw = $riNp | Where-Object { $_ -match '(?m)^  name: gateway\s*$' } | Select-Object -First 1
+Report 'entry in mcp: gateway egress rule to namespace mcp, pod label mcp-extra, TCP 3010' ([bool]($riGw -and
+    $riGw -match '(?s)kubernetes\.io/metadata\.name: mcp\s+podSelector:\s+matchLabels:\s+app\.kubernetes\.io/name: mcp-extra\s+ports:\s+- \{ protocol: TCP, port: 3010 \}'))
+$riIng = $riNp | Where-Object { $_ -match '(?m)^  name: mcp-internal-upstream-0\s*$' -and $_ -match '(?m)^  namespace: mcp\s*$' } | Select-Object -First 1
+Report 'entry in mcp: Ingress policy in mcp selects the pod labels, from the gateway pods only, TCP 3010' ([bool]($riIng -and
+    $riIng -match 'policyTypes: \[Ingress\]' -and $riIng -match '(?s)spec:\s+podSelector:\s+matchLabels:\s+app\.kubernetes\.io/name: mcp-extra\s+policyTypes' -and
+    $riIng -match 'kubernetes\.io/metadata\.name: gateway' -and $riIng -match 'app\.kubernetes\.io/name: gateway' -and
+    $riIng -match 'protocol: TCP, port: 3010' -and $riIng -notmatch '(?m)^  egress:'))
+Report 'entry in mcp: SSRF value stays *.mcp.svc.cluster.local (one entry)' ((Get-SsrfValue $ri.Out) -eq '*.mcp.svc.cluster.local')
+Report 'entry in mcp: exactly one NetworkPolicy is added' ((Get-NetpolDocs $ri.Out).Count -eq ($defNetpols + 1))
+
+$toolsVals = Write-Values "gateway:`n  internalUpstreams:`n    - namespace: tools-test`n      port: 3010`n"
+$rt = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '-f', $toolsVals)
+Report 'internalUpstreams entry in tools-test renders' ($rt.Code -eq 0) $rt.Out
+$rtNp = Get-NetpolDocs $rt.Out
+$rtGw = $rtNp | Where-Object { $_ -match '(?m)^  name: gateway\s*$' } | Select-Object -First 1
+Report 'entry in tools-test: gateway egress to namespace tools-test on TCP 3010 (no pod selector without podLabels)' ([bool]($rtGw -and
+    $rtGw -match '(?s)- namespaceSelector:\s+matchLabels:\s+kubernetes\.io/metadata\.name: tools-test\s+ports:\s+- \{ protocol: TCP, port: 3010 \}'))
+Report 'entry in tools-test: SSRF value adds *.tools-test.svc.cluster.local' ((Get-SsrfValue $rt.Out) -eq '*.mcp.svc.cluster.local,*.tools-test.svc.cluster.local')
+Report 'entry in tools-test: no new NetworkPolicy and nothing rendered in tools-test' (($rtNp.Count -eq $defNetpols) -and ($rt.Out -notmatch '(?m)^  namespace: tools-test\s*$'))
+
+$dupVals = Write-Values "gateway:`n  internalUpstreams:`n    - namespace: tools-test`n      port: 3010`n    - namespace: tools-test`n      port: 3011`n    - namespace: mcp`n      port: 3012`n"
+$rd = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '-f', $dupVals)
+Report 'duplicate namespaces give one SSRF entry each (mcp default first, tools-test once)' (($rd.Code -eq 0) -and ((Get-SsrfValue $rd.Out) -eq '*.mcp.svc.cluster.local,*.tools-test.svc.cluster.local')) $rd.Out
+$rdGw = (Get-NetpolDocs $rd.Out) | Where-Object { $_ -match '(?m)^  name: gateway\s*$' } | Select-Object -First 1
+Report 'duplicate namespaces: one egress rule per entry (ports 3010, 3011, 3012)' ([bool]($rdGw -and $rdGw -match 'port: 3010 ' -and $rdGw -match 'port: 3011 ' -and $rdGw -match 'port: 3012 '))
+Case-Lint 'internalUpstreams port 0 is rejected' "gateway:`n  internalUpstreams:`n    - namespace: tools`n      port: 0`n" $false
+Case-Lint 'internalUpstreams port 65536 is rejected' "gateway:`n  internalUpstreams:`n    - namespace: tools`n      port: 65536`n" $false
+Case-Lint 'internalUpstreams namespace Bad_NS is rejected' "gateway:`n  internalUpstreams:`n    - namespace: `"Bad_NS`"`n      port: 3010`n" $false
+Case-Lint 'internalUpstreams entry without a port is rejected' "gateway:`n  internalUpstreams:`n    - namespace: tools`n" $false
+Case-Lint 'internalUpstreams podLabels with a non-string value is rejected' "gateway:`n  internalUpstreams:`n    - namespace: tools`n      port: 3010`n      podLabels:`n        app: 5`n" $false
+Case-Lint 'internalUpstreams unknown entry key is rejected' "gateway:`n  internalUpstreams:`n    - namespace: tools`n      port: 3010`n      host: x`n" $false
+Case-Lint 'a valid internalUpstreams entry with podLabels is accepted' "gateway:`n  internalUpstreams:`n    - namespace: tools`n      port: 3010`n      podLabels:`n        app: x`n" $true
+
 # --- Task 5.6: deploy.ps1 guards, run against a throw-away kubeconfig so no real cluster is touched -----------
 function Invoke-DeployGuard([string]$contextName, [string]$valuesFile) {
   $kc = Join-Path $tmp ('kc-' + [guid]::NewGuid().ToString('N') + '.yaml')

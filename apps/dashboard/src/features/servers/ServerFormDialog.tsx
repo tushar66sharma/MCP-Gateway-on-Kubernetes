@@ -34,10 +34,12 @@ const AUTH_OPTIONS = [
   { value: 'header', label: 'Custom header' },
 ];
 
+const SSRF_HINT = 'In-cluster servers must be listed in the chart setting gateway.internalUpstreams.';
+
 /** Maps an API failure onto the field it is about; whatever has no field becomes the form-level message. */
 function apiErrorToFormErrors(err: unknown): FormErrors {
   if (err instanceof ApiError) {
-    if (err.code === 'SSRF_REJECTED') return { url: err.message };
+    if (err.code === 'SSRF_REJECTED') return { url: `${err.message} ${SSRF_HINT}` };
     if (err.code === 'CONFLICT') return { slug: err.message };
     if (err.code === 'VALIDATION_FAILED') return issuesToErrors(err.details, err.message);
   }
