@@ -248,7 +248,7 @@ Source: the run is recorded in [demo-script.md](../demo-script.md#kill-the-pod-o
 
 ## 6. Likely interview questions (short answers)
 
-- **Why a cached catalog and not live fan-out?** One slow or dead upstream must not slow or break everyone's `tools/list`. The cost is up to about 20 s of staleness, which the isolation check measured as 4-16 s.
+- **Why a cached catalog and not live fan-out?** One slow or dead upstream must not slow or break everyone's `tools/list`. The cost is up to about 20 s of staleness, which was measured as: isolation check 2026-10-19, gone in 4-12 s and back in 16 s; pod kill 2026-10-23, 3.7 s and 19.9 s.
 - **Why SHA-256 for keys but argon2 for passwords?** Entropy. A random 32-byte key cannot be guessed, so a fast hash is safe and cheap per request; a human password can, so the hash must be slow.
 - **Why encrypt the upstream credentials instead of hashing them?** The gateway has to send them. AES-GCM with the row id as associated data, key in a Kubernetes Secret: a database dump alone is not enough.
 - **What is token passthrough and why not do it?** Forwarding the client's token to the upstream. Then the upstream would have to trust gateway-issued keys and a compromised upstream would hold user keys. We keep the two credentials separate.

@@ -13,7 +13,7 @@ React 19.3.1, React Router 8.5.0 (data router), TanStack Query 5.104.4, Radix UI
 | Command | Does |
 |---|---|
 | `npm run dev -w @urumi/dashboard` | Dev server at `http://localhost:5173` (fixed port). `/api` and `/mcp` are proxied to `http://app.localhost`, so the cluster must be running. |
-| `npm test -w @urumi/dashboard` | 113 component tests in 19 files (jsdom), about 12 s. Only `test/**/*.test.{ts,tsx}`; the Playwright specs never run here. |
+| `npm test -w @urumi/dashboard` | 133 component tests in 19 files (jsdom), about 12 s. Only `test/**/*.test.{ts,tsx}`; the Playwright specs never run here. |
 | `npm run typecheck -w @urumi/dashboard` | `tsc` for the app and for `e2e/`. |
 | `npm run build -w @urumi/dashboard` | Type-check and production build into `dist/` (no source maps). Vite warns that the single JS chunk is over 500 kB (about 570 kB, known). |
 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dashboard.ps1` | The Playwright smoke against the deployed dashboard, desktop (1440 px) and mobile (390 px). Once: `npx playwright install chromium`. |

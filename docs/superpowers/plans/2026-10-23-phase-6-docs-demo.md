@@ -245,6 +245,8 @@ No product behaviour changes.
 
 ### Task 6.5: Demo-video outline and interview preparation
 
+> Update 2026-10-23: the demo-video outline and interview Q&A are kept by the owner outside the repository (owner decision).
+
 **Files:**
 - Create `docs/demo-video-outline.md`. It has the assignment's **6 required sections**, in order, each with:
   - a target time (total about 20–25 min, the owner may trim);
@@ -311,5 +313,5 @@ No product behaviour changes.
 - **The two short notes** cover their required points. The stand-out list is honest.
 - **The technical docs** have no stale "planned/partial" statuses for built things, and the diagram set is complete, including the Helm resource map.
 - **The README** was followed from a fresh clone with every gap fixed. The screenshots are current and secret-free.
-- **The demo-video outline and interview Q&A** exist, with checked code pointers.
+- **The demo-video outline and interview Q&A** (update 2026-10-23: kept by the owner outside the repository, owner decision) exist, with checked code pointers.
 - **Checks:** all tests and checks pass, the links resolve, and the secret scan is clean.

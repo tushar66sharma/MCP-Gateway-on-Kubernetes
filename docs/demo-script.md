@@ -80,7 +80,17 @@ npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --t
 
 ### Revoke B's key
 
-As user B, **API keys > Revoke** on `demo-inspector`; then repeat the `tools/list` command.
+As user B, **API keys > Revoke** on `demo-inspector`; then repeat the call on camera with one of these two commands (the key comes from `$env:UGW_KEY`, never typed or printed):
+
+```powershell
+# a) Inspector CLI: prints the Unauthorized error (exit 3)
+npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer $env:UGW_KEY" --method tools/list --stored-auth-only
+
+# b) plain request: shows the 401
+try { Invoke-WebRequest -UseBasicParsing -Method Post -Uri http://app.localhost/mcp -Headers @{ Authorization = "Bearer $env:UGW_KEY"; Accept = 'application/json, text/event-stream' } -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' } catch { $_.Exception.Response.StatusCode.value__ }
+```
+
+Command a) with `--stored-auth-only` and a direct `POST /mcp` were run on 2026-10-23 (command b) as typed here was not run; it needs PowerShell 5.1's `Invoke-WebRequest`, which raises an error on 401, hence the `catch`). Without `--stored-auth-only`, Inspector's default mode may start an interactive OAuth flow in a real terminal; that was not observed, so use a) or b).
 
 Observed: revoke `204`; a direct `POST /mcp` with the revoked key returned **HTTP 401** (`{"jsonrpc":"2.0","error":{"code":-32001,"message":"Unauthorized"},"id":null}`). The Inspector treats a 401 as an OAuth challenge: in a terminal without a TTY its default mode prints `auth_required ... Interactive OAuth requires a TTY`; with `--stored-auth-only` it prints the underlying `Error POSTing to endpoint: ... "code":-32001,"message":"Unauthorized"` (both exit 3). So the 401 is plain only with a direct request or `--stored-auth-only`. (verified via API; click-through not run)
 
@@ -103,13 +113,9 @@ Observed: `utils` showed `unreachable` (`lastError` `connection refused`) after 
 
 ## 5. Audit
 
-Open **Audit log**, or call the API as user A with the time filter below (observed rows are from the run, `from` = the start of the run):
+In the video, open the dashboard **Audit log** page as user A (filters: user, server, tool, outcome, time). To read the same rows through the API, use the login snippet in the run guide ([Log in and create an API key](run-guide.md#log-in-and-create-an-api-key-powershell-51)), which defines `$base` and the logged-in session `$s`, and then call `/api/audit?from=<start-iso>&limit=100` (add `&userId=<B's id>` for one user). The rows below were read that way, with `from` = the start of the run.
 
-```powershell
-Invoke-RestMethod -Uri "$base/api/audit?from=<start-iso>&limit=100" -WebSession $s     # all users (admin); add &userId=<B's id> for one user
-```
-
-Observed rows (oldest first; user B in the rows is the first invited member, `demo-b-...160055`; `-` = none):
+Observed rows (oldest first; user B in the rows is the first invited member, `demo-b-...160055`; `-` = none). Ids 111 and 112 are left out: they are not in the run's recorded rows and no call in this script is known to account for them (they probably belong to the first, repeated scripted run, whose row 110 is shown; not checked):
 
 | id | event | source | user | server / tool | outcome |
 |---|---|---|---|---|---|

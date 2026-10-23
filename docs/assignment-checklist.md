@@ -23,6 +23,22 @@ Demo steps and the observed values are in [demo-script.md](demo-script.md) (run 
 | **Team and control.** Kill the pod of one upstream server. The other servers keep working, and the dashboard shows the dead one as unreachable. | `apps/gateway/src/upstreams/manager.ts`, [ADR-014](decisions/ADR-014-cached-tool-catalog.md) | Live 2026-10-23: `utils` `unreachable` after 3.7 s, `woo__list_products` HTTP 200 meanwhile, `connected` again after 19.9 s. Status read through the API; the dashboard view is not click-verified. Also `check-gateway.ps1 -Isolation` (2026-10-19) |
 | **Team and control.** Every call above appears in the audit log, attributed to the right user. | `apps/gateway/src/audit/writer.ts`, `apps/dashboard/src/pages/Audit.tsx` | Live 2026-10-23: audit rows 110 to 125 with the right user and source (`mcp` or `chat`), including the rejected calls of the revoked key; filter by user returned 7 and 5 rows ([demo step 5](demo-script.md#5-audit)) |
 
+## User stories
+
+The assignment's nine user stories (page 2, quoted word for word), each with where it is built and where it is shown. Details of each live run are in [demo-script.md](demo-script.md).
+
+| Story (verbatim) | Where | Status |
+|---|---|---|
+| Admin 1. "Open the dashboard and see the registered MCP servers with their status (Connected / Unreachable / Disabled) and the tools each one exposes." | `apps/dashboard/src/pages/Servers.tsx`, `ServerDetail.tsx`; `GET /api/servers` | Live 2026-10-23: status read through the API (connected, unreachable after a pod kill, disabled); dashboard view not click-verified |
+| Admin 2. "See the WooCommerce MCP server already registered as the first server." | `apps/gateway/src/upstreams/seed.ts` | Live 2026-10-23: `woo` listed with 6 tools; `check-gateway.ps1` |
+| Admin 3. "Add another MCP server by URL and credential, and edit, disable or remove it." | `apps/gateway/src/api/servers.routes.ts` | Tested (gateway API tests); live 2026-10-23: disable and enable (`PATCH`, `200`) |
+| Admin 4. "Invite team members and issue or revoke their API keys." | `apps/dashboard/src/pages/Team.tsx`, `Keys.tsx`; `invites.routes.ts`, `keys.routes.ts` | Live 2026-10-23: invite, accept, key created and revoked ([demo step 3 and 4](demo-script.md#3-external-mcp-client-as-user-b-an-invited-member)) |
+| Admin 5. "See an audit log of every tool call: who, which server and tool, when, how long, and whether it succeeded." | `apps/dashboard/src/pages/Audit.tsx`, `apps/gateway/src/audit/writer.ts` | Live 2026-10-23: rows 110 to 125 ([demo step 5](demo-script.md#5-audit)) |
+| Member 1. "Generate my own API key in the dashboard." | `apps/dashboard/src/pages/Keys.tsx`; `POST /api/keys` | Live 2026-10-23: key created as a member (`201`) |
+| Member 2. "Add one gateway URL and my key to an MCP client such as Claude Code or Cursor, and see the tools from every enabled server without configuring any of them myself." | `apps/gateway/src/mcp/endpoint.ts`; [run-guide.md, Connect Claude Code](run-guide.md#connect-claude-code) | **External LLM client not yet run**; MCP Inspector verified 2026-10-23 (URL and key only, 15 tools). Owner's dry run: [demo script §0](demo-script.md#0-before-you-start) |
+| Member 3. "Use the chat agent in the dashboard to ask questions that are answered with those same tools." | `apps/gateway/src/chat/`, `apps/dashboard/src/pages/Chat.tsx` | Live 2026-10-23 (five chat turns, [demo step 2](demo-script.md#2-chat-agent-as-user-a)) |
+| Member 4. "Never see or need the credentials of the upstream servers." | Credentials encrypted and bound to their origin; [security.md](security.md) | Tested; the API never returns them. Rendered and live checks: [section 2](#2-mandatory-requirements) |
+
 ## 2. Mandatory requirements
 
 ### Kubernetes and Helm

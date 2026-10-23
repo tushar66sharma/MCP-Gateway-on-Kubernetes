@@ -24,7 +24,7 @@ The gateway puts that in one place. A member holds one personal API key and one 
 ## 3. Key Features and User Capabilities
 
 - **A store on Kubernetes:** shop, cart, Cash-on-delivery checkout, customer accounts, admin. One command starts it.
-- **One MCP endpoint, 15 tools.** Tools are named `woo__...`, `notes__...`, `utils__...` so equal names from different servers never collide. A dead server only loses its own tools (measured: gone within 4 to 12 s, back within 16 s).
+- **One MCP endpoint, 15 tools.** Tools are named `woo__...`, `notes__...`, `utils__...` so equal names from different servers never collide. A dead server only loses its own tools (measured: isolation check 2026-10-19: gone in 4-12 s, back in 16 s; pod kill 2026-10-23: 3.7 s / 19.9 s).
 - **Personal API keys** (shown once, stored as hashes, revoked at once), **invite links** for new members, **roles** (admin, member) and disabling users.
 - **A server registry with health checks,** an SSRF guard on every URL an admin enters, and **upstream credentials encrypted** (AES-GCM) and bound to their origin.
 - **An audit log** of every tool call and every rejected credential, attributed to the user. Members see only their own rows.
@@ -304,7 +304,7 @@ Log in at <http://app.localhost/> (step 8), open **Servers**: `notes`, `utils` a
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1 -Quick
 ```
 
-Step 4 (the hosts entries) is needed here: the gateway check (`check-gateway.ps1`, which runs `node` against `http://app.localhost`) and, without `-Quick`, the dashboard check stop with a "does not resolve" error if `app.localhost` does not resolve on your machine. The WooCommerce, MCP-server and network-policy checks use `kubectl` and port-forwards and do not need it.
+Step 4 (the hosts entries) is needed here: the gateway check (`check-gateway.ps1`, which runs `node` against `http://app.localhost`) and, without `-Quick`, the dashboard check stop with a "does not resolve" error if `app.localhost` does not resolve on your machine. The pods-ready, WooCommerce API, MCP-server and network-policy checks use `kubectl` and port-forwards and do not need it (steps 1, 2, 3 and 6 of `scripts\smoke-test.ps1`). The invite-log check (step 7) requests `http://app.localhost` with `curl.exe`, so keep the entries for it too.
 
 It prints a PASS/FAIL table (pods, WooCommerce, MCP servers, gateway end to end, network-policy probes, invite-log check). Without `-Quick` it also drives the dashboard in a browser (this needs the `npx playwright install chromium` from step 3) and runs `npm audit`, and it spends one live chat turn when the AI key is set.
 
@@ -312,7 +312,7 @@ The complete beginner guide (daily use, customer accounts, viewing the databases
 
 ## 12. Environment-Variable Configuration
 
-In the cluster, every variable is set by the Helm chart from the values files; you supply only the AI keys and, optionally, the admin email, in `.env` (git-ignored; template [`.env.example`](.env.example) explains each line).
+In the cluster, every variable is set by the Helm chart from the values files; you supply only the AI keys in `.env`; the admin email is the Helm value `gateway.bootstrapAdminEmail` (git-ignored; template [`.env.example`](.env.example) explains each line).
 
 | Variable | Where | Meaning |
 |---|---|---|
