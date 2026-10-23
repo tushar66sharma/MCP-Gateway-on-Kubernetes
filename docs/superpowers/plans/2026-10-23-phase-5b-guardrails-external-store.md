@@ -368,9 +368,9 @@
   4. **Run `scripts/dev/mcp-smoke.mjs` against it:** `list_products` returns the store's products, and `-Write` creates one draft product.
   5. **Negative control:** the same run **without** `NODE_EXTRA_CA_CERTS` fails with a certificate error. This proves verification was on.
   6. **Clean up:** stop the process, delete the temporary Ingress and Secret, and delete the scratch CA files. Show `kubectl -n store get ingress,secret` before and after.
-  4. If WordPress does not treat the request as HTTPS and answers 401 to Basic, find the cause and record it. Do not weaken the HTTPS rule.
-  5. Also confirm the normal in-cluster OAuth1 path still works: `check-mcp-woocommerce.ps1`.
-  6. The chart's external mode is **not** installed live; its render is verified. Document it as "rendered, not installed".
+  7. If WordPress does not treat the request as HTTPS and answers 401 to Basic, find the cause and record it. Do not weaken the HTTPS rule.
+  8. Also confirm the normal in-cluster OAuth1 path still works: `check-mcp-woocommerce.ps1`.
+  9. The chart's external mode is **not** installed live; its render is verified. Document it as "rendered, not installed".
 - [ ] **Step 6: Commit.**
   - `feat(mcp-woocommerce): HTTPS basic-auth mode for stores hosted elsewhere`
   - `feat(helm): external WooCommerce store and an optional in-cluster store`
