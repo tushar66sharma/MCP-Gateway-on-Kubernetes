@@ -1,3 +1,4 @@
+import { LlmError, type LlmErrorCode } from './llm/errors.js';
 import { TOPIC_CHECK_MAX_OUTPUT_TOKENS } from './llm/registry.js';
 import type { ChatMessage, LlmProvider, Usage } from './llm/types.js';
 
@@ -7,7 +8,15 @@ export interface TopicCheckResult {
   /** `skipped`: no topic model. `error`: the call failed. `unparsed`: the reply was not ALLOW or BLOCK. */
   outcome: 'checked' | 'error' | 'unparsed' | 'skipped';
   usage?: Usage;
+  /** Only with outcome `error`: the LlmError code, `timeout` or `unknown`. A fixed code, never error text or content. */
+  code?: TopicCheckErrorCode;
 }
+export type TopicCheckErrorCode = LlmErrorCode | 'timeout' | 'unknown';
+
+const errorCodeOf = (err: unknown): TopicCheckErrorCode => {
+  if (err instanceof LlmError) return err.timedOut ? 'timeout' : err.code;
+  return err instanceof Error && err.name === 'TimeoutError' ? 'timeout' : 'unknown';
+};
 
 /**
  * The Task 5b.1 prompt plus the follow-up sentence of the Phase 5b review (re-probed with scripts/dev/topic-probe.mjs).
@@ -71,8 +80,8 @@ export async function checkTopic(llm: LlmProvider | null, history: ChatMessage[]
     if (word === 'BLOCK') return { verdict: 'block', outcome: 'checked', ...(usage ? { usage } : {}) };
     if (word === 'ALLOW') return { verdict: 'allow', outcome: 'checked', ...(usage ? { usage } : {}) };
     return { verdict: 'allow', outcome: 'unparsed', ...(usage ? { usage } : {}) };
-  } catch {
+  } catch (err) {
     // Fail open: an LlmError, a timeout or an abort all leave the scope rule as the only guard.
-    return { verdict: 'allow', outcome: 'error' };
+    return { verdict: 'allow', outcome: 'error', code: errorCodeOf(err) };
   }
 }

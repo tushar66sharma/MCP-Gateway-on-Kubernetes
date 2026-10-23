@@ -144,6 +144,15 @@ describe('config', () => {
     expect(() => loadConfig({ ...basic, WOO_BASE_URL: 'https://store.example.com', WOO_SIGNING_BASE_URL: 'https://x.example.com' })).not.toThrow();
     expect(() => loadConfig({ ...base, WOO_AUTH_MODE: 'digest' })).toThrow(/WOO_AUTH_MODE/);
   });
+  it('trims the consumer key and secret (a credential file with a newline or a BOM still works)', () => {
+    const c = loadConfig({ ...base, WOO_CONSUMER_KEY: '\uFEFFck_1234567890\r\n', WOO_CONSUMER_SECRET: '  cs_1234567890\n' });
+    expect(c.WOO_CONSUMER_KEY).toBe('ck_1234567890');
+    expect(c.WOO_CONSUMER_SECRET).toBe('cs_1234567890');
+    expect(loadConfig(base).WOO_CONSUMER_KEY).toBe('ck_1234567890');
+    // The length check applies to the trimmed value.
+    expect(() => loadConfig({ ...base, WOO_CONSUMER_KEY: '  ck_123   \n' })).toThrow(/WOO_CONSUMER_KEY/);
+  });
+
   it('credentials in WOO_BASE_URL are rejected', () => {
     for (const mode of ['oauth1', 'basic']) {
       const env = { ...base, WOO_AUTH_MODE: mode, WOO_BASE_URL: 'https://user:hunter2pass@store.example.com' };

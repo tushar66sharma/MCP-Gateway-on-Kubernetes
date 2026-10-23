@@ -6,8 +6,9 @@ const schema = z.object({
   WOO_BASE_URL: z.url(),
   WOO_AUTH_MODE: z.enum(['oauth1', 'basic']).default('oauth1'),
   WOO_SIGNING_BASE_URL: z.url().optional(),
-  WOO_CONSUMER_KEY: z.string().min(10),
-  WOO_CONSUMER_SECRET: z.string().min(10),
+  // Trimmed: a credential file written with a trailing newline (or a BOM) would otherwise break Basic auth.
+  WOO_CONSUMER_KEY: z.string().trim().min(10),
+  WOO_CONSUMER_SECRET: z.string().trim().min(10),
   MCP_AUTH_TOKEN: z.string().min(16),
   STORE_TIMEZONE: z.string().default('UTC'),
   WOO_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),

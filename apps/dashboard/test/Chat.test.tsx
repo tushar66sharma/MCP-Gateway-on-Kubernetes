@@ -168,6 +168,31 @@ describe('Chat', () => {
     await waitFor(() => expect(statusCalls()).toBe(2));
   });
 
+  it('a failed background status refetch keeps the conversation', async () => {
+    let statusCalls = 0;
+    const fetchFn = mockFetch({
+      'GET /api/auth/me': () => jsonResponse(200, { user: admin }),
+      'GET /api/chat/status': () => (++statusCalls === 1 ? jsonResponse(200, configured) : errorResponse(500, 'INTERNAL', 'boom')),
+      'POST /api/chat': () => final('the conversation stays'),
+    });
+    render(
+      <Providers>
+        <Chat />
+      </Providers>,
+    );
+    await sendMessage('hello');
+    await screen.findByText('the conversation stays');
+    await waitFor(() => expect(fetchFn.mock.calls.filter((c) => c[0] === '/api/chat/status').length).toBe(2));
+    // Give the failed refetch time to settle into the error state.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(screen.queryByText(/Chat didn.t load/)).toBeNull();
+    expect(screen.getByText('the conversation stays')).toBeInTheDocument();
+    expect(screen.getByText('hello')).toBeInTheDocument();
+    expect(screen.getByLabelText('Message')).toBeInTheDocument();
+  });
+
   it('a status with nothing remaining locks the composer on first render', async () => {
     const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
     renderChat({ ...configured, budget: { limit: 50000, used: 50000, remaining: 0, resetsAt } });

@@ -223,6 +223,13 @@ describe('runAgentTurn', () => {
     expect(out).toMatchObject({ reply: "I couldn't produce an answer. Try rephrasing your question.", stoppedReason: 'final', toolCalls: [], steps: 0 });
   });
 
+  it('an empty answer cut at the length cap asks for something shorter', async () => {
+    for (const content of [null, '', '  ']) {
+      const out = await run(new ScriptedLlm({ ...finalStep(content), finishReason: 'length' }), fakeMcp());
+      expect(out).toMatchObject({ reply: 'The answer did not fit the length limit; ask for something shorter or fewer items.', stoppedReason: 'final', steps: 0 });
+    }
+  });
+
   it('a whitespace-only final answer gives the fixed no-answer reply', async () => {
     const out = await run(new ScriptedLlm(toolStep([{ name: 'woo__list_orders' }]), finalStep('  \n\t ')), fakeMcp());
     expect(out.reply).toBe("I couldn't produce an answer. Try rephrasing your question.");

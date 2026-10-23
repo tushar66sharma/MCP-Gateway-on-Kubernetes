@@ -61,7 +61,7 @@ describe('ServerFormDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Add server' }));
     const url = screen.getByLabelText(/^URL/);
     await waitFor(() =>
-      expect(url).toHaveAccessibleDescription(/In-cluster servers must be listed in the chart setting gateway\.internalUpstreams\./),
+      expect(url).toHaveAccessibleDescription(/If this server runs inside this cluster, list its namespace in the chart setting gateway\.internalUpstreams\./),
     );
   });
 

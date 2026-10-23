@@ -119,9 +119,22 @@ describe('checkTopic', () => {
     expect(content).not.toContain('previous_assistant');
   });
 
-  it('a failing topic check falls back to allow with outcome error', async () => {
+  it('a failing topic check falls back to allow with outcome error and the LlmError code', async () => {
     const llm = new ScriptedLlm(new LlmError('LLM_RATE_LIMITED', 'limited'));
-    expect(await checkTopic(llm, [user('hi')], signal)).toEqual({ verdict: 'allow', outcome: 'error' });
+    expect(await checkTopic(llm, [user('hi')], signal)).toEqual({ verdict: 'allow', outcome: 'error', code: 'LLM_RATE_LIMITED' });
+  });
+
+  it('the error code is timeout for a timed-out call and unknown otherwise, never the error text', async () => {
+    const llm = new ScriptedLlm(
+      new LlmError('LLM_UNAVAILABLE', 'The language model provider could not be reached.', { timedOut: true }),
+      new DOMException('timed out', 'TimeoutError'),
+      new Error('secret-content-marker'),
+    );
+    const results = [];
+    for (let i = 0; i < 3; i++) results.push(await checkTopic(llm, [user('hi')], signal));
+    expect(results.map((r) => r.code)).toEqual(['timeout', 'timeout', 'unknown']);
+    expect(results.every((r) => r.verdict === 'allow' && r.outcome === 'error')).toBe(true);
+    expect(JSON.stringify(results)).not.toContain('secret-content-marker');
   });
 
   it('an unparsable or empty verdict allows with outcome unparsed', async () => {

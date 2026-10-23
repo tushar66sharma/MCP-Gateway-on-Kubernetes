@@ -66,6 +66,7 @@ describe('chat guardrails', () => {
     expect(topic.requests[0]?.messages[1]?.content).toContain('<user_message>orders today?</user_message>');
     expect(await getUsage(h.deps.db.db, user.id, today())).toBe(30);
     expect(lineOf(user.id)).toMatchObject({ topicCheck: 'checked', budgetUsed: 30 });
+    expect(lineOf(user.id)).not.toHaveProperty('topicCheckCode');
   });
 
   it('a failing topic check falls back to the scope rule and the turn runs', async () => {
@@ -75,7 +76,7 @@ describe('chat guardrails', () => {
     const res = await post(cookie, [userMsg('hello')]);
     expect(res.status).toBe(200);
     expect((res.body as Body).reply).toBe('Ran.');
-    expect(lineOf(user.id)).toMatchObject({ topicCheck: 'error' });
+    expect(lineOf(user.id)).toMatchObject({ topicCheck: 'error', topicCheckCode: 'LLM_RATE_LIMITED' });
   });
 
   it('an unparsable verdict allows the turn', async () => {

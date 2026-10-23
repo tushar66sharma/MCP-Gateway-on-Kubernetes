@@ -34,7 +34,7 @@ const AUTH_OPTIONS = [
   { value: 'header', label: 'Custom header' },
 ];
 
-const SSRF_HINT = 'In-cluster servers must be listed in the chart setting gateway.internalUpstreams.';
+const SSRF_HINT = 'If this server runs inside this cluster, list its namespace in the chart setting gateway.internalUpstreams.';
 
 /** Maps an API failure onto the field it is about; whatever has no field becomes the form-level message. */
 function apiErrorToFormErrors(err: unknown): FormErrors {

@@ -255,6 +255,15 @@ describe('openai-compatible provider', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('marks a provider timeout as timedOut; the code stays LLM_UNAVAILABLE', async () => {
+    const { provider } = setup([new DOMException('The operation was aborted due to timeout', 'TimeoutError')], { maxRetries: 0 });
+    const err = await errorOf(provider.chat(req()));
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect(err.timedOut).toBe(true);
+    const other = await errorOf(setup([new TypeError('fetch failed')], { maxRetries: 0 }).provider.chat(req()));
+    expect(other.timedOut).toBeUndefined();
+  });
+
   it('records httpStatus and a valid providerCode on errors', async () => {
     const { provider } = setup([json({ error: { code: 'rate_limit_exceeded', message: 'secret-echo' } }, 429)], { maxRetries: 0 });
     const err = await errorOf(provider.chat(req()));

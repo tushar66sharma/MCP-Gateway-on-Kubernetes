@@ -71,6 +71,7 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
       let spent = 0;
       let usedBefore = 0;
       let topicOutcome: TopicCheckResult['outcome'] = 'skipped';
+      let topicCode: TopicCheckResult['code'];
       let topicMs = 0;
       let counted = false;
       const logTurn = (out: AgentTurnResult): void =>
@@ -85,6 +86,7 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
             provider: out.provider,
             model: out.model,
             topicCheck: topicOutcome,
+            topicCheckCode: topicCode,
             topicCheckMs: topicMs,
             budgetUsed: usedBefore + spent,
           },
@@ -115,6 +117,7 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
           const topic = await checkTopic(topicLlm, messages, signal, deadline);
           topicMs = Date.now() - t0;
           topicOutcome = topic.outcome;
+          topicCode = topic.code;
           spent += topic.usage?.totalTokens ?? 0;
           if (topic.verdict === 'block') {
             const out: AgentTurnResult = {
@@ -169,12 +172,13 @@ export function createChatService(deps: GatewayDeps, mcpUrl: () => string): Chat
               durationMs: Date.now() - started,
               usage: err.usage,
               topicCheck: topicOutcome,
+              topicCheckCode: topicCode,
               budgetUsed: usedBefore + spent,
             },
             'chat turn',
           );
         } else {
-          logger.warn({ userId: user.id, code: 'INTERNAL', error: err instanceof Error ? err.name : 'unknown', durationMs: Date.now() - started, topicCheck: topicOutcome, budgetUsed: usedBefore + spent }, 'chat turn');
+          logger.warn({ userId: user.id, code: 'INTERNAL', error: err instanceof Error ? err.name : 'unknown', durationMs: Date.now() - started, topicCheck: topicOutcome, topicCheckCode: topicCode, budgetUsed: usedBefore + spent }, 'chat turn');
         }
         throw err;
       } finally {

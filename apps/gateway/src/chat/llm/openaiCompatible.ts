@@ -122,7 +122,7 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
   const now = rt.now ?? Date.now;
   const url = `${opts.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-  const fail = (code: LlmError['code'], message: string, extra: { retryAfterSec?: number; httpStatus?: number; providerCode?: string } = {}): LlmError =>
+  const fail = (code: LlmError['code'], message: string, extra: { retryAfterSec?: number; httpStatus?: number; providerCode?: string; timedOut?: boolean } = {}): LlmError =>
     new LlmError(code, message, { provider: opts.name, ...extra });
   const badResponse = (): LlmError => fail('LLM_BAD_RESPONSE', 'The language model returned a response that could not be used.');
 
@@ -152,9 +152,11 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
     let res: Response;
     try {
       res = await fetchFn(url, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.any([r.signal, AbortSignal.timeout(opts.timeoutMs)]) });
-    } catch {
+    } catch (e) {
       if (r.signal.aborted) return { error: fail('LLM_UNAVAILABLE', 'The request was cancelled.'), retryable: false };
-      return { error: fail('LLM_UNAVAILABLE', 'The language model provider could not be reached.'), retryable: true };
+      // The per-call timeout aborts fetch with a TimeoutError; it is flagged for the caller's log line only.
+      const timedOut = e instanceof Error && e.name === 'TimeoutError';
+      return { error: fail('LLM_UNAVAILABLE', 'The language model provider could not be reached.', timedOut ? { timedOut } : {}), retryable: true };
     }
     const status = res.status;
     if (!res.ok) {

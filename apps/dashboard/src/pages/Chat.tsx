@@ -84,7 +84,8 @@ export function Chat() {
       </>
     );
   }
-  if (status.isError) {
+  // A failed background refetch keeps its last data (TanStack Query v5): the conversation stays on screen.
+  if (status.isError && !status.data) {
     return (
       <>
         <PageHeader title="Chat" description={DESCRIPTION} />

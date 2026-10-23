@@ -378,6 +378,25 @@ $rd = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $lo
 Report 'duplicate namespaces give one SSRF entry each (mcp default first, tools-test once)' (($rd.Code -eq 0) -and ((Get-SsrfValue $rd.Out) -eq '*.mcp.svc.cluster.local,*.tools-test.svc.cluster.local')) $rd.Out
 $rdGw = (Get-NetpolDocs $rd.Out) | Where-Object { $_ -match '(?m)^  name: gateway\s*$' } | Select-Object -First 1
 Report 'duplicate namespaces: one egress rule per entry (ports 3010, 3011, 3012)' ([bool]($rdGw -and $rdGw -match 'port: 3010 ' -and $rdGw -match 'port: 3011 ' -and $rdGw -match 'port: 3012 '))
+Report 'duplicate namespaces: exactly one NetworkPolicy is added (for the mcp entry only)' ((Get-NetpolDocs $rd.Out).Count -eq ($defNetpols + 1)) "(default $defNetpols, got $((Get-NetpolDocs $rd.Out).Count))"
+
+$mcpAllVals = Write-Values "gateway:`n  internalUpstreams:`n    - namespace: mcp`n      port: 3013`n"
+$ra = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '-f', $mcpAllVals)
+Report 'internalUpstreams entry in mcp without podLabels renders' ($ra.Code -eq 0) $ra.Out
+$raNp = Get-NetpolDocs $ra.Out
+$raIng = $raNp | Where-Object { $_ -match '(?m)^  name: mcp-internal-upstream-0\s*$' -and $_ -match '(?m)^  namespace: mcp\s*$' } | Select-Object -First 1
+Report 'entry in mcp without podLabels: Ingress policy selects every pod in mcp (podSelector: {}), from the gateway pods only, TCP 3013' ([bool]($raIng -and
+    $raIng -match '(?s)spec:\s+podSelector: \{\}\s+policyTypes: \[Ingress\]' -and $raIng -match 'kubernetes\.io/metadata\.name: gateway' -and
+    $raIng -match 'app\.kubernetes\.io/name: gateway' -and $raIng -match 'protocol: TCP, port: 3013'))
+$raGw = $raNp | Where-Object { $_ -match '(?m)^  name: gateway\s*$' } | Select-Object -First 1
+Report 'entry in mcp without podLabels: gateway egress to namespace mcp on TCP 3013 with no pod selector' ([bool]($raGw -and
+    $raGw -match '(?s)- namespaceSelector:\s+matchLabels:\s+kubernetes\.io/metadata\.name: mcp\s+ports:\s+- \{ protocol: TCP, port: 3013 \}'))
+Report 'entry in mcp without podLabels: exactly one NetworkPolicy is added' ($raNp.Count -eq ($defNetpols + 1))
+foreach ($sys in 'kube-system', 'kube-public', 'kube-node-lease') {
+  Case-Lint "internalUpstreams namespace $sys is rejected" "gateway:`n  internalUpstreams:`n    - namespace: $sys`n      port: 3010`n" $false
+}
+Case-Set 'internalUpstreams entry in the gateway namespace is rejected by the template' @('--set', 'gateway.internalUpstreams[0].namespace=gateway', '--set', 'gateway.internalUpstreams[0].port=3010') $false 'is the gateway namespace'
+Case-Set 'internalUpstreams follows a renamed gateway namespace' @('--set', 'namespaces.gateway=gw-test', '--set', 'gateway.internalUpstreams[0].namespace=gw-test', '--set', 'gateway.internalUpstreams[0].port=3010') $false 'is the gateway namespace'
 Case-Lint 'internalUpstreams port 0 is rejected' "gateway:`n  internalUpstreams:`n    - namespace: tools`n      port: 0`n" $false
 Case-Lint 'internalUpstreams port 65536 is rejected' "gateway:`n  internalUpstreams:`n    - namespace: tools`n      port: 65536`n" $false
 Case-Lint 'internalUpstreams namespace Bad_NS is rejected' "gateway:`n  internalUpstreams:`n    - namespace: `"Bad_NS`"`n      port: 3010`n" $false
