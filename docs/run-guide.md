@@ -702,6 +702,8 @@ Without an `MCP-Protocol-Version` header the answer arrives as one server-sent e
 
 ### Connect Claude Code
 
+The full definition-of-done walk-through, including the two-server prompt to run in Claude Code, is [demo-script.md](demo-script.md).
+
 Claude Code is Anthropic's coding assistant. It can use the gateway as an MCP server, so its 15 tools (`notes__...`, `utils__...`, `woo__...`) become available inside Claude Code. You need a gateway key first (create one as shown above, or on the dashboard's Keys page).
 
 **What was verified (2026-10-23).** Only the example file: `.mcp.json.example` parses as JSON (`node -e "JSON.parse(...)"`), and its fields (`"type": "http"`, `${VAR}` and `${VAR:-default}` in `url` and `headers`) match the Claude Code documentation ([setup](https://code.claude.com/docs/en/setup) and [MCP](https://code.claude.com/docs/en/mcp), read the same day). **The owner's machine has no `claude` command, so steps (b), (c) and (d) below were never run: they are marked "for you to run".** What you should see (expected, not tested): `/mcp` lists `urumi-gateway` as connected, and asking "what are today's orders?" calls `woo__list_orders`.

@@ -34,7 +34,7 @@ If you are new to the project, read in this order:
 | [screenshots/](screenshots/) | Dashboard screenshots taken from the local cluster (no keys, links or passwords shown) | Available (Phase 4) |
 | system-design-and-tradeoffs.md | Short note: architecture choices, routing and failure handling, what changes for production | (planned) — Phase 6 |
 | threat-model.md | Short note: shared upstream credentials, token passthrough, malicious tool descriptions, compromised upstreams | (planned) — Phase 6 |
-| [demo-script.md](demo-script.md) | Step-by-step definition-of-done demo (chat across servers, invite, key, MCP Inspector, revoke, disable, pod kill, audit), each step run on 2026-10-23 | Available (Phase 5) |
+| [demo-script.md](demo-script.md) | Definition-of-done demo in the assignment's order (store, chat as user A, external MCP client as user B, team and control, audit) with a traceability table; run live at API level on 2026-10-23, Claude Code left as the owner's live step | Available (Phase 6) |
 | stand-out-items.md | Which stand-out items were done (with file pointers) and which were not attempted | (planned) — Phase 6 |
 | [learning/](learning/00-setup-log.md) | Interview-prep primers: [setup log](learning/00-setup-log.md), [Kubernetes primer](learning/01-kubernetes-primer.md), [MCP protocol](learning/02-mcp-protocol.md), [the gateway](learning/03-gateway.md) (Phase 3, with captured traffic), [the chat agent](learning/04-chat-agent.md) (Phase 4, with a captured LLM exchange); the final interview Q&A is (planned) — Phase 6 | Available (partial) |
 | [superpowers/specs/](superpowers/specs/2026-10-18-mcp-gateway-design.md) | The approved design spec | Available |
