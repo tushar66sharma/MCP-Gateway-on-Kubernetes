@@ -13,6 +13,9 @@
 .PARAMETER BaseUrl
   Store URL (default http://store.localhost).
 
+.PARAMETER ProductId
+  Product to order (default: the first product the Store API lists). The script prints only the order id and the email, never the password.
+
 .PARAMETER CheckGuestLinking
   Extra, informational: place a guest order, then register an account with the same
   email and report whether WooCommerce attached the order to the new account.
@@ -20,7 +23,8 @@
 #>
 param(
   [string]$BaseUrl = 'http://store.localhost',
-  [switch]$CheckGuestLinking
+  [switch]$CheckGuestLinking,
+  [int]$ProductId = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -141,7 +145,7 @@ try {
   Register-Customer $session $email $password
 
   Write-Host '2/3 placing a cash-on-delivery order through the Store API'
-  $productId = Get-FirstProductId
+  if ($ProductId -gt 0) { $productId = $ProductId } else { $productId = Get-FirstProductId }
   $orderId = New-CodOrder $session $email $productId
 
   Write-Host "3/3 checking My Orders for order #$orderId"
