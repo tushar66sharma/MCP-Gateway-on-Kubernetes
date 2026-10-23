@@ -15,6 +15,13 @@
       "when": 1792406636049,
       "tag": "0001_seeded_slugs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792750029195,
+      "tag": "0002_chat_usage_daily",
+      "breakpoints": true
     }
   ]
 }

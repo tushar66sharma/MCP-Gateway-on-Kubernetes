@@ -159,6 +159,27 @@ Report 'prod without a clusterIssuer renders no solver policy' (($rs.Code -eq 0)
 $rs = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $prod, '--set', 'networkPolicies.enabled=false')
 Report 'prod with networkPolicies.enabled=false renders no solver policy' (($rs.Code -eq 0) -and ($rs.Out -notmatch 'acme-http01-solver')) $rs.Out
 
+# --- Task 5b.3: chat guardrail settings reach the gateway as env vars; ranges are enforced by the schema ------
+function Test-EnvVar([string]$text, [string]$name, [string]$value) {
+  return [bool]($text -match ('(?m)^\s+- name: ' + [regex]::Escape($name) + '\r?\n\s+value: "' + [regex]::Escape($value) + '"'))
+}
+foreach ($pair in @(@('LLM_MAX_OUTPUT_TOKENS', '1024'), @('CHAT_TOPIC_CHECK', 'true'), @('CHAT_TOPIC_CHECK_MODEL', ''), @('CHAT_TOPIC_CHECK_TIMEOUT_MS', '5000'), @('CHAT_DAILY_TOKEN_BUDGET', '50000'))) {
+  Report "gateway env $($pair[0]) defaults to '$($pair[1])'" (Test-EnvVar $r.Out $pair[0] $pair[1])
+}
+$rg = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '--set', 'gateway.chat.dailyTokenBudget=1000', '--set', 'gateway.chat.topicCheck=false', '--set', 'gateway.llm.maxOutputTokens=2048', '--set', 'gateway.chat.topicCheckModel=openai/gpt-oss-20b', '--set', 'gateway.chat.topicCheckTimeoutMs=3000')
+Report 'guardrail values are passed through to the gateway env' (($rg.Code -eq 0) -and (Test-EnvVar $rg.Out 'CHAT_DAILY_TOKEN_BUDGET' '1000') -and (Test-EnvVar $rg.Out 'CHAT_TOPIC_CHECK' 'false') -and
+  (Test-EnvVar $rg.Out 'LLM_MAX_OUTPUT_TOKENS' '2048') -and (Test-EnvVar $rg.Out 'CHAT_TOPIC_CHECK_MODEL' 'openai/gpt-oss-20b') -and (Test-EnvVar $rg.Out 'CHAT_TOPIC_CHECK_TIMEOUT_MS' '3000')) $rg.Out
+$rg = Invoke-Helm @('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '--set', 'gateway.chat.dailyTokenBudget=0')
+Report 'dailyTokenBudget 0 (unlimited) renders as "0"' (($rg.Code -eq 0) -and (Test-EnvVar $rg.Out 'CHAT_DAILY_TOKEN_BUDGET' '0'))
+Case-Lint 'negative dailyTokenBudget is rejected' "gateway:`n  chat:`n    dailyTokenBudget: -1`n" $false
+Case-Lint 'dailyTokenBudget over 10000000 is rejected' "gateway:`n  chat:`n    dailyTokenBudget: 10000001`n" $false
+Case-Lint 'maxOutputTokens under 256 is rejected' "gateway:`n  llm:`n    maxOutputTokens: 255`n" $false
+Case-Lint 'maxOutputTokens over 4096 is rejected' "gateway:`n  llm:`n    maxOutputTokens: 4097`n" $false
+Case-Lint 'topicCheckTimeoutMs under 1000 is rejected' "gateway:`n  chat:`n    topicCheckTimeoutMs: 999`n" $false
+Case-Lint 'non-boolean topicCheck is rejected' "gateway:`n  chat:`n    topicCheck: `"maybe`"`n" $false
+Case-Lint 'topicCheckModel with a space is rejected' "gateway:`n  chat:`n    topicCheckModel: `"a b`"`n" $false
+Case-Lint 'budget 0, topic check off and a model are accepted' "gateway:`n  chat:`n    dailyTokenBudget: 0`n    topicCheck: false`n    topicCheckModel: openai/gpt-oss-20b`n" $true
+
 # --- Task 5.6: deploy.ps1 guards, run against a throw-away kubeconfig so no real cluster is touched -----------
 function Invoke-DeployGuard([string]$contextName, [string]$valuesFile) {
   $kc = Join-Path $tmp ('kc-' + [guid]::NewGuid().ToString('N') + '.yaml')

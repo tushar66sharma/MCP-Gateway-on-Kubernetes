@@ -57,6 +57,7 @@ describe('gateway scaffold', () => {
         mcpAuthLimiter: new FixedWindowLimiter({ max: 30, windowMs: 60_000, clock: () => new Date() }),
         ...createUpstreamServices(config, createLogger('test', 'silent'), db),
         llm: null,
+        topicLlm: null,
       },
       { port: 0, host: '127.0.0.1' },
     );

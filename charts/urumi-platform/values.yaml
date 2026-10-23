@@ -151,10 +151,15 @@ gateway:
     fallbackModel: ""       # "" = the fallback provider's default model
     timeoutMs: 30000        # one LLM request
     maxRetries: 2
+    maxOutputTokens: 1024   # cap on every main-model answer (256-4096)
   chat:
     turnTimeoutMs: 60000    # a whole chat turn, tool calls included
     maxSteps: 8             # tool-calling rounds per turn
     rateLimitPerMin: 10     # turns per user per minute
+    topicCheck: true        # a small model refuses off-topic messages before the main model runs (ADR-018)
+    topicCheckModel: ""     # "" = the provider default (Groq: openai/gpt-oss-20b; OpenRouter: the main model)
+    topicCheckTimeoutMs: 5000
+    dailyTokenBudget: 50000 # tokens per user per day in storeSetup.timezone; 0 = unlimited
   resources:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: 500m, memory: 384Mi }

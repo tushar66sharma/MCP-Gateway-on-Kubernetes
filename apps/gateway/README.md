@@ -47,6 +47,11 @@ A missing or invalid variable stops the process at start with a message that lis
 | `CHAT_TURN_TIMEOUT_MS` | no | `60000` | One whole chat turn (10000-120000). |
 | `CHAT_MAX_STEPS` | no | `8` | Tool steps per turn (1-16). |
 | `CHAT_RATE_LIMIT_PER_MIN` | no | `10` | Chat turns per user per minute (1-120); one turn per user at a time regardless. |
+| `LLM_MAX_OUTPUT_TOKENS` | no | `1024` | Cap on every main-model answer (256-4096); a reply cut at the cap ends with ` (Answer shortened.)`. |
+| `CHAT_TOPIC_CHECK` | no | `true` | A small model answers ALLOW or BLOCK for the last message before the main turn (ADR-020); BLOCK returns the fixed refusal with `stoppedReason: "off_topic"`. Fails open. |
+| `CHAT_TOPIC_CHECK_MODEL` | no | `""` | Empty = Groq `openai/gpt-oss-20b`, OpenRouter the main model. The check uses the primary provider only. |
+| `CHAT_TOPIC_CHECK_TIMEOUT_MS` | no | `5000` | Timeout of the check (1000-15000); no retries, no fallback provider. |
+| `CHAT_DAILY_TOKEN_BUDGET` | no | `50000` | Tokens per user per day (0-10000000, 0 = unlimited), counted in `STORE_TIMEZONE`; over it, `429 CHAT_BUDGET_EXCEEDED` with `Retry-After`. |
 | `MCP_AUTH_FAILURE_LIMIT_PER_MIN` | no | `30` | Audited `/mcp` authentication failures per client IP per minute (1-1000); over it the gateway answers `429` with `Retry-After`. A valid credential is never limited. |
 | `STORE_TIMEZONE` | no | `UTC` | IANA zone the chat's system prompt uses for "today" (validated; the chart passes `storeSetup.timezone`). |
 

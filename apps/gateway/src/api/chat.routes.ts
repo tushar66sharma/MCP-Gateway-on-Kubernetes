@@ -36,8 +36,8 @@ export function createChatRouter(deps: GatewayDeps, mcpUrl: () => string): expre
   const session = requireSession(deps);
   const chat = createChatService(deps, mcpUrl);
 
-  router.get('/chat/status', session, (_req, res) => {
-    res.json(chat.status());
+  router.get('/chat/status', session, async (_req, res) => {
+    res.json(await chat.status(currentUser(res)));
   });
 
   router.post('/chat', session, express.json({ limit: '512kb' }), async (req, res) => {
@@ -74,6 +74,10 @@ export function createChatRouter(deps: GatewayDeps, mcpUrl: () => string): expre
       }
       if (err instanceof ApiError && err.code === 'RATE_LIMITED' && typeof err.details?.retryAfterSec === 'number') {
         res.setHeader('Retry-After', String(err.details.retryAfterSec));
+      }
+      if (err instanceof ApiError && err.code === 'CHAT_BUDGET_EXCEEDED' && typeof err.details?.resetsAt === 'string') {
+        // Seconds until the budget day rolls over.
+        res.setHeader('Retry-After', String(Math.max(1, Math.ceil((Date.parse(err.details.resetsAt) - deps.clock().getTime()) / 1000))));
       }
       throw err;
     } finally {

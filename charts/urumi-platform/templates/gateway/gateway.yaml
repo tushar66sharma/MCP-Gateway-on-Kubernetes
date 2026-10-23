@@ -144,12 +144,23 @@ spec:
               value: {{ $g.llm.timeoutMs | quote }}
             - name: LLM_MAX_RETRIES
               value: {{ $g.llm.maxRetries | quote }}
+            - name: LLM_MAX_OUTPUT_TOKENS
+              value: {{ $g.llm.maxOutputTokens | quote }}
             - name: CHAT_TURN_TIMEOUT_MS
               value: {{ $g.chat.turnTimeoutMs | quote }}
             - name: CHAT_MAX_STEPS
               value: {{ $g.chat.maxSteps | quote }}
             - name: CHAT_RATE_LIMIT_PER_MIN
               value: {{ $g.chat.rateLimitPerMin | quote }}
+            # Guardrails (ADR-018): the on-topic check and the per-user daily token budget.
+            - name: CHAT_TOPIC_CHECK
+              value: {{ $g.chat.topicCheck | quote }}
+            - name: CHAT_TOPIC_CHECK_MODEL
+              value: {{ $g.chat.topicCheckModel | quote }}
+            - name: CHAT_TOPIC_CHECK_TIMEOUT_MS
+              value: {{ $g.chat.topicCheckTimeoutMs | quote }}
+            - name: CHAT_DAILY_TOKEN_BUDGET
+              value: {{ $g.chat.dailyTokenBudget | int | quote }}
             # The same zone the store uses, so "today" means the same day in chat and in WooCommerce.
             - name: STORE_TIMEZONE
               value: {{ .Values.storeSetup.timezone | quote }}

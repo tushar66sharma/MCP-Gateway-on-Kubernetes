@@ -137,7 +137,8 @@
             "fallbackProvider": { "type": "string", "enum": ["", "groq", "openrouter"] },
             "fallbackModel": { "type": "string" },
             "timeoutMs": { "type": "integer", "minimum": 5000, "maximum": 120000 },
-            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 }
+            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "maxOutputTokens": { "type": "integer", "minimum": 256, "maximum": 4096 }
           }
         },
         "chat": {
@@ -147,7 +148,11 @@
           "properties": {
             "turnTimeoutMs": { "type": "integer", "minimum": 10000, "maximum": 120000 },
             "maxSteps": { "type": "integer", "minimum": 1, "maximum": 16 },
-            "rateLimitPerMin": { "type": "integer", "minimum": 1, "maximum": 120 }
+            "rateLimitPerMin": { "type": "integer", "minimum": 1, "maximum": 120 },
+            "topicCheck": { "type": "boolean" },
+            "topicCheckModel": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{0,100}$" },
+            "topicCheckTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 15000 },
+            "dailyTokenBudget": { "type": "integer", "minimum": 0, "maximum": 10000000 }
           }
         },
         "resources": { "type": "object" }
