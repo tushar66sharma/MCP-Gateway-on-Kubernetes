@@ -2,7 +2,7 @@
 
 This is the walk-through that shows the whole platform working, in the order of the assignment's definition of done: **Store, Chat agent as user A, External MCP client as user B, Team and control, Audit**. Every step has the command or click, the expected result and what was observed.
 
-**What was run (2026-10-23, local k3d cluster `k3d-urumi`).** The whole script was executed live at **API level** with a scratch Node script (not committed): login, chat, invite, accept, keys, server disable and enable, audit, plus the real **MCP Inspector CLI** (`@modelcontextprotocol/inspector@2.11.0`) for the external client and `kubectl` for the pod kill. Steps that are verified only this way say "(verified via API; click-through not run)": the dashboard pages call the same API, but nobody clicked through this exact script in a browser. **Claude Code** is not run here: it is the owner's live step, marked as such.
+**What was run (2026-10-23, local k3d cluster `k3d-urumi`).** The whole script was executed live at **API level** with a scratch Node script (not committed): login, chat, invite, accept, keys, server disable and enable, audit, plus the real **MCP Inspector CLI** (`@modelcontextprotocol/inspector@2.11.0`) for the external client and `kubectl` for the pod kill. Steps that are verified only this way say "(verified via API; click-through not run)": the dashboard pages call the same API, but nobody clicked through this exact script in a browser. An external LLM client (Claude Code or Cursor) is not run here: it is the owner's step, marked as such.
 
 Two people: **user A** is the administrator (`admin@example.com`); **user B** is a fresh invited member (`demo-b-<timestamp>@example.com`). Nothing here prints a password, key or invite link; secrets go into variables only.
 
@@ -16,9 +16,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test.ps1 -Quic
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\get-secret.ps1 -Namespace gateway -Name gateway-bootstrap -Key password   # copies the admin password to the clipboard
 ```
 
-Each user's chat budget is 50,000 tokens a day, so on a recording day check the Chat page's `Today: used / limit` line first; it resets at 00:00 in the store's time zone.
+The chat steps spend the free-tier LLM quota (about 3,000 to 5,500 tokens per turn, observed). Each user's chat budget is 50,000 tokens a day (`gateway.chat.dailyTokenBudget`), and the five turns of this run cost about 15,000 to 18,000 in total (the failed turn's usage is not reported). On a recording day check the Chat page's `Today: used / limit` line first; it resets at 00:00 in the store's time zone.
 
-The chat steps spend the free-tier LLM quota (about 3,000 to 5,500 tokens per turn, observed). The per-user daily chat budget is 50,000 tokens (`gateway.chat.dailyTokenBudget`); the five turns of this run cost about 15,000 to 18,000 in total (the failed turn's usage is not reported).
+**Before recording (owner): dry-run one external LLM client.** No LLM client has ever connected to this gateway; only MCP Inspector has, and Inspector cannot run a prompt. The definition-of-done bullet "Run one prompt that needs tools from two different upstream servers" is shown with an external client, so test that path once before the camera is on.
+
+1. Install ONE LLM MCP client you can run: the **Claude Code** CLI (`irm https://claude.ai/install.ps1 | iex`; needs a Claude subscription or a Console account) or **Cursor** (free tier).
+2. Invite a fresh member (Team > Invite), accept the invite and create that member's API key (as in section 3). Connect the client as that member with the gateway URL `http://app.localhost/mcp` and the member's key: Claude Code through the `.mcp.json` + `URUMI_GATEWAY_KEY` route ([Connect Claude Code](run-guide.md#connect-claude-code)) or Cursor's MCP settings ([Connect Cursor](run-guide.md#connect-cursor-not-tested)). Do not paste the key into the chat or a file you commit.
+3. Check `tools/list`: it must show **15 tools**. Then send the two-server prompt once: `Show today's orders and save a note listing their numbers`.
+4. Expected (not tested): the client calls `woo__list_orders` and `notes__create_note`, and the Audit log shows both attributed to that member with source `mcp`.
+
+**Fallback, if neither client is available:** show the two-server task in the dashboard chat as user B (run and verified on 2026-10-23, section 3). Also show MCP Inspector `tools/list` and one tool call from each server as user B, and say out loud that the external-client prompt is not shown.
 
 ## 1. Store: storefront to checkout to wp-admin
 
@@ -67,7 +74,7 @@ npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --t
 **Two-server prompt.** Chaining two servers needs an LLM client; MCP Inspector cannot do it.
 
 - **Run here, through the chat as user B (one turn):** `Show today's orders and save a note listing their numbers`. Observed: the reply was `Order numbers today: 20, 15` and `Note saved with ID 2 titled "Today's orders"`; tool calls `woo__list_orders` then `notes__create_note`, both **success**; both are in the audit log as source `chat`, user B (step 5). The first attempt of this turn returned `502 LLM_BAD_RESPONSE` after `woo__list_orders` had succeeded (the model's reply could not be used; this is the documented provider-error path, and the executed tool call is returned with the error). The second attempt, as a second fresh invited member, succeeded. Both users are in the Team list, enabled.
-- **Owner's live step (not run, no `claude` CLI on the owner's machine):** the same prompt in **Claude Code**, using the `.mcp.json` + `URUMI_GATEWAY_KEY` route from [Connect Claude Code](run-guide.md#connect-claude-code). Expected (not tested): `/mcp` lists `urumi-gateway` as connected; the prompt calls `woo__list_orders` and `notes__create_note` as user B. Cursor is an alternative. `URUMI_GATEWAY_KEY` (Claude Code's `.mcp.json`) and `UGW_KEY` (the Inspector commands here) are just two environment variable names for the same key.
+- **External LLM client: owner's step, not yet run** (no `claude` CLI on the owner's machine; Cursor not tested). Use the dry run in section 0 first: the same prompt in **Claude Code** through the `.mcp.json` + `URUMI_GATEWAY_KEY` route from [Connect Claude Code](run-guide.md#connect-claude-code), or in Cursor. Expected (not tested): `/mcp` lists `urumi-gateway` as connected; the prompt calls `woo__list_orders` and `notes__create_note` as user B. If no client is available, use the fallback in section 0. `URUMI_GATEWAY_KEY` (Claude Code's `.mcp.json`) and `UGW_KEY` (the Inspector commands here) are just two environment variable names for the same key.
 
 ## 4. Team and control
 
@@ -127,10 +134,10 @@ The left column quotes the assignment's "Definition of done" (page 3) word for w
 | Store: "Confirm the order is visible in WooCommerce admin." | 1 | Not click-verified in wp-admin. The order was read back through the gateway (`woo__list_orders`, status `processing`); open **WooCommerce > Orders** in the video |
 | Chat agent, as user A: "Ask the agent to create a product with a name and price. The product appears on the storefront." | 2 | Observed: product 19 `publish`; `GET /product/demo-lamp/` HTTP 200 with the name |
 | Chat agent, as user A: "Place an order for it on the storefront by hand, then ask the agent what orders came in today. It returns that order." | 2 | Order placed by script (`customer-order-smoke.ps1 -ProductId 19`); by hand in the video. Observed: the chat listed #20 |
-| External MCP client, as user B: "Connect Claude Code, Cursor or MCP Inspector to the gateway using only the gateway URL and user B's API key." | 3 | Observed with MCP Inspector (URL and key only); Claude Code is the owner's live step |
+| External MCP client, as user B: "Connect Claude Code, Cursor or MCP Inspector to the gateway using only the gateway URL and user B's API key." | 3 | Observed with MCP Inspector (URL and key only); an external LLM client (Claude Code or Cursor) is the owner's step, not yet run |
 | External MCP client, as user B: "See the tools of every enabled server, ..." | 3 | Observed: `tools/list` returned 15 tools of 3 servers |
 | External MCP client, as user B: "... and ask the same orders question successfully." | 3 | Observed: `woo__list_orders period=today` returned #20 |
-| External MCP client, as user B: "Run one prompt that needs tools from two different upstream servers." | 3 | Observed through the chat as user B (`woo__list_orders` + `notes__create_note`); in Claude Code it is the owner's live step |
+| External MCP client, as user B: "Run one prompt that needs tools from two different upstream servers." | 3 | Observed through the chat as user B (`woo__list_orders` + `notes__create_note`); in an external LLM client it is the owner's step, **not yet run** (dry run in section 0; fallback stated there) |
 | Team and control: "Revoke user B's key. Their next call is rejected." | 4 | Observed: revoke 204, next call HTTP 401 |
 | Team and control: "Disable one upstream server. Its tools disappear from both the chat agent and the external client." | 4 | External client observed (`tools/list` 15 to 10 to 15). Chat agent: inferred (no `notes__*` tool call; generic scope refusal), not a clear "notes is disabled" answer; show the chat failing to save a note in the video |
 | Team and control: "Kill the pod of one upstream server. The other servers keep working, and the dashboard shows the dead one as unreachable." | 4 | Observed: `woo__list_products` HTTP 200 meanwhile; `utils` `unreachable` at 3.7 s, connected at 19.9 s (dashboard view not click-verified; status via API) |

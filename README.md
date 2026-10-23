@@ -62,7 +62,7 @@ To see the order under **My account, Orders**, register and log in *before* you 
 You need only the gateway URL, `http://app.localhost/mcp`, and a personal API key (dashboard, **API keys**, **Create key**; the key is shown once).
 
 - **MCP Inspector** (tested): `npx -y @modelcontextprotocol/inspector@2.11.0 --cli http://app.localhost/mcp --transport http --header "Authorization: Bearer <your key>" --method tools/list` lists the tools. Step by step, including the exact commands that were run: [run guide, MCP Inspector](docs/run-guide.md#call-the-gateway-with-mcp-inspector-command-line).
-- **Claude Code** (command line or a `.mcp.json` that keeps the key in an environment variable): [run guide, Connect Claude Code](docs/run-guide.md#connect-claude-code) and [`.mcp.json.example`](.mcp.json.example). **Not tested here:** the owner's machine has no `claude` command; only the example file's format was validated.
+- **Claude Code** (command line or a `.mcp.json` that keeps the key in an environment variable): [run guide, Connect Claude Code](docs/run-guide.md#connect-claude-code) and [`.mcp.json.example`](.mcp.json.example). **Not tested here:** the owner's machine has no `claude` command; only the example file's format was validated. No external LLM client has been run against the gateway yet; the owner runs one as a dry run before recording ([demo script, section 0](docs/demo-script.md#0-before-you-start)).
 - **Cursor:** [run guide, Connect Cursor](docs/run-guide.md#connect-cursor-not-tested) (**not tested**).
 
 Never paste a key into a chat, an issue or a commit.
