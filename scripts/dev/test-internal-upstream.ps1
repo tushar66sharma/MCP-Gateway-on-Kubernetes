@@ -101,11 +101,17 @@ function Get-ServerBySlug([string]$slug) {
   foreach ($srv in @($list.Json)) { if ($srv.slug -eq $slug) { return $srv } }
   return $null
 }
+# $true when the namespace exists and carries our label (the only kind this script ever deletes).
+function Test-OwnNamespace {
+  $j = (& kubectl get namespace $testNs -o json 2>$null | Out-String)
+  if (-not $j.Trim()) { return $false }
+  try { $o = $j | ConvertFrom-Json } catch { return $false }
+  return ($o.metadata.labels.'urumi.dev/test' -eq 'internal-upstream')
+}
 function Remove-TestKubernetes {
   & kubectl -n mcp delete deployment,service,secret -l 'urumi.dev/test=internal-upstream' --ignore-not-found 2>&1 | Out-Null
   # Only a namespace carrying our label is ever deleted.
-  $mine = (& kubectl get namespace $testNs -l 'urumi.dev/test=internal-upstream' --no-headers 2>$null)
-  if ($mine) { & kubectl delete namespace $testNs --wait=true --timeout=120s 2>&1 | Out-Null }
+  if (Test-OwnNamespace) { & kubectl delete namespace $testNs --wait=true --timeout=120s 2>&1 | Out-Null }
 }
 
 # Manifest for one test server. The pod is Pod Security "restricted" compliant (non-root, RuntimeDefault seccomp,
@@ -229,8 +235,7 @@ if (-not $tag) { Stop-Preflight 'No image tag in deploy/.images.local.yaml; run 
 if (-not (Test-Path (Join-Path $root 'node_modules/@modelcontextprotocol/client'))) { Stop-Preflight 'Dependencies not installed: run npm ci from the repository root.' }
 $nsExisting = (& kubectl get namespace $testNs --ignore-not-found --no-headers 2>$null)
 if ($nsExisting) {
-  $nsMine = (& kubectl get namespace $testNs -l 'urumi.dev/test=internal-upstream' --no-headers 2>$null)
-  if (-not $nsMine) { Stop-Preflight "Namespace '$testNs' already exists and was not created by this script (no label urumi.dev/test=internal-upstream). Refusing to start; nothing was changed." }
+  if (-not (Test-OwnNamespace)) { Stop-Preflight "Namespace '$testNs' already exists and was not created by this script (no label urumi.dev/test=internal-upstream). Refusing to start; nothing was changed." }
 }
 
 $before = $null
