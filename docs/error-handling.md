@@ -1,6 +1,6 @@
 # Error handling
 
-> **Status (end of Phase 4).** Covers the gateway, the three upstreams and the Postgres database, and since Phase 4 the chat agent with its LLM provider ([section 4](#4-the-chat-post-apichat)) and the dashboard's error states ([section 5](#5-the-dashboard)). The complete document is finished in Phase 6.
+> **Status: final (Phase 6, checked against the code on 2026-10-23).** Covers the gateway, the three upstreams, the Postgres database, the chat agent with its LLM provider ([section 4](#4-the-chat-post-apichat)) and the dashboard's error states ([section 5](#5-the-dashboard)). [Section 2](#all-api-error-codes-in-one-table) lists every `/api` error code and its HTTP status in one table; the `/mcp` endpoint answers with JSON-RPC errors and `isError` results ([section 1](#1-mcp-the-aggregated-endpoint)).
 
 Each row answers: what fails, how it is detected, whether it is retried, what the caller sees, and what is logged or audited. Evidence labels:
 
@@ -10,7 +10,7 @@ Each row answers: what fails, how it is detected, whether it is retried, what th
 
 **Two kinds of failure.** A tool the model could plausibly fix or retry (bad argument, missing note, upstream down) is an MCP result with `isError: true` and HTTP 200. A request that is not allowed at all (no key, wrong method, bad host) is an HTTP error with a JSON-RPC error body. See [learning/02-mcp-protocol.md](learning/02-mcp-protocol.md#7-iserror-versus-a-protocol-error).
 
-**Retries.** Tool calls are **never** retried anywhere (a retry could repeat a write), including by the chat agent and the dashboard. Health checks repeat every 15 s. Startup retries the database connection (90 attempts, 2 s apart). Since Phase 4 two more things retry: a **model call** to the LLM provider (429, 5xx and network errors, up to 2 retries that never pass the turn deadline, then an optional fallback once; [section 4](#4-the-chat-post-apichat)), and the dashboard's **reads** (network errors and 5xx, at most 2 retries; writes are never retried).
+**Retries.** Tool calls are **never** retried anywhere (a retry could repeat a write), including by the chat agent and the dashboard. Health checks repeat every 15 s. Startup retries the database connection (90 attempts, 2 s apart). Two more things retry: a **model call** to the LLM provider (429, 5xx and network errors, up to 2 retries that never pass the turn deadline, then an optional fallback once; [section 4](#4-the-chat-post-apichat)), and the dashboard's **reads** (network errors and 5xx, at most 2 retries; writes are never retried).
 
 ## 1. `/mcp` (the aggregated endpoint)
 
@@ -56,6 +56,34 @@ Each row answers: what fails, how it is detected, whether it is retried, what th
 ## 2. `/api` (the REST API)
 
 All errors have the shape `{"error":{"code","message","details"?,"requestId"}}`. The `requestId` is also the `X-Request-Id` response header and appears in the logs.
+
+### All API error codes in one table
+
+The code list is `ApiErrorCode` in `apps/gateway/src/api/errors.ts` (17 codes); the statuses are the ones the routes throw (`apps/gateway/src/api/*.ts`, `auth/middleware.ts`, `chat/service.ts` and the `LLM_STATUS` map in `api/chat.routes.ts`). Checked on 2026-10-23. The next table gives the cases and examples.
+
+| Code | HTTP status | Raised by | `Retry-After` header |
+|---|---|---|---|
+| `VALIDATION_FAILED` | 400 (also any other 4xx from the body parser, such as 413 for a body that is too large) | zod schemas, `PATCH` rules, the body parser | no |
+| `SSRF_REJECTED` | 400 | `POST` and `PATCH /api/servers` | no |
+| `UNAUTHENTICATED` | 401 | no session, no valid key for the route | no |
+| `INVALID_CREDENTIALS` | 401 | `POST /api/auth/login` | no |
+| `FORBIDDEN` | 403 | role check, audit of another user, a key for another admin | no |
+| `CSRF_REJECTED` | 403 | the CSRF guard on mutating requests | no |
+| `NOT_FOUND` | 404 (also a 404 from the body parser) | unknown route or id | no |
+| `INVITE_INVALID` | 404 | invite preview and accept | no |
+| `CONFLICT` | 409 | duplicate slug or email, self role change, a disabled user's key, a chat turn already running | no |
+| `RATE_LIMITED` | 429 | login limiter, chat limiter | yes |
+| `CHAT_BUDGET_EXCEEDED` | 429 | `POST /api/chat` when the daily token budget is used up | yes (seconds to the next budget day) |
+| `LLM_RATE_LIMITED` | 429 | the provider answered 429 and the retries or the wait limit ran out | yes (60 s when the provider gave none) |
+| `INTERNAL` | 500 | anything unexpected | no |
+| `LLM_AUTH_FAILED` | 502 | the provider rejected the key (401 or 403) | no |
+| `LLM_UNAVAILABLE` | 502 | network error, 5xx or timeout, after retries and the fallback | no |
+| `LLM_BAD_RESPONSE` | 502 | the provider's answer was unusable | no |
+| `LLM_NOT_CONFIGURED` | 503 | no API key for the configured provider | no |
+
+The aggregated `/mcp` endpoint does not use these codes: its failures are HTTP statuses with a JSON-RPC error body (401, 403, 429, 405 and others, see [section 1](#1-mcp-the-aggregated-endpoint)) or an MCP result with `isError: true`.
+
+### The cases, with examples
 
 | Status and code | When | Example (live unless noted) |
 |---|---|---|
