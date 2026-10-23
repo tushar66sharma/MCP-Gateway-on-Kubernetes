@@ -1,3 +1,4 @@
+{{- if .Values.store.enabled }}
 {{- if .Values.storeSetup.enabled }}
 {{- $ns := .Values.namespaces.store -}}
 {{- $dbSecret := default "store-db" .Values.secrets.existing.storeDb -}}
@@ -110,4 +111,5 @@ spec:
           emptyDir:
             # wp plugin install downloads the WooCommerce zip (18 MB for 11.2.1) here; 256Mi leaves room for upgrades.
             sizeLimit: 256Mi
+{{- end }}
 {{- end }}

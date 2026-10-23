@@ -8,6 +8,9 @@ export interface OpenAiCompatibleOptions {
   model: string;
   timeoutMs: number;
   maxRetries: number;
+  maxTokensParam: 'max_completion_tokens' | 'max_tokens';
+  /** Output cap used when a request sets none. */
+  defaultMaxOutputTokens: number;
   extraHeaders?: Record<string, string>;
   extraBody?: Record<string, unknown>;
 }
@@ -20,6 +23,8 @@ export interface LlmRuntime {
 }
 
 const MAX_RETRY_AFTER_SEC = 20;
+/** Used when a request sets no temperature (every main-model call). */
+const DEFAULT_TEMPERATURE = 0.2;
 
 /** Resolves after ms; rejects as soon as the signal aborts. */
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -84,6 +89,11 @@ function errorCodeOf(text: string): string | undefined {
   }
 }
 
+function finishReasonOf(raw: unknown): LlmChatResult['finishReason'] {
+  if (typeof raw !== 'string') return undefined;
+  return raw === 'stop' || raw === 'length' || raw === 'tool_calls' ? raw : 'other';
+}
+
 function retryAfterOf(res: Response): number | undefined {
   const v = Number(res.headers.get('retry-after'));
   return Number.isFinite(v) && v > 0 ? Math.ceil(v) : undefined;
@@ -112,7 +122,7 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
   const now = rt.now ?? Date.now;
   const url = `${opts.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-  const fail = (code: LlmError['code'], message: string, extra: { retryAfterSec?: number; httpStatus?: number; providerCode?: string } = {}): LlmError =>
+  const fail = (code: LlmError['code'], message: string, extra: { retryAfterSec?: number; httpStatus?: number; providerCode?: string; timedOut?: boolean } = {}): LlmError =>
     new LlmError(code, message, { provider: opts.name, ...extra });
   const badResponse = (): LlmError => fail('LLM_BAD_RESPONSE', 'The language model returned a response that could not be used.');
 
@@ -129,21 +139,24 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
     const toolCalls = isRecord(msg) ? parseToolCalls(msg.tool_calls) : null;
     if (!isRecord(msg) || toolCalls === null) return { error: badResponse(), retryable: false };
     const usage = parseUsage(isRecord(json) ? json.usage : undefined);
+    const finishReason = finishReasonOf(isRecord(first) ? first.finish_reason : undefined);
     const message: ChatMessage = {
       role: 'assistant',
       content: typeof msg.content === 'string' ? msg.content : null,
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
     };
-    return { result: { message, toolCalls, ...(usage ? { usage } : {}), provider: opts.name, model: opts.model } };
+    return { result: { message, toolCalls, ...(usage ? { usage } : {}), ...(finishReason ? { finishReason } : {}), provider: opts.name, model: opts.model } };
   }
 
   async function attemptOnce(r: LlmChatRequest, headers: Record<string, string>, body: string): Promise<Attempt> {
     let res: Response;
     try {
       res = await fetchFn(url, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.any([r.signal, AbortSignal.timeout(opts.timeoutMs)]) });
-    } catch {
+    } catch (e) {
       if (r.signal.aborted) return { error: fail('LLM_UNAVAILABLE', 'The request was cancelled.'), retryable: false };
-      return { error: fail('LLM_UNAVAILABLE', 'The language model provider could not be reached.'), retryable: true };
+      // The per-call timeout aborts fetch with a TimeoutError; it is flagged for the caller's log line only.
+      const timedOut = e instanceof Error && e.name === 'TimeoutError';
+      return { error: fail('LLM_UNAVAILABLE', 'The language model provider could not be reached.', timedOut ? { timedOut } : {}), retryable: true };
     }
     const status = res.status;
     if (!res.ok) {
@@ -171,10 +184,11 @@ export function createOpenAiCompatible(opts: OpenAiCompatibleOptions, rt: LlmRun
     const body = JSON.stringify({
       model: opts.model,
       messages: r.messages.map(toWireMessage),
-      tools: r.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
-      tool_choice: 'auto',
-      temperature: 0.2,
-      max_completion_tokens: 2048,
+      ...(r.tools.length > 0
+        ? { tools: r.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })), tool_choice: 'auto' }
+        : {}),
+      temperature: r.temperature ?? DEFAULT_TEMPERATURE,
+      [opts.maxTokensParam]: r.maxOutputTokens ?? opts.defaultMaxOutputTokens,
       ...opts.extraBody,
     });
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}`, ...opts.extraHeaders };

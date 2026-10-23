@@ -67,3 +67,5 @@ Small clarifications that do not change the decision (typos, a confirmed spike r
 | 016 | Default-deny NetworkPolicies with one explicit allow rule per flow | Accepted, implemented in Phase 5 (Task 5.3) | [ADR-016](ADR-016-default-deny-network-policies.md) |
 | 017 | Pod Security Admission at `restricted` on the app namespaces, plus schema validation of hostnames | Accepted, implemented in Phase 5 (Task 5.4) | [ADR-017](ADR-017-pod-security-restricted.md) |
 | 018 | WordPress scheduled work runs from a CronJob (`DISABLE_WP_CRON`), not from loopback requests to the public URL | Accepted, implemented in the Phase 5 final review | [ADR-018](ADR-018-wordpress-cron-via-cronjob.md) |
+| 019 | A WooCommerce store hosted elsewhere: HTTP Basic over HTTPS only, optional in-cluster store | Accepted, implemented in Phase 5b (Task 5b.5); chart external mode rendered, not installed | [ADR-019](ADR-019-external-woocommerce-store.md) |
+| 020 | Chat guardrails: scope rule, on-topic check (fails open) and a per-user daily token budget | Accepted, implemented in Phase 5b (Task 5b.3) | [ADR-020](ADR-020-chat-guardrails.md) |

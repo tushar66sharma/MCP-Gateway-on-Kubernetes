@@ -1,5 +1,6 @@
 {{- if .Values.networkPolicies.enabled }}
 {{- range $key, $ns := .Values.namespaces }}
+{{- if or $.Values.store.enabled (ne $key "store") }}
 ---
 # Denies all ingress and egress for every pod in the namespace; the allow policies add the exceptions.
 apiVersion: networking.k8s.io/v1
@@ -12,5 +13,6 @@ metadata:
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
+{{- end }}
 {{- end }}
 {{- end }}

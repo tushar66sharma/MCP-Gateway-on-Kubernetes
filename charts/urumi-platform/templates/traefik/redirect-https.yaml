@@ -1,7 +1,10 @@
 {{- if .Values.global.tls.enabled }}
 {{- /* One Middleware per namespace that has an Ingress: Traefik only accepts a same-namespace reference
        from an Ingress annotation (<namespace>-<name>@kubernetescrd). The mcp namespace has no Ingress. */ -}}
-{{- $namespaces := list (dict "ns" .Values.namespaces.store "name" "wordpress" "component" "store") -}}
+{{- $namespaces := list -}}
+{{- if .Values.store.enabled -}}
+{{- $namespaces = append $namespaces (dict "ns" .Values.namespaces.store "name" "wordpress" "component" "store") -}}
+{{- end }}
 {{- if .Values.gateway.enabled -}}
 {{- $namespaces = append $namespaces (dict "ns" .Values.namespaces.gateway "name" "gateway" "component" "gateway") -}}
 {{- end }}

@@ -17,7 +17,8 @@ export function startWooMcpServer(o: StartOptions): Promise<RunningMcpHttpServer
   const { config } = o;
   const woo = o.woo ?? new WooClient({
     baseUrl: config.WOO_BASE_URL,
-    signingBaseUrl: config.WOO_SIGNING_BASE_URL,
+    signingBaseUrl: config.WOO_SIGNING_BASE_URL ?? '',
+    authMode: config.WOO_AUTH_MODE,
     consumerKey: config.WOO_CONSUMER_KEY,
     consumerSecret: config.WOO_CONSUMER_SECRET,
     timeoutMs: config.WOO_TIMEOUT_MS,

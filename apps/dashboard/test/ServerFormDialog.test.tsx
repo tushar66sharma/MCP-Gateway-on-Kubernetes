@@ -49,6 +49,22 @@ describe('ServerFormDialog', () => {
     expect(url).toBeInvalid();
   });
 
+  it('the SSRF error shows the internalUpstreams hint', async () => {
+    mockFetch({
+      'GET /api/auth/me': () => errorResponse(401, 'UNAUTHENTICATED'),
+      'POST /api/servers': () => errorResponse(400, 'SSRF_REJECTED', 'Upstream URL rejected: private address'),
+    });
+    renderDialog();
+    await userEvent.type(screen.getByLabelText(/^Slug/), 'extra');
+    await userEvent.type(screen.getByLabelText(/^Name/), 'Extra');
+    await userEvent.type(screen.getByLabelText(/^URL/), 'http://mcp-extra.tools.svc.cluster.local:3010/mcp');
+    await userEvent.click(screen.getByRole('button', { name: 'Add server' }));
+    const url = screen.getByLabelText(/^URL/);
+    await waitFor(() =>
+      expect(url).toHaveAccessibleDescription(/If this server runs inside this cluster, list its namespace in the chart setting gateway\.internalUpstreams\./),
+    );
+  });
+
   it('blank credential on edit is omitted from PATCH body', async () => {
     const fetchMock = mockFetch({
       'GET /api/auth/me': () => errorResponse(401, 'UNAUTHENTICATED'),

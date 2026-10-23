@@ -1,3 +1,4 @@
+{{- if .Values.store.enabled }}
 {{- /*
 WordPress scheduled work (WP-Cron events, WooCommerce Action Scheduler) without loopback requests.
 WordPress normally runs it by requesting its own public URL (wp-cron.php) on page loads. On a VPS that
@@ -100,4 +101,5 @@ spec:
               emptyDir:
                 # WP-CLI's cache and PHP temp files only; no downloads happen here.
                 sizeLimit: 64Mi
+{{- end }}
 {{- end }}

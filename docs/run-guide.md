@@ -414,7 +414,7 @@ HPOS ("high-performance order storage") is **off** (`woocommerce_custom_orders_t
 
 ### Why it is internal-only
 
-It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server; since Phase 3 the list also shows the `gateway` Ingress, which routes only `/api` and `/mcp` on `app.localhost` to the gateway). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. The **gateway** ([section 9](#9-the-gateway-phase-3)) is the single public door: it checks who the caller is, then calls this server with the token. Since Phase 5 a NetworkPolicy also limits who can reach it: only the gateway pod may open a connection to it (verified 2026-10-22: a pod in the `default` namespace was refused, the gateway got its `401`; `scripts	est-network-policies.ps1`, [security.md, section 15](security.md#15-networkpolicies-phase-5)). The token is still required on top.
+It has a ClusterIP Service and **no Ingress**, so nothing outside the cluster can reach it (verified 2026-10-19: `kubectl get ingress -A` lists only `store`, and `http://store.localhost/mcp` is answered by WordPress with a 404, not by the MCP server; since Phase 3 the list also shows the `gateway` Ingress, which routes only `/api` and `/mcp` on `app.localhost` to the gateway). Its only protection is a bearer token, and it can change real store data, so it is not exposed directly. The **gateway** ([section 9](#9-the-gateway-phase-3)) is the single public door: it checks who the caller is, then calls this server with the token. Since Phase 5 a NetworkPolicy also limits who can reach it: only the gateway pod may open a connection to it (verified 2026-10-22: a pod in the `default` namespace was refused, the gateway got its `401`; `scripts\test-network-policies.ps1`, [security.md, section 15](security.md#15-networkpolicies-phase-5)). The token is still required on top.
 
 ### How it starts
 
@@ -511,6 +511,10 @@ Verified 2026-10-19 with SQL against the live database (section 7): one key row,
 - **No direct external access.** Nothing outside the cluster can call this server. Clients connect through the **gateway** ([section 9](#9-the-gateway-phase-3)), and people use it through the [dashboard](#the-dashboard-phase-4) (Phase 4).
 - **No per-user identity at the server itself.** It has one shared bearer token; per-user keys and the audit log are the gateway's job (built in Phase 3).
 - **Reachable only from the gateway** (NetworkPolicy since Phase 5); `kubectl port-forward`, which `check-mcp-woocommerce.ps1` uses, is not affected by the policies.
+
+### A store hosted elsewhere (Phase 5b)
+
+`scripts\dev\test-external-store.ps1 [-Write]` proves the HTTPS Basic mode against the local store: it creates a throw-away CA, a temporary TLS Secret and Ingress (`ext-proof*`) in `store`, runs the built server on the host with TLS verification on, runs the smoke client, runs a negative control without the CA, and removes everything. It prints no key, secret or token. Before it creates anything it refuses (exit 1, nothing changed) unless the kubectl context is `k3d-urumi` and neither `ingress/ext-proof` nor `secret/ext-proof-tls` already exists in `store`; an existing one is left in place for you to inspect (**tested** 2026-10-23 with a fake context and a pre-existing Ingress). Setting up a real external store: [deployment guide](deployment.md#using-a-woocommerce-store-hosted-elsewhere).
 
 ## 9. The gateway (Phase 3)
 
@@ -638,6 +642,39 @@ $body = $null
 
 The seeds of the other two: `woo` is `bearer` at `http://mcp-woocommerce.mcp.svc.cluster.local:3001/mcp` (Secret `mcp-woocommerce-token`, key `token`), `notes` is `bearer` at `http://mcp-notes.mcp.svc.cluster.local:3002/mcp` (Secret `mcp-notes-token`, key `token`). Which slugs have been seeded: query 9 below.
 
+### Add an MCP server that runs inside the cluster
+
+A server of your own that runs in this cluster (not one of `woo`, `notes`, `utils`) needs two things the chart controls: permission in the gateway's SSRF allow-list and a NetworkPolicy path. Without them the dashboard form shows the inline error `Upstream URL rejected: ...` followed by the hint `If this server runs inside this cluster, list its namespace in the chart setting gateway.internalUpstreams.` (the API answers `400 SSRF_REJECTED`), or, for a server in the `mcp` namespace, the server is saved but shows `unreachable` with `connection refused`. Both were observed on 2026-10-23 (the hint then read `In-cluster servers must be listed in the chart setting gateway.internalUpstreams.`; its new wording is covered by the unit test, not seen live).
+
+1. Run your server with a Service in a namespace of your choice. For the namespace `mcp` the pod must carry labels you can select on, for example `app.kubernetes.io/name: my-mcp-server`; the namespace `mcp` enforces the `restricted` Pod Security level, so the pod must be non-root with a RuntimeDefault seccomp profile, dropped capabilities and no privilege escalation.
+2. Add the entry to your values file: `deploy/values-local.yaml` on the local cluster, which `up.ps1 -Redeploy` applies; on a VPS, the production values file passed with `scripts\deploy.ps1 -ValuesFile <file>`. The full description is in [deployment.md](deployment.md#registering-mcp-servers-that-run-inside-the-cluster). Do not list system namespaces such as `kube-system` or `gateway`: that would let the gateway reach cluster components. Apply it:
+
+   ```yaml
+   gateway:
+     internalUpstreams:
+       - namespace: mcp
+         port: 3010
+         podLabels:
+           app.kubernetes.io/name: my-mcp-server
+   ```
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy
+   ```
+
+   The gateway restarts (Recreate strategy), so log in again afterwards.
+3. In the dashboard open Servers > Add server (or `POST /api/servers` with the login and CSRF headers from the section above): URL `http://my-mcp-server.mcp.svc.cluster.local:3010/mcp`, then the authentication your server needs. Click Refresh on the server; it should become `connected` with its tool count. If it says `connection refused` right after a deploy, wait ten seconds and refresh again.
+4. For a namespace other than `mcp` the chart only opens the SSRF allow-list and the gateway's egress. If that namespace has its own default-deny policy, add an ingress policy there that admits the pods labelled `app.kubernetes.io/name=gateway` in the namespace `gateway` on the port.
+5. To remove it: delete the server (dashboard or `DELETE /api/servers/<id>`), delete the entry from the values and run `up.ps1 -Redeploy` again.
+
+**The whole procedure is exercised by a script** (it creates its own throw-away servers and removes them; it prints no keys):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev\test-internal-upstream.ps1
+```
+
+Verified 2026-10-23: before the setting the server in `mcp` was saved (HTTP 201) and `unreachable` (`connection refused`), and a server in the new namespace `tools-test` was refused with `400 SSRF_REJECTED`; after the setting both refreshed to `connected` with 4 tools, and `calculate` with `6*7` through a temporary API key returned `6*7 = 42`; after the cleanup and `up.ps1 -Redeploy` the NetworkPolicy count (16), `SSRF_ALLOWED_INTERNAL_HOSTS` (`*.mcp.svc.cluster.local`) and the namespace list were the same as before.
+
 ### Call the gateway with MCP Inspector (command line)
 
 Verified 2026-10-19 in Windows PowerShell 5.1 with a key from the steps above in `$env:UGW_KEY` (needs Node; the first run downloads the Inspector through `npx`):
@@ -663,16 +700,79 @@ Remove-Item "$env:TEMP\mcp-body.json"
 
 Without an `MCP-Protocol-Version` header the answer arrives as one server-sent event (`event: message` then `data: {...}`); with `MCP-Protocol-Version: 2026-07-28` and a `_meta` block it is plain JSON, as in the captured examples in [learning/03-gateway.md](learning/03-gateway.md#5-captured-traffic). Without the `Authorization` header you get `401`.
 
-### Connect Claude Code (for you to try)
+### Connect Claude Code
 
-**For you to try; I did not run it**, because `claude mcp add` changes your Claude Code configuration. The syntax is the one in the Claude Code documentation for remote HTTP servers (checked against the docs on 2026-10-19), with your own key in place of the placeholder:
+Claude Code is Anthropic's coding assistant. It can use the gateway as an MCP server, so its 15 tools (`notes__...`, `utils__...`, `woo__...`) become available inside Claude Code. You need a gateway key first (create one as shown above, or on the dashboard's Keys page).
+
+**What was verified (2026-10-23).** Only the example file: `.mcp.json.example` parses as JSON (`node -e "JSON.parse(...)"`), and its fields (`"type": "http"`, `${VAR}` and `${VAR:-default}` in `url` and `headers`) match the Claude Code documentation ([setup](https://code.claude.com/docs/en/setup) and [MCP](https://code.claude.com/docs/en/mcp), read the same day). **The owner's machine has no `claude` command, so steps (b), (c) and (d) below were never run: they are marked "for you to run".** What you should see (expected, not tested): `/mcp` lists `urumi-gateway` as connected, and asking "what are today's orders?" calls `woo__list_orders`.
+
+#### (a) Why `claude` may not be recognised
+
+The Claude Code extension for VS Code bundles its own copy of Claude Code and adds nothing to your PATH. So the VS Code panel can work while `claude` in a terminal says "not recognized". You do not need the command line at all if you use step (d). Verified: not applicable (an explanation, not a command).
+
+#### (b) Install the command line (for you to run)
+
+Pick one. All three are from the Claude Code setup page (checked 2026-10-23):
 
 ```powershell
-claude mcp add --transport http urumi-gateway http://app.localhost/mcp --header "Authorization: Bearer <your key>"
+irm https://claude.ai/install.ps1 | iex       # option 1: the installer script
+winget install Anthropic.ClaudeCode            # option 2: WinGet
+npm install -g @anthropic-ai/claude-code       # option 3: npm (needs Node.js 22 or newer)
+```
+
+Then **open a new terminal** (an old one keeps the old PATH) and run `claude --version`. A version number means it works.
+
+#### (c) Add the server with `claude mcp add`, key from an environment variable (for you to run)
+
+First put the key in an environment variable of this window without printing it (the same idea as `UGW_KEY` above; skip this line if `$env:UGW_KEY` is already set, and use that name instead):
+
+```powershell
+$env:URUMI_GATEWAY_KEY = (Read-Host "Paste the gateway key" -AsSecureString | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password })
+claude mcp add --transport http urumi-gateway http://app.localhost/mcp --header "Authorization: Bearer $env:URUMI_GATEWAY_KEY"
 claude mcp list
 ```
 
-Inside Claude Code, `/mcp` shows the server and its tools. Expected (not tested): the 15 tools appear as `notes__...`, `utils__...`, `woo__...`, and asking "what are today's orders?" calls `woo__list_orders`. The command saves the key in your Claude Code configuration in plain text. If it fails to connect, `claude mcp remove urumi-gateway`, then check the key with the Inspector line above. `app.localhost` must resolve from the Claude Code process (it should, like in a browser; if not, run `scripts\setup-hosts.ps1`).
+Note that PowerShell expands `$env:URUMI_GATEWAY_KEY` before `claude` sees it, so **the CLI stores the expanded header, with the real key, in its own configuration file in plain text**. That file is outside this repository, but treat it as a secret. Remove it with `claude mcp remove urumi-gateway`. Inside Claude Code, `/mcp` shows the server and its tools. If it fails to connect, check the key with the Inspector line above, and make sure `app.localhost` resolves from the Claude Code process (`scripts\setup-hosts.ps1`).
+
+#### (d) No command line: `.mcp.json` in the project (for you to run)
+
+This works with the VS Code extension and keeps the key out of every file, because the file only names an environment variable.
+
+1. Copy the example: `Copy-Item .mcp.json.example .mcp.json`. The copy is ignored by Git (`.gitignore` lists `.mcp.json`). The example is:
+
+   ```json
+   {
+     "mcpServers": {
+       "urumi-gateway": {
+         "type": "http",
+         "url": "${URUMI_GATEWAY_URL:-http://app.localhost}/mcp",
+         "headers": { "Authorization": "Bearer ${URUMI_GATEWAY_KEY}" }
+       }
+     }
+   }
+   ```
+
+   `${URUMI_GATEWAY_URL:-http://app.localhost}` means: use the variable if it is set, otherwise the local address. `${URUMI_GATEWAY_KEY}` has no default on purpose: if it is missing, Claude Code reports the problem instead of sending no key.
+2. Set the key as a **user** environment variable, typing it into a hidden prompt (nothing is echoed or saved in your shell history):
+
+   ```powershell
+   $k = Read-Host "Paste the gateway key" -AsSecureString
+   [Environment]::SetEnvironmentVariable('URUMI_GATEWAY_KEY', [System.Net.NetworkCredential]::new('', $k).Password, 'User')
+   $k = $null
+   ```
+
+   On a server, also set `URUMI_GATEWAY_URL` (see (e)) the same way, without the `Read-Host`.
+3. **Restart VS Code completely** (close every window). Programs only see user variables that existed when they started.
+4. Open the project in Claude Code. A server from a project `.mcp.json` asks for a **one-time approval** in an interactive session: approve `urumi-gateway`.
+5. Run `/mcp`. Expected: `urumi-gateway` connected with its tools.
+
+#### (e) The address on a server
+
+On a real server the gateway is not `app.localhost`. Use the address the dashboard's **Overview** page shows under "Connect a client" (it is the address your browser uses, followed by `/mcp`). In step (c) put it in the command; in step (d) set `URUMI_GATEWAY_URL` to the address without `/mcp`, for example `https://app.example.com`. If the public address changes later, each user re-adds it once; keys keep working ([deployment.md](deployment.md#when-the-public-address-changes)).
+
+#### (f) Never paste keys into chats or commits
+
+Do not paste a key into a chat (with Claude or anyone), an issue or a commit. Keep real keys only in environment variables, never in `.mcp.json` itself (use the `${...}` form), and never remove `.mcp.json` from `.gitignore`. If a key leaks, revoke it on the Keys page and create a new one.
 
 ### Connect Cursor (not tested)
 
@@ -1039,6 +1139,10 @@ then run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Re
 
 **Change or remove the key.** Edit `.env` and run step 3 again (the script restarts the gateway). The script refuses to run with both keys empty; to switch the chat off completely, delete the Secret and restart the gateway: `kubectl -n gateway delete secret llm-api-keys`, then `kubectl -n gateway rollout restart deploy/gateway` (**expected**: the chat then says it is not configured; not run).
 
+**Guardrails (Phase 5b).** The chat only helps with the store, your notes and small utility tasks. A small model checks each message first, and most off-topic messages get a fixed refusal before the main model runs (a cleverly worded or forged message can still get through; the scope rule in the main prompt, the answer cap and the daily budget are the real bounds), answers are capped at 1024 tokens, and each user has 50,000 tokens a day (resets at 00:00 in the store time zone; `GET /api/chat/status` shows `used` and `remaining`). To change them: `gateway.chat.dailyTokenBudget` (0 = unlimited), `gateway.chat.topicCheck`, `gateway.llm.maxOutputTokens` in the Helm values, then `up.ps1 -Redeploy`. Details: [ai-integration.md](ai-integration.md#9-guardrails-scope-topic-check-answer-cap-and-daily-budget-phase-5b).
+
+**What the Chat page shows (Phase 5b).** Above the conversation a line `Today: 1,234 / 50,000 tokens` shows your use today; it updates after every message and is hidden when the budget is unlimited (`dailyTokenBudget: 0`). A refused off-topic message appears as a normal assistant reply with the small note "Outside this assistant's scope". When the day's budget is used up, the red box shows the server message and `Resets at <your local time>`, there is no Retry button, and the message box is disabled with "Daily AI budget used up" until that time, when it turns on by itself (a screen reader is told). The lock also follows the status, so **New conversation** or a reload does not unlock a day that is used up. Nothing to fix: wait for the reset, or an admin raises `gateway.chat.dailyTokenBudget` and runs `up.ps1 -Redeploy`. Covered by unit tests; verified live 2026-10-23: the usage line is visible on desktop and phone width (the budget-used-up state was not tried live).
+
 Problems: [chat says not configured](troubleshooting.md#chat-says-the-ai-provider-isnt-configured), [the key is rejected](troubleshooting.md#chat-says-the-ai-provider-rejected-the-api-key-llm_auth_failed), [rate limited](troubleshooting.md#chat-says-the-ai-provider-is-rate-limited-429).
 
 ## 11. Each part of the project
@@ -1046,13 +1150,13 @@ Problems: [chat says not configured](troubleshooting.md#chat-says-the-ai-provide
 | Part | Status | How to run | How to check | Logs |
 |---|---|---|---|---|
 | **Store** (WordPress + WooCommerce + MariaDB) | Available (Phase 1) | `scripts\up.ps1`; stop with `scripts\stop.ps1` (full command form: see the convention at the top) | `kubectl -n store get pods`; `scripts\check-woo-api.ps1`; `scripts\dev\customer-order-smoke.ps1` | `kubectl -n store logs deploy/wordpress -c wordpress`; `kubectl -n store logs mariadb-0`; `kubectl -n store logs job/store-setup` |
-| **WooCommerce MCP server** | Available (Phase 2), internal only | `scripts\up.ps1` builds and deploys it; rebuild with `scripts\build-images.ps1` then `up.ps1 -Redeploy` | `kubectl -n mcp get pods`; `scripts\check-mcp-woocommerce.ps1` (add `-Write` to also create a draft product); explore with MCP Inspector, see [section 8](#8-woocommerce-mcp-server-phase-2) | `kubectl -n mcp logs deploy/mcp-woocommerce` |
+| **WooCommerce MCP server** | Available (Phase 2), internal only; since Phase 5b it can also serve a store hosted elsewhere over HTTPS ([section 8](#a-store-hosted-elsewhere-phase-5b)) | `scripts\up.ps1` builds and deploys it; rebuild with `scripts\build-images.ps1` then `up.ps1 -Redeploy` | `kubectl -n mcp get pods`; `scripts\check-mcp-woocommerce.ps1` (add `-Write` to also create a draft product); explore with MCP Inspector, see [section 8](#8-woocommerce-mcp-server-phase-2) | `kubectl -n mcp logs deploy/mcp-woocommerce` |
 | **Notes MCP server** (`mcp-notes`) | Available (Phase 3), internal only; reached through the gateway as `notes__...` | `scripts\up.ps1` builds and deploys it | `kubectl -n mcp get pods`; `scripts\check-gateway.ps1 -Write` | `kubectl -n mcp logs deploy/mcp-notes` |
 | **Utilities MCP server** (`mcp-utilities`) | Available (Phase 3), internal only; reached through the gateway as `utils__...` | `scripts\up.ps1` builds and deploys it | `kubectl -n mcp get pods`; `scripts\check-gateway.ps1 -Isolation` | `kubectl -n mcp logs deploy/mcp-utilities` |
-| **Gateway** | Available (Phase 3): `http://app.localhost/api` and `/mcp` | `scripts\up.ps1` (add `-Redeploy` after code changes); create a key as in [section 9](#9-the-gateway-phase-3) | `kubectl -n gateway get pods`; `scripts\check-gateway.ps1` (add `-Write`, `-Isolation`) | `kubectl -n gateway logs deploy/gateway` |
+| **Gateway** | Available (Phase 3): `http://app.localhost/api` and `/mcp`; since Phase 5b it can also register your own in-cluster MCP servers via `gateway.internalUpstreams` ([how](#add-an-mcp-server-that-runs-inside-the-cluster)); Claude Code connects as in [Connect Claude Code](#connect-claude-code) | `scripts\up.ps1` (add `-Redeploy` after code changes); create a key as in [section 9](#9-the-gateway-phase-3) | `kubectl -n gateway get pods`; `scripts\check-gateway.ps1` (add `-Write`, `-Isolation`) | `kubectl -n gateway logs deploy/gateway` |
 | **Postgres** (the gateway's database) | Available (Phase 3), internal only | `scripts\up.ps1` | `kubectl -n gateway get pods`; look inside with [section 10](#10-viewing-the-gateway-database-postgres) | `kubectl -n gateway logs postgres-0` |
 | **Dashboard** (web page) | Available (Phase 4): <http://app.localhost/> | `scripts\up.ps1` builds and deploys it (add `-Redeploy` after code changes); for UI work, `npm run dev -w @urumi/dashboard` serves it at `http://localhost:5173` with `/api` and `/mcp` proxied to the cluster ([apps/dashboard/README.md](../apps/dashboard/README.md)) | `kubectl -n gateway get pods`; `scripts\check-dashboard.ps1` ([the dashboard](#the-dashboard-phase-4)) | `kubectl -n gateway logs deploy/dashboard` |
-| **Chat agent** (inside the gateway) | Available (Phase 4) once the AI key is set | [Set up the AI chat](#set-up-the-ai-chat): `.env`, then `scripts\create-secrets.ps1` | `kubectl -n gateway logs deploy/gateway \| Select-String "llm "` shows `llm configured: ...`; the Chat page; `scripts\check-dashboard.ps1 -Project desktop` sends one chat message | `kubectl -n gateway logs deploy/gateway \| Select-String "chat turn"` (no message text) |
+| **Chat agent** (inside the gateway) | Available (Phase 4) once the AI key is set; Phase 5b guardrails: off-topic refusal, 1024-token answers and a 50,000-token daily budget per user (the Chat page shows `Today: used / limit tokens`) | [Set up the AI chat](#set-up-the-ai-chat): `.env`, then `scripts\create-secrets.ps1` | `kubectl -n gateway logs deploy/gateway \| Select-String "llm "` shows `llm configured: ...`; the Chat page; `scripts\check-dashboard.ps1 -Project desktop` sends one chat message | `kubectl -n gateway logs deploy/gateway \| Select-String "chat turn"` (no message text) |
 
 ## 12. Health checks and logs
 

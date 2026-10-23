@@ -173,3 +173,61 @@ describe('WooClient', () => {
     expectNoSecrets(e);
   });
 });
+
+describe('WooClient basic mode', () => {
+  function makeBasic(handler: (url: URL, init: RequestInit) => Promise<Response>) {
+    const calls: Recorded[] = [];
+    const fetchImpl = ((input: URL | string, init: RequestInit) => {
+      const url = new URL(String(input));
+      calls.push({ url, init });
+      return handler(url, init);
+    }) as unknown as typeof fetch;
+    const client = new WooClient({
+      baseUrl: 'https://shop.example.com', signingBaseUrl: '', authMode: 'basic',
+      consumerKey, consumerSecret, timeoutMs: 1000, fetchImpl,
+    });
+    return { client, calls };
+  }
+
+  it('basic mode sends an Authorization header and no oauth parameters', async () => {
+    const { client, calls } = makeBasic(() => json('[]'));
+    await client.get('/products', { per_page: 5 });
+    const call = calls[0];
+    expect(call).toBeDefined();
+    const headers = call?.init.headers as Record<string, string>;
+    expect(headers.authorization).toBe(`Basic ${Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64')}`);
+    expect(call?.url.origin).toBe('https://shop.example.com');
+    expect(call?.url.pathname).toBe('/wp-json/wc/v3/products');
+    expect(call?.url.search).toBe('?per_page=5');
+    expect(call?.url.toString()).not.toContain('oauth_');
+    expect(call?.url.username).toBe('');
+    expect(call?.init.redirect).toBe('manual');
+  });
+
+  it('basic-mode errors never include the credentials', async () => {
+    const header = `Basic ${Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64')}`;
+    const b64 = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
+    const bodies = [
+      JSON.stringify({ code: 'rest_forbidden', message: `denied ${header} ${consumerKey} ${consumerSecret}` }),
+      `<html>echo ${header} ${b64}</html>`,
+    ];
+    for (const body of bodies) {
+      const { client } = makeBasic(() => Promise.resolve(new Response(body, { status: 401 })));
+      const e = await failure(client.get('/products'));
+      for (const s of [consumerKey, consumerSecret, b64]) expect(e.message).not.toContain(s);
+    }
+    const net = makeBasic(() => Promise.reject(new Error(`boom ${header}`)));
+    const e = await failure(net.client.get('/products'));
+    expect(e.message).not.toContain(b64);
+  });
+
+  it('refuses basic mode with a non-https base URL, without echoing credentials', () => {
+    let message = '';
+    try {
+      new WooClient({ baseUrl: 'http://shop.example.com', signingBaseUrl: '', authMode: 'basic', consumerKey, consumerSecret, timeoutMs: 1000 });
+    } catch (e) { message = (e as Error).message; }
+    expect(message).toMatch(/https/);
+    expect(message).not.toContain(consumerKey);
+    expect(message).not.toContain('shop.example.com');
+  });
+});

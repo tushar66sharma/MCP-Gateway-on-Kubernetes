@@ -56,7 +56,7 @@ export function sessionCookieOf(res: request.Response): string | null {
  * `llm` is the chat provider (a scripted fake in tests); null (default) answers LLM_NOT_CONFIGURED.
  */
 export async function startHarness(
-  o: { seedAdmin?: boolean; upstreams?: UpstreamRecord[]; env?: Record<string, string>; llm?: LlmProvider | null } = {},
+  o: { seedAdmin?: boolean; upstreams?: UpstreamRecord[]; env?: Record<string, string>; llm?: LlmProvider | null; topicLlm?: LlmProvider | null } = {},
 ): Promise<Harness> {
   const db = await createTestDb();
   const logs: string[] = [];
@@ -94,6 +94,7 @@ export async function startHarness(
     audit,
     repo,
     llm: o.llm ?? null,
+    topicLlm: o.topicLlm ?? null,
   };
 
   if (o.seedAdmin ?? true) await ensureBootstrapAdmin(db.db, config.BOOTSTRAP_ADMIN_EMAIL, config.BOOTSTRAP_ADMIN_PASSWORD, logger);

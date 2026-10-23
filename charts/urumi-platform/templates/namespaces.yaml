@@ -1,4 +1,5 @@
 {{- range $key, $ns := .Values.namespaces }}
+{{- if or $.Values.store.enabled (ne $key "store") }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -16,4 +17,5 @@ metadata:
   annotations:
     # Survive `helm uninstall` so store data (PVCs, Secrets) is never deleted by accident.
     helm.sh/resource-policy: keep
+{{- end }}
 {{- end }}

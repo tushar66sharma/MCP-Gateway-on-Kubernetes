@@ -1,7 +1,8 @@
 Release {{ .Release.Name }} (chart {{ .Chart.Name }}-{{ .Chart.Version }}) is deployed in namespace {{ .Release.Namespace }}.
 
-Namespaces: {{ .Values.namespaces.store }}, {{ .Values.namespaces.mcp }}, {{ .Values.namespaces.gateway }}
-
+{{- $extUrl := ((.Values.mcpWoocommerce).externalStore | default dict).url | default "" }}
+Namespaces: {{ if .Values.store.enabled }}{{ .Values.namespaces.store }}, {{ end }}{{ .Values.namespaces.mcp }}, {{ .Values.namespaces.gateway }}
+{{ if .Values.store.enabled }}
 Storefront:  {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}
 Store admin: {{ include "urumi.publicUrl" (dict "root" $ "host" .Values.global.storeHost) }}/wp-admin   (user: {{ (.Values.storeSetup | default dict).adminUser | default "admin" }})
 
@@ -15,6 +16,14 @@ Admin password (copied to the clipboard, never printed; run from the repository 
 
 Store setup log:
   kubectl -n {{ .Values.namespaces.store }} logs job/store-setup
+{{- else }}
+No store is installed in this cluster (store.enabled is false).
+{{- end }}
+{{- if $extUrl }}
+
+The WooCommerce MCP server talks to the external store {{ $extUrl }} with HTTP Basic over https.
+Its key and secret come from the Secret {{ .Values.mcpWoocommerce.externalStore.existingSecret }} in namespace {{ .Values.namespaces.mcp }}.
+{{- end }}
 {{- if .Values.gateway.enabled }}
 {{- $app := include "urumi.publicUrl" (dict "root" $ "host" .Values.global.appHost) }}
 

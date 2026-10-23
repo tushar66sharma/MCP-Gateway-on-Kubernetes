@@ -30,6 +30,20 @@ spec:
       ports:
         - { protocol: TCP, port: {{ $s.port }} }
     {{- end }}
+    {{- range $u := (.Values.gateway.internalUpstreams | default list) }}
+    # gateway.internalUpstreams: namespace {{ $u.namespace }}, TCP {{ $u.port }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $u.namespace }}
+          {{- if $u.podLabels }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $u.podLabels | nindent 14 }}
+          {{- end }}
+      ports:
+        - { protocol: TCP, port: {{ $u.port }} }
+    {{- end }}
     - to:
         - podSelector:
             matchLabels:

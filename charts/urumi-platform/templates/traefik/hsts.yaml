@@ -1,5 +1,8 @@
 {{- if .Values.global.tls.enabled }}
-{{- $namespaces := list (dict "ns" .Values.namespaces.store "name" "wordpress" "component" "store") -}}
+{{- $namespaces := list -}}
+{{- if .Values.store.enabled -}}
+{{- $namespaces = append $namespaces (dict "ns" .Values.namespaces.store "name" "wordpress" "component" "store") -}}
+{{- end }}
 {{- if .Values.gateway.enabled -}}
 {{- $namespaces = append $namespaces (dict "ns" .Values.namespaces.gateway "name" "gateway" "component" "gateway") -}}
 {{- end }}

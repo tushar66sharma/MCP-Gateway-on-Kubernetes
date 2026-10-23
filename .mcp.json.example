@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "urumi-gateway": {
+      "type": "http",
+      "url": "${URUMI_GATEWAY_URL:-http://app.localhost}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${URUMI_GATEWAY_KEY}"
+      }
+    }
+  }
+}

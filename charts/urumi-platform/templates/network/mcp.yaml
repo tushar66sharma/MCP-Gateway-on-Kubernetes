@@ -1,10 +1,12 @@
 {{- if .Values.networkPolicies.enabled }}
 {{- $ns := .Values.namespaces.mcp }}
 {{- $gw := .Values.namespaces.gateway }}
+{{- $extUrl := (.Values.mcpWoocommerce.externalStore | default dict).url | default "" }}
+{{- $extCidrs := (.Values.mcpWoocommerce.externalStore | default dict).extraEgressCIDRs | default list }}
 {{- $servers := list (dict "name" "mcp-woocommerce" "port" 3001) (dict "name" "mcp-notes" "port" 3002) (dict "name" "mcp-utilities" "port" 3003) }}
 {{- range $s := $servers }}
 ---
-# {{ $s.name }}: only the gateway in.{{ if eq $s.name "mcp-woocommerce" }} Out: the WordPress service (WooCommerce REST).{{ end }}
+# {{ $s.name }}: only the gateway in.{{ if eq $s.name "mcp-woocommerce" }} Out: {{ if $extUrl }}the internet on 443 and 80 (a WooCommerce store hosted elsewhere), private ranges excluded{{ else }}the WordPress service (WooCommerce REST){{ end }}.{{ end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -33,6 +35,16 @@ spec:
         - { protocol: TCP, port: {{ $s.port }} }
   {{- if eq $s.name "mcp-woocommerce" }}
   egress:
+    {{- if $extUrl }}
+    {{- include "urumi.internetEgress" $ | nindent 4 }}
+    {{- range $cidr := $extCidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ $cidr | quote }}
+      ports:
+        - { protocol: TCP, port: 443 }
+    {{- end }}
+    {{- else }}
     - to:
         - namespaceSelector:
             matchLabels:
@@ -42,6 +54,39 @@ spec:
               {{- include "urumi.selectorLabels" (dict "root" $ "name" "wordpress") | nindent 14 }}
       ports:
         - { protocol: TCP, port: 80 }
+    {{- end }}
   {{- end }}
+{{- end }}
+{{- range $i, $u := (.Values.gateway.internalUpstreams | default list) }}
+{{- if eq $u.namespace $.Values.namespaces.mcp }}
+---
+# gateway.internalUpstreams[{{ $i }}]: the gateway may reach {{ if $u.podLabels }}the labelled pods{{ else }}every pod{{ end }} in {{ $ns }} on TCP {{ $u.port }}.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-internal-upstream-{{ $i }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "urumi.labels" (dict "root" $ "name" (printf "mcp-internal-upstream-%d" $i) "component" "network") | nindent 4 }}
+spec:
+  {{- if $u.podLabels }}
+  podSelector:
+    matchLabels:
+      {{- toYaml $u.podLabels | nindent 6 }}
+  {{- else }}
+  podSelector: {}
+  {{- end }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $gw }}
+          podSelector:
+            matchLabels:
+              {{- include "urumi.selectorLabels" (dict "root" $ "name" "gateway") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: {{ $u.port }} }
+{{- end }}
 {{- end }}
 {{- end }}

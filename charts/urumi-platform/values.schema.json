@@ -4,6 +4,25 @@
   "required": ["global", "namespaces"],
   "if": { "properties": { "global": { "properties": { "tls": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["tls"] } }, "required": ["global"] },
   "then": { "properties": { "global": { "properties": { "publicScheme": { "const": "https" } } } } },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "store": { "properties": { "enabled": { "const": false } }, "required": ["enabled"] },
+          "mcpWoocommerce": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }
+        },
+        "required": ["store", "mcpWoocommerce"]
+      },
+      "then": {
+        "properties": {
+          "mcpWoocommerce": {
+            "properties": { "externalStore": { "properties": { "url": { "type": "string", "minLength": 1 } }, "required": ["url"] } },
+            "required": ["externalStore"]
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "global": {
       "type": "object",
@@ -27,6 +46,11 @@
           }
         }
       }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
     },
     "podSecurity": {
       "type": "object",
@@ -82,6 +106,24 @@
         }
       }
     },
+    "mcpWoocommerce": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "externalStore": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "pattern": "^(https://[^/@\\s]+(/.*)?)?$" },
+            "existingSecret": { "type": "string", "pattern": "^([a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?)?$" },
+            "extraEgressCIDRs": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/([0-9]|[12][0-9]|3[0-2])$" }
+            }
+          }
+        }
+      }
+    },
     "mcpNotes": {
       "type": "object",
       "required": ["enabled", "port"],
@@ -126,6 +168,19 @@
         "healthTimeoutMs": { "type": "integer", "minimum": 500 },
         "callTimeoutMs": { "type": "integer", "minimum": 11000, "maximum": 120000 },
         "mcpAuthFailureLimitPerMin": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "internalUpstreams": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["namespace", "port"],
+            "properties": {
+              "namespace": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", "not": { "enum": ["kube-system", "kube-public", "kube-node-lease"] } },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "podLabels": { "type": "object", "additionalProperties": { "type": "string" } }
+            }
+          }
+        },
         "llm": {
           "type": "object",
           "additionalProperties": false,
@@ -137,7 +192,8 @@
             "fallbackProvider": { "type": "string", "enum": ["", "groq", "openrouter"] },
             "fallbackModel": { "type": "string" },
             "timeoutMs": { "type": "integer", "minimum": 5000, "maximum": 120000 },
-            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 }
+            "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "maxOutputTokens": { "type": "integer", "minimum": 256, "maximum": 4096 }
           }
         },
         "chat": {
@@ -147,7 +203,11 @@
           "properties": {
             "turnTimeoutMs": { "type": "integer", "minimum": 10000, "maximum": 120000 },
             "maxSteps": { "type": "integer", "minimum": 1, "maximum": 16 },
-            "rateLimitPerMin": { "type": "integer", "minimum": 1, "maximum": 120 }
+            "rateLimitPerMin": { "type": "integer", "minimum": 1, "maximum": 120 },
+            "topicCheck": { "type": "boolean" },
+            "topicCheckModel": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{0,100}$" },
+            "topicCheckTimeoutMs": { "type": "integer", "minimum": 1000, "maximum": 15000 },
+            "dailyTokenBudget": { "type": "integer", "minimum": 0, "maximum": 10000000 }
           }
         },
         "resources": { "type": "object" }

@@ -72,7 +72,7 @@ describe('request log path redaction', () => {
       PGPASSWORD: 'pw',
     });
     running = await startGateway(
-      { config, logger, db, clock: () => new Date(), rateLimiter: new FixedWindowLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }), mcpAuthLimiter: new FixedWindowLimiter({ max: 30, windowMs: 60_000, clock: () => new Date() }), ...createUpstreamServices(config, logger, db), llm: null },
+      { config, logger, db, clock: () => new Date(), rateLimiter: new FixedWindowLimiter({ max: 10, windowMs: 60_000, clock: () => new Date() }), mcpAuthLimiter: new FixedWindowLimiter({ max: 30, windowMs: 60_000, clock: () => new Date() }), ...createUpstreamServices(config, logger, db), llm: null, topicLlm: null },
       { port: 0, host: '127.0.0.1' },
     );
     const base = `http://127.0.0.1:${running.port}`;

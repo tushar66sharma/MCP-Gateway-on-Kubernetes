@@ -1,8 +1,10 @@
 # Testing
 
-> **Status: end of Phase 5.** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent, the LLM layer, the `/mcp` failure limit and the migration lock), the dashboard's component tests, the Playwright browser smoke, and the Phase 5 scripts (`scripts/smoke-test.ps1`, `test-network-policies.ps1`, `validate-chart.ps1`, `check-invite-log.ps1`). The complete strategy and a coverage statement are Phase 6.
+> **Status: end of Phase 5b.** Covers the automated tests and cluster checks that exist today: the shared package, the three MCP servers, the gateway (including the chat agent, the LLM layer, the `/mcp` failure limit and the migration lock), the dashboard's component tests, the Playwright browser smoke, and the Phase 5 scripts (`scripts/smoke-test.ps1`, `test-network-policies.ps1`, `validate-chart.ps1`, `check-invite-log.ps1`). Phase 5b added tests for the chat guardrails, the budget, the external-store client and the dashboard budget UI (see the table "Phase 5b tests" below). The complete strategy and a coverage statement are Phase 6.
 
-Test counts below come from the Phase 5 final-review fix wave on 2026-10-23 (`npm test` from the repository root: **606 tests, all passing**: shared 55, dashboard 123, gateway 319, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
+**Phase 5b after the final-review fixes (2026-10-23): 671 tests, all passing** (shared 55, dashboard 133, gateway 367 in 32 files, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 77). The three back-to-back root runs are in the "Phase 5b final-review fixes" section below (the earlier "Phase 5b final verification" counted 655); the older tables below are the Phase 5 numbers, kept as history.
+
+Test counts in the next paragraph and table come from the Phase 5 final-review fix wave on 2026-10-23 (`npm test` from the repository root: **606 tests, all passing**: shared 55, dashboard 123, gateway 319, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 70). The root run passed **three times back to back**:
 
 | Run | shared | dashboard | gateway | mcp-notes | mcp-utilities | mcp-woocommerce |
 |---|---|---|---|---|---|---|
@@ -141,7 +143,7 @@ Verified 2026-10-19: plain, `-Write` and `-Isolation` runs passed. Isolation tim
 - MCP Inspector 2.11.0 (`--cli`) against `http://app.localhost/mcp`: `tools/list` (15 tools) and `woo__list_orders` with `period=today` worked (Task 3.8), and `utils__calculate` with `expression=6*7` returned `42` while writing these docs.
 - Chart: `helm lint` passes with `deploy/values-local.yaml` and `deploy/values-prod.yaml`; the rendered chart has no `SSRF_ALLOW_LOOPBACK`.
 - Production rehearsal (2026-10-23, `scripts\prod-rehearsal.ps1 -Up | -Verify | -Down`): `values-prod.yaml` plus `deploy/values-prod-test.yaml` installed into a temporary second k3d cluster `urumi-prod` (the local cluster stopped meanwhile and started again after). `-Verify` prints PASS/FAIL rows: pods ready under `restricted`, both certificates `Ready=True`, the http redirect (`301`), `200` with HSTS over https, `401` JSON on `/api/auth/me`, no `http://` store assets, a `Secure` session cookie on login, `chat/status` `configured:false`, `scripts\test-network-policies.ps1` (13 of 13) and `scripts\check-gateway.ps1 -Base https://app.prod.localhost:8443` (with `NODE_EXTRA_CA_CERTS`). All passed on the second run; the first run found two real faults (the redirect Middleware dropped a non-443 port, and one NetworkPolicy probe expected `200` from a WordPress that redirects plain http). Results and what was not run: [deployment.md](deployment.md#rehearsal-results-2026-10-23). `scripts\validate-chart.ps1` gained two rows for the redirect port.
-- Not tested: Claude Code and Cursor against the gateway (snippets are in the [run guide](run-guide.md#connect-claude-code-for-you-to-try) and labelled as such), a multi-replica gateway, the production values on a real VPS (they were rehearsed on a second k3d cluster, see above).
+- Not tested: Claude Code and Cursor against the gateway (the owner's machine has no `claude` command; the steps are in the [run guide](run-guide.md#connect-claude-code) and labelled "for you to run"; `.mcp.json.example` was only checked to be valid JSON, 2026-10-23), a multi-replica gateway, the production values on a real VPS (they were rehearsed on a second k3d cluster, see above).
 
 ### `scripts\check-dashboard.ps1` (Playwright, Phase 4)
 
@@ -158,6 +160,59 @@ Verified 2026-10-22 on images `8f6b79f` (the final-review fix wave): **17 tests,
 ### Live chat checks (Phase 4)
 
 On 2026-10-19, with Groq `openai/gpt-oss-120b` and no fallback, through the browser on the deployed images: four prompts each called the expected tool with success (`woo__create_product` → draft #36, `woo__list_orders` → the COD order #33 placed by `scripts\dev\customer-order-smoke.ps1`, `notes__create_note`, `notes__list_notes`), each tool call appeared in the Audit page with source **Chat**, and the draft products showed in wp-admin. Each single-tool turn cost 3.1-3.3K tokens (two model calls); a four-tool turn 9.1K. The first round showed Markdown and a guessed ₹ currency; the system prompt was fixed (plain text, currency only from a tool result), redeployed and re-checked. The `chat turn` log lines contained no message text. On 2026-10-20 one turn was also captured at the wire level for [learning/04-chat-agent.md](learning/04-chat-agent.md) (3,151 tokens).
+
+## Phase 5b tests
+
+Counts after the final-review fixes on 2026-10-23 (total 671; Phase 5 ended at 606: dashboard 123 to 133, gateway 319 to 367, mcp-woocommerce 70 to 77). "Cases" are the `it(...)` blocks of the file.
+
+| Area | File (cases) | Proves |
+|---|---|---|
+| Topic check | `apps/gateway/test/chat/topicCheck.test.ts` (19) | `buildTopicInput` pinned: a first message has no previous-assistant block, a follow-up carries it, only the directly preceding non-empty assistant message counts, its last 500 characters, tags neutralised in both parts; a message up to 2,000 characters is sent whole and a longer one as its first 1,000 and last 997 characters, so **padding cannot hide an off-topic request at the end**; `BLOCK` blocks and `ALLOW` allows, with usage; the verbatim system prompt including the follow-up sentence, no tools and the small output cap; **the topic request uses temperature 0** and exactly the builder's text; **the topic check sees the previous assistant message**; a user cannot close the data block; a failing check falls back to allow (`error`) with the `LLM_*` code, `timeout` or `unknown` and never the error text; an empty or unparsable verdict allows (`unparsed`); no check without a topic model |
+| Chat guardrails end to end | `apps/gateway/test/api/chatGuardrails.test.ts` (11) | An off-topic message is blocked without calling the main model (`stoppedReason: "off_topic"`); an allowed one runs and both usages are counted; **a failing topic check falls back to the scope rule and the turn runs**; **usage of a failed turn is counted**; **a turn over the limit is refused with `CHAT_BUDGET_EXCEEDED` and `Retry-After`**; a turn that starts under the limit may overshoot and the next is refused; the status endpoint reports limit, used, remaining, `resetsAt` and `topicCheck`; a length-capped reply gets the shortened note; the `chat turn` log line carries `topicCheck` (and `topicCheckCode` only on a check error) and `budgetUsed` but no content; with the budget off nothing is refused |
+| Daily usage | `apps/gateway/test/db/usageRepo.test.ts` (5) | **The budget day rolls over at midnight in the store time zone**; `nextResetAt` follows daylight saving; `getUsage` is 0 without a row; `addUsage` increments atomically |
+| Config and LLM layer | `config.test.ts` (20), `chat/llm/registry.test.ts` (13), `chat/llm/openaiCompatible.test.ts` (23), `chat/agent.test.ts` (17) | A request's `temperature` is sent and the default stays 0.2; a provider timeout is flagged `timedOut` (code still `LLM_UNAVAILABLE`); an empty answer cut at the length cap gets the length message; The guardrail variable bounds and `CHAT_TOPIC_CHECK=false`; `max_completion_tokens` for Groq and `max_tokens` for OpenRouter; `CHAT_TOPIC_CHECK_MODEL` honoured (the main model on OpenRouter) and no topic model when the check is off or the key is missing; the topic call uses the topic model, no retries and the short timeout; `LLM_MAX_OUTPUT_TOKENS` applies to main-model calls; empty tool lists omitted; `finish_reason` mapped |
+| Dashboard | `apps/dashboard/test/Chat.test.tsx` (17), `ServerFormDialog.test.tsx` (9) | The budget line, the budget-exceeded box with the reset time and a disabled message box, the off-topic note, **a failed background status refetch keeps the conversation** (`Chat.test.tsx`); the SSRF error on the server form shows the conditional `internalUpstreams` hint (`ServerFormDialog.test.tsx`) |
+| External store | `apps/mcp-woocommerce/test/client.test.ts` (18), `server.test.ts` (12) | The consumer key and secret are trimmed (a BOM or a trailing newline from a credential file still works); Basic mode sends an `Authorization` header and no OAuth parameters; basic-mode errors never include the credentials; basic mode is refused for a non-https base URL without echoing credentials; credentials inside the base URL are rejected; the `oauth1` defaults are unchanged |
+
+Cluster checks added in Phase 5b (not part of `npm test`):
+
+- `scripts\validate-chart.ps1` renders the chart for the default values (identical to `main` except the new gateway variables), the external-store variant and every `internalUpstreams` case, and asserts the rejections (an `http://` store with Basic auth, credentials inside the URL, a bad namespace or port, `kube-system`/`kube-public`/`kube-node-lease`, and the gateway namespace). It also renders an `mcp` entry without `podLabels` (`podSelector: {}` in the ingress policy) and counts the NetworkPolicies added by duplicate entries.
+- `scripts\dev\test-external-store.ps1` proves the Basic-auth mode live against the local WooCommerce over HTTPS (run guide, [a store hosted elsewhere](run-guide.md#a-store-hosted-elsewhere-phase-5b)); it refuses before touching anything unless the context is `k3d-urumi` and no `ext-proof` Ingress or Secret exists; `scripts\dev\test-internal-upstream.ps1` proves an in-cluster server in two namespaces and cleans up after itself.
+- `scripts\dev\topic-probe.mjs` replays the 30 labelled prompts of `apps/gateway/test/fixtures/topic-probe-cases.json` against Groq exactly as the gateway sends them: it imports the system prompt, `buildTopicInput` and the output cap from `apps/gateway/dist` (run `npm run build -w @urumi/gateway` first; it refuses a missing or stale build) and uses temperature 0 and reasoning effort low. It prints only verdicts (`ALLOW`, `BLOCK`, `EMPTY`, `UNPARSED`) and totals. It spends free-plan quota, so it is run by hand, never by `npm test`.
+- `wp search-replace --dry-run` against the local store ([deployment guide](deployment.md#when-the-public-address-changes)): count only, nothing written.
+
+## Phase 5b final verification (2026-10-23)
+
+Run on branch `phase-5b-guardrails-external-store` after the last code change, on the local k3d cluster:
+
+| Check | Result |
+|---|---|
+| `npm test` from the root, three runs back to back | 655/655 each time (shared 55, dashboard 132, gateway 353 in 32 files, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 76). Gateway durations 61.9 s, 60.9 s, 55.2 s |
+| `npm run typecheck`, `npm run lint`, `npm run build` | all clean |
+| `scripts\validate-chart.ps1` (Docker running) | 116 PASS, 0 FAIL, "All checks passed"; kubeconform valid for both values files; the only WARN is the known placeholder warning for `deploy/values-prod.yaml` |
+| `helm lint` with the default, local and prod values | 0 charts failed (only the "icon is recommended" note) |
+| `scripts\up.ps1 -Redeploy` | all pods 1/1 (the `store-setup` and `wp-cron` Job pods are Completed, as designed) |
+| `scripts\smoke-test.ps1` | 8 of 8 steps PASS (it sends 1 live chat turn) |
+| Link check over `docs/` and `README.md` (relative links and anchors) | 797 links, 0 broken |
+| Secret scan of the diff from `d57c8ae` to `HEAD` | no key, token, private key or password value found; five pattern hits were all test fixtures or Secret names |
+
+**One flaky run, recorded honestly.** In an earlier set of three runs, run 2 reported one gateway test file failing (346 of 353 tests passed) while I was running other work (a link checker, a secret scan and `kubectl`) on the same machine; the output of that file was not kept, and runs 1 and 3 of that set passed. A clean set of three further runs, with nothing else running, passed 655/655 each time. This matches the "Known flakiness" note above (memory pressure from PGlite and argon2 in parallel workers is suspected, not proven); the cause of that one failure is **not known**.
+
+## Phase 5b final-review fixes (2026-10-23)
+
+Run on branch `phase-5b-guardrails-external-store` after the review fixes (images `7f4bb8b`), on the local k3d cluster:
+
+| Check | Result |
+|---|---|
+| `npm test` from the root, three runs back to back | 671/671 each time (shared 55, dashboard 133, gateway 367 in 32 files, mcp-notes 12, mcp-utilities 27, mcp-woocommerce 77) |
+| `npm run typecheck`, `npm run lint`, `npm run build` | all clean |
+| `scripts\validate-chart.ps1` (Docker running) | 126 PASS, 0 FAIL, "All checks passed" (the default render and `internalUpstreams: []` are still identical to `main`) |
+| `helm lint` with the local and prod values | 0 charts failed |
+| `scripts\up.ps1 -Redeploy` | all pods 1/1 |
+| `scripts\smoke-test.ps1` | 8 of 8 steps PASS (1 live chat turn, topic check `checked`) |
+| One off-topic turn through the API ("give me the code of binary search") | `off_topic`, the exact refusal, main model not called |
+| `scripts\dev\topic-probe.mjs --runs 3` | each run 16/16 allowed, 14/14 blocked, 0 empty, 0 HTTP errors |
+| `scripts\dev\test-external-store.ps1` guards | a kubeconfig whose context is `prod-vps`: exit 1 after one `kubectl config current-context` call, nothing created or deleted; a pre-existing `ext-proof` Ingress: exit 1, the Ingress left in place, no cleanup run; the full live proof on `k3d-urumi`: passed, negative control passed, everything removed |
 
 ## 6. Not yet in place
 

@@ -1,4 +1,4 @@
-import { bigserial, boolean, customType, index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { bigserial, boolean, customType, date, index, integer, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /** PGlite returns a Uint8Array for bytea, node-postgres a Buffer: normalise to Buffer. */
 const bytea = customType<{ data: Buffer; driverData: Buffer | Uint8Array }>({
@@ -108,3 +108,17 @@ export const auditLogs = pgTable(
 
 export type User = typeof users.$inferSelect;
 export type UpstreamServerRow = typeof upstreamServers.$inferSelect;
+
+/** Chat tokens spent per user and budget day (the day is computed in STORE_TIMEZONE, ADR-020). */
+export const chatUsageDaily = pgTable(
+  'chat_usage_daily',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    day: date('day', { mode: 'string' }).notNull(),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    turns: integer('turns').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.day] })],
+);

@@ -2,7 +2,19 @@
 {{- $ns := .Values.namespaces.mcp -}}
 {{- $m := .Values.mcpWoocommerce -}}
 {{- $name := "mcp-woocommerce" -}}
+{{- $ext := $m.externalStore | default dict -}}
+{{- $extUrl := $ext.url | default "" -}}
+{{- /* External store (ADR-019): HTTP Basic over https only, key and secret from a Secret the operator created in the mcp namespace. */ -}}
+{{- if $extUrl -}}
+{{- if not (regexMatch `^https://[^/@\s]+(/.*)?$` $extUrl) -}}
+{{- fail "mcpWoocommerce.externalStore.url must start with https:// and must not contain user info" -}}
+{{- end -}}
+{{- if not $ext.existingSecret -}}
+{{- fail "mcpWoocommerce.externalStore.existingSecret is required when mcpWoocommerce.externalStore.url is set (a Secret in the mcp namespace with keys consumer-key and consumer-secret)" -}}
+{{- end -}}
+{{- end -}}
 {{- $wooSecret := default "store-woo-api" .Values.secrets.existing.storeWooApi -}}
+{{- if $extUrl -}}{{- $wooSecret = $ext.existingSecret -}}{{- end -}}
 {{- $tokenSecret := default "mcp-woocommerce-token" .Values.secrets.existing.mcpWoocommerceToken -}}
 {{- /* The Host check compares the hostname only (ADR-007), so ports are not listed. */ -}}
 {{- $hosts := list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.cluster.local" $name $ns) "127.0.0.1" "localhost" -}}
@@ -41,7 +53,9 @@ spec:
         # Restart the pod when the WooCommerce key changes. With a pre-created Secret
         # (secrets.existing.storeWooApi) the chart cannot see its values, so only the Secret name is
         # hashed (stable across upgrades); rotating that Secret needs: kubectl -n mcp rollout restart deployment/mcp-woocommerce
-        {{- if .Values.secrets.existing.storeWooApi }}
+        {{- if $extUrl }}
+        checksum/secrets: {{ printf "external:%s" $ext.existingSecret | sha256sum }}
+        {{- else if .Values.secrets.existing.storeWooApi }}
         checksum/secrets: {{ printf "existing:%s" .Values.secrets.existing.storeWooApi | sha256sum }}
         {{- else }}
         checksum/secrets: {{ include "urumi.storeWooApiData" $ | sha256sum }}
@@ -63,10 +77,17 @@ spec:
           env:
             - name: PORT
               value: {{ $m.port | quote }}
+            {{- if $extUrl }}
+            - name: WOO_BASE_URL
+              value: {{ $extUrl | quote }}
+            - name: WOO_AUTH_MODE
+              value: "basic"
+            {{- else }}
             - name: WOO_BASE_URL
               value: {{ printf "http://wordpress.%s.svc.cluster.local" .Values.namespaces.store | quote }}
             - name: WOO_SIGNING_BASE_URL
               value: {{ include "urumi.storeSigningBaseUrl" $ | quote }}
+            {{- end }}
             - name: WOO_CONSUMER_KEY
               valueFrom:
                 secretKeyRef: { name: {{ $wooSecret }}, key: consumer-key }

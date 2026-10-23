@@ -46,6 +46,7 @@ helm status urumi -n urumi-system
 - [Pre-created Secrets with the wrong keys](#pre-created-secrets-with-the-wrong-keys)
 - [`mcp-woocommerce` is in ErrImageNeverPull or ImagePullBackOff](#mcp-woocommerce-is-in-errimageneverpull-or-imagepullbackoff)
 - [`mcp-woocommerce` CrashLoopBackOff with an environment variable message](#mcp-woocommerce-crashloopbackoff-with-an-environment-variable-message)
+- [The external store answers 401 or 403, or the MCP server cannot reach it](#the-external-store-answers-401-or-403-or-the-mcp-server-cannot-reach-it)
 - [The MCP server answers 401 Unauthorized](#the-mcp-server-answers-401-unauthorized)
 - [The MCP server answers 403 Invalid Host](#the-mcp-server-answers-403-invalid-host)
 - [An MCP tool returns WooCommerce 401 Invalid signature](#an-mcp-tool-returns-woocommerce-401-invalid-signature)
@@ -62,6 +63,7 @@ helm status urumi -n urumi-system
 - [`/api` answers 403 `CSRF_REJECTED`](#api-answers-403-csrf_rejected)
 - [Login answers 429 (too many attempts)](#login-answers-429-too-many-attempts)
 - [A server shows `unreachable` in the gateway](#a-server-shows-unreachable-in-the-gateway)
+- [An in-cluster MCP server is refused or unreachable](#an-in-cluster-mcp-server-is-refused-or-unreachable)
 - [`app.localhost` does not resolve in Node tools](#applocalhost-does-not-resolve-in-node-tools)
 - [Postgres does not start: `PGDATA` permission errors](#postgres-does-not-start-pgdata-permission-errors)
 - [Gateway, Notes or Utilities pod in `ErrImagePull`](#gateway-notes-or-utilities-pod-in-errimagepull)
@@ -683,17 +685,32 @@ $servers | Select-Object slug, status, lastError, checkedAt | Format-Table -Auto
 
 | `lastError` | Cause | Fix |
 |---|---|---|
-| `connection refused` | The upstream pod is down, restarting or listens elsewhere | `kubectl -n mcp get pods`; wait for the next check (15 s) or `POST /api/servers/<id>/refresh` |
+| `connection refused` | The upstream pod is down, restarting or listens elsewhere; or, for your own in-cluster server, the NetworkPolicy blocks the gateway (seen 2026-10-23: `connection refused`, not a timeout) | `kubectl -n mcp get pods`; wait for the next check (15 s) or `POST /api/servers/<id>/refresh`; for your own server see [the section below](#an-in-cluster-mcp-server-is-refused-or-unreachable) |
 | `DNS lookup failed` | The URL's name does not resolve | Correct the URL (`http://<service>.mcp.svc.cluster.local:<port>/mcp`) and `kubectl -n mcp get svc` |
 | `timeout after 5000ms` | The upstream is up but too slow to list tools | `kubectl -n mcp logs deploy/<name>`; check the pod's CPU |
 | `HTTP 401 from upstream` | The stored credential is wrong or was rotated | `PATCH /api/servers/<id>` with a new `credential`; for the seeded servers compare with `scripts\get-secret.ps1 -Namespace mcp -Name <secret> -Key token` (`key` for utilities) |
 | `HTTP 404 from upstream` | The URL path is wrong (it must end in `/mcp`) | Correct the URL |
 | `HTTP 302 from upstream (redirects are not followed)` | The URL redirects; the gateway never follows redirects | Use the final URL |
-| `blocked by SSRF guard (private)` | The name resolves to a private address and is not on `SSRF_ALLOWED_INTERNAL_HOSTS` | Use a `*.mcp.svc.cluster.local` name or extend the allow-list in the chart |
+| `blocked by SSRF guard (private)` | The name resolves to a private address and is not on `SSRF_ALLOWED_INTERNAL_HOSTS` | Use a `*.mcp.svc.cluster.local` name, or for another namespace list it in the chart value `gateway.internalUpstreams` ([how](#an-in-cluster-mcp-server-is-refused-or-unreachable)) |
 | `blocked by SSRF guard (loopback)` / `(link_local)` | The URL points at the pod itself or a metadata address | Use the real Service name; loopback is never allowed on the cluster |
 | `error: ...` | Something else, for example a reset | `kubectl -n gateway logs deploy/gateway` shows the `upstream status` line |
 
 The seeded servers are created once from the Helm values. Changing the Helm seed later does **not** change an existing row; edit it through the API. Full list of texts: [error-handling.md](error-handling.md#1-mcp-the-aggregated-endpoint). `lastError` strings are **tested**; `connection refused` and the disappearing tools were also **live** (scaling `mcp-utilities` to 0).
+
+## An in-cluster MCP server is refused or unreachable
+
+**Symptom.** Adding your own server whose URL ends in `.svc.cluster.local` gives the inline error `Upstream URL rejected: ...` followed by `If this server runs inside this cluster, list its namespace in the chart setting gateway.internalUpstreams.` (API: `400 SSRF_REJECTED`), or the server is saved but stays `unreachable` with `connection refused`.
+
+**Cause.** The gateway only trusts `*.mcp.svc.cluster.local` and may only open connections to the three built-in servers; every other in-cluster destination needs an entry in the chart value `gateway.internalUpstreams` (namespace, port, optional pod labels). If the URL is not a cluster name but a public host name that resolves to a private (LAN) address, the guard refuses it on purpose and `internalUpstreams` cannot help: use the server's in-cluster Service name, or a public address.
+
+**Fix.**
+
+1. Add the entry (see [deployment.md](deployment.md#registering-mcp-servers-that-run-inside-the-cluster)) and run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\up.ps1 -Redeploy`.
+2. Check what the gateway received: `kubectl -n gateway get deploy gateway -o json` and look for `SSRF_ALLOWED_INTERNAL_HOSTS` in the container env (it must list `*.<your namespace>.svc.cluster.local`), and `kubectl -n gateway get networkpolicy gateway -o yaml` for the egress rule to your namespace and port.
+3. For the `mcp` namespace also check `kubectl -n mcp get networkpolicy` for `mcp-internal-upstream-<n>`, and that `podLabels` match your pod (`kubectl -n mcp get pods --show-labels`).
+4. For any other namespace the chart does not create the ingress side: admit the gateway pods in that namespace's own policy.
+5. The URL must use the Service name and the port listed in the entry, and must end in the path your server serves (usually `/mcp`).
+6. Right after a new pod starts, policies can take a few seconds to apply: refresh again after ten seconds.
 
 ## `app.localhost` does not resolve in Node tools
 
@@ -954,3 +971,27 @@ kubectl -n store logs job/wp-cron-manual; kubectl -n store delete job wp-cron-ma
 - `Error: Error establishing a database connection.` in under a second, from a chart older than the Phase 5 final review: a new pod connected before kube-router had admitted its IP (observed 2026-10-23). The current chart waits for the database first; redeploy.
 - No `wp-cron` CronJob at all: `wordpress.cron.enabled` is `false` in your values. WordPress then uses its built-in WP-Cron, which needs the loopback to its public URL.
 - `DeadlineExceeded`: one run took longer than 4 minutes (`activeDeadlineSeconds: 240`); look for a slow plugin event in the log. The next run continues with the remaining events.
+
+## The external store answers 401 or 403, or the MCP server cannot reach it
+
+Applies to `mcpWoocommerce.externalStore` ([ADR-019](decisions/ADR-019-external-woocommerce-store.md), [deployment](deployment.md#using-a-woocommerce-store-hosted-elsewhere)). The chart's external mode is rendered, not installed; the causes below are the expected ones except where marked.
+
+**Symptom.** A tool returns `WooCommerce request failed (rest_cannot_view)` / HTTP 401 or 403, or `Could not reach WooCommerce (network error)`.
+
+**Diagnose.**
+
+```powershell
+kubectl -n mcp logs deploy/mcp-woocommerce --tail=20            # start-up message: variable names only
+kubectl -n mcp get pod -l app.kubernetes.io/name=mcp-woocommerce # CreateContainerConfigError = the Secret is missing
+kubectl -n mcp describe networkpolicy mcp-woocommerce            # the egress rules the pod really has
+```
+
+**Causes and fixes.**
+
+- **The pod does not start and the log names `WOO_BASE_URL`.** The URL must start with `https://` and must not contain a user name or password. Fix `mcpWoocommerce.externalStore.url`. (`helm template` refuses these values, so this appears only with hand-edited env.)
+- **`CreateContainerConfigError`.** The Secret named in `externalStore.existingSecret` does not exist in namespace `mcp`, or lacks the keys `consumer-key` and `consumer-secret`.
+- **401 on every call although the key is right: the host strips the `Authorization` header** (expected; not tested). Some hosts, mostly PHP running as CGI/FastCGI behind Apache, do not hand the header to WordPress, so WooCommerce sees no credentials. The usual fix is on the store's side: add `RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]` to `.htaccess` (or the host's equivalent setting), then retry. Ask the host if you cannot edit it. Do not move the key into the URL: the MCP server and the chart refuse that on purpose.
+- **401 or 403 with the header passing.** The key was revoked, was created with **Read** only (writes then fail with 401/403), belongs to a user who cannot manage the shop, or the Secret holds an old value. Create a new Read/Write key, update the Secret, then `kubectl -n mcp rollout restart deploy/mcp-woocommerce` (the pod reads the Secret only at start).
+- **`Could not reach WooCommerce (network error)`.** One of: DNS for the host; a TLS problem (the certificate is self-signed, expired, for another host name or signed by a CA that Node does not trust: the server never skips verification); or the egress rule. The pod may only reach the public internet (443, 80) outside the private ranges, plus `extraEgressCIDRs` on 443. A store on a private address needs its network listed there.
+- **Redirects.** The client does not follow them, so a store URL that redirects (for example `http` to `https`, or to a `www` host) fails. Use the final `https://` address as `externalStore.url`.
+- **Wrong "today".** `list_orders` with `period` uses `storeSetup.timezone`; set it to the store's time zone.

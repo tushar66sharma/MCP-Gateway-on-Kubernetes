@@ -32,12 +32,18 @@ export interface LlmChatRequest {
   signal: AbortSignal;
   /** Epoch ms by which the whole turn must end; the provider never sleeps past it. */
   deadline: number;
+  /** Output cap for this call; undefined = the provider's configured default (LLM_MAX_OUTPUT_TOKENS). */
+  maxOutputTokens?: number;
+  /** Sampling temperature for this call; undefined = 0.2 (every main-model call). The topic check uses 0. */
+  temperature?: number;
 }
 
 export interface LlmChatResult {
   message: ChatMessage;
   toolCalls: ToolCall[];
   usage?: Usage;
+  /** Why the model stopped, normalised; absent when the provider did not say. */
+  finishReason?: 'stop' | 'length' | 'tool_calls' | 'other';
   provider: string;
   model: string;
 }

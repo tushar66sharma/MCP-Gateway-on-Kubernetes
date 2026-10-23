@@ -80,7 +80,7 @@ This step spends free-tier LLM tokens (about 5,000). The chat acts as user A: th
 
 ### 6b. Claude Code (for you to try; not run by this script)
 
-The run guide has the command, [Connect Claude Code](run-guide.md#connect-claude-code-for-you-to-try). It adds an MCP server to your own Claude configuration, so it is left to you. Use a key created in the dashboard and do not paste it anywhere visible.
+The run guide has the command, [Connect Claude Code](run-guide.md#connect-claude-code). It adds an MCP server to your own Claude configuration, so it is left to you. Use a key created in the dashboard and do not paste it anywhere visible.
 
 ## 7. User A revokes user B's key
 

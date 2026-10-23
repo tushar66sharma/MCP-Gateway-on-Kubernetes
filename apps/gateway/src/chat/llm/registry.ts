@@ -15,11 +15,18 @@ export interface LlmConfig {
   OPENROUTER_API_KEY: string;
   LLM_TIMEOUT_MS: number;
   LLM_MAX_RETRIES: number;
+  LLM_MAX_OUTPUT_TOKENS: number;
+  CHAT_TOPIC_CHECK: boolean;
+  CHAT_TOPIC_CHECK_MODEL: string;
+  CHAT_TOPIC_CHECK_TIMEOUT_MS: number;
 }
+
+/** Output cap for the topic-check call: gpt-oss models spend output tokens on reasoning, so 8 is too small. */
+export const TOPIC_CHECK_MAX_OUTPUT_TOKENS = 64;
 
 const keyOf = (c: LlmConfig, id: ProviderId): string => c[PROVIDERS[id].apiKeyEnv];
 
-function build(c: LlmConfig, id: ProviderId, model: string, baseUrl: string, maxRetries: number, rt: LlmRuntime): LlmProvider {
+function build(c: LlmConfig, id: ProviderId, model: string, baseUrl: string, maxRetries: number, timeoutMs: number, rt: LlmRuntime): LlmProvider {
   const def = PROVIDERS[id];
   const resolvedModel = model || def.defaultModel;
   const extraBody = {
@@ -32,8 +39,10 @@ function build(c: LlmConfig, id: ProviderId, model: string, baseUrl: string, max
       baseUrl: baseUrl || def.baseUrl,
       apiKey: keyOf(c, id),
       model: resolvedModel,
-      timeoutMs: c.LLM_TIMEOUT_MS,
+      timeoutMs,
       maxRetries,
+      maxTokensParam: def.maxTokensParam,
+      defaultMaxOutputTokens: c.LLM_MAX_OUTPUT_TOKENS,
       ...(def.extraHeaders ? { extraHeaders: def.extraHeaders } : {}),
       ...(Object.keys(extraBody).length > 0 ? { extraBody } : {}),
     },
@@ -44,11 +53,11 @@ function build(c: LlmConfig, id: ProviderId, model: string, baseUrl: string, max
 /** The primary provider with an optional one-shot fallback; null when the primary has no key. */
 export function createLlmFromConfig(c: LlmConfig, rt: LlmRuntime = {}): LlmProvider | null {
   if (keyOf(c, c.LLM_PROVIDER) === '') return null;
-  const primary = build(c, c.LLM_PROVIDER, c.LLM_MODEL, c.LLM_BASE_URL, c.LLM_MAX_RETRIES, rt);
+  const primary = build(c, c.LLM_PROVIDER, c.LLM_MODEL, c.LLM_BASE_URL, c.LLM_MAX_RETRIES, c.LLM_TIMEOUT_MS, rt);
   const fb = c.LLM_FALLBACK_PROVIDER;
   if (fb === '' || fb === c.LLM_PROVIDER || keyOf(c, fb) === '') return primary;
   // The fallback is tried once, with no retries.
-  const fallback = build(c, fb, c.LLM_FALLBACK_MODEL, '', 0, rt);
+  const fallback = build(c, fb, c.LLM_FALLBACK_MODEL, '', 0, c.LLM_TIMEOUT_MS, rt);
 
   return {
     name: primary.name,
@@ -69,6 +78,16 @@ export function createLlmFromConfig(c: LlmConfig, rt: LlmRuntime = {}): LlmProvi
       }
     },
   };
+}
+
+/**
+ * The small model that answers the on-topic question: primary provider only, no retries, no fallback, short
+ * timeout. Null when the check is off or the primary has no key.
+ */
+export function createTopicCheckLlm(c: LlmConfig, rt: LlmRuntime = {}): LlmProvider | null {
+  if (!c.CHAT_TOPIC_CHECK || keyOf(c, c.LLM_PROVIDER) === '') return null;
+  const model = c.CHAT_TOPIC_CHECK_MODEL || PROVIDERS[c.LLM_PROVIDER].topicCheckModel || c.LLM_MODEL;
+  return build(c, c.LLM_PROVIDER, model, c.LLM_BASE_URL, 0, c.CHAT_TOPIC_CHECK_TIMEOUT_MS, rt);
 }
 
 export function llmStatusOf(c: LlmConfig): { configured: boolean; provider: ProviderId; model: string; fallbackProvider: ProviderId | null } {

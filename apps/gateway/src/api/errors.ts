@@ -13,6 +13,7 @@ export type ApiErrorCode =
   | 'INVITE_INVALID'
   | 'CONFLICT'
   | 'RATE_LIMITED'
+  | 'CHAT_BUDGET_EXCEEDED'
   | 'INTERNAL'
   // Chat (Phase 4): 503, 429 (with Retry-After), 502, 502, 502.
   | 'LLM_NOT_CONFIGURED'

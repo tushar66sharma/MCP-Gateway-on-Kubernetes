@@ -297,6 +297,126 @@ The same applies to a rotated `mcp-woocommerce-token` Secret. This follows from 
 - No TLS locally (plain HTTP), and no mail server, so WooCommerce e-mails are not delivered.
 - The cluster needs internet access for image pulls and for downloading WooCommerce 11.2.1 during setup, and the gateway needs it for the AI chat (Groq's free plan: about 8,000 tokens per minute, roughly two chat questions a minute for the whole team; see [ai-integration.md](ai-integration.md#5-limits-and-token-budget)).
 
+## Using a WooCommerce store hosted elsewhere
+
+Phase 5b (Task 5b.5, [ADR-019](decisions/ADR-019-external-woocommerce-store.md)). The WooCommerce MCP server can talk to a store that is not installed by this chart. It then uses **HTTP Basic over HTTPS** (the consumer key as user name, the consumer secret as password). **Verified 2026-10-23:** the MCP server in this mode against the local WooCommerce 11.2.1 over HTTPS with TLS verification on (`scripts\dev\test-external-store.ps1`). **Rendered, not installed:** the chart's external mode was rendered and linted but not installed on a cluster. A real remote store is **not tested**.
+
+1. **Create the REST key on that store.** In its admin: WooCommerce > Settings > Advanced > REST API > Add key. Choose a user that may manage the shop (a shop manager is enough) and the permission **Read/Write**. WooCommerce shows the key and secret once.
+2. **Create the Secret in the `mcp` namespace.** Put the two values in files that are not in the repository, create the Secret from the files, then delete them. Write each file with **no trailing newline and no BOM**: in Windows PowerShell 5.1, `echo x > ck.txt` writes UTF-16 with a line break, and those extra bytes end up in the Basic-auth header (the store then answers 401). `Read-Host -AsSecureString` asks for the value without showing it, so nothing is echoed or kept in the command history:
+
+   ```powershell
+   function Write-SecretFile([string]$Path, [string]$Prompt) {
+     $s = Read-Host -AsSecureString $Prompt
+     $p = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)
+     try { [IO.File]::WriteAllText($Path, [Runtime.InteropServices.Marshal]::PtrToStringBSTR($p)) }   # UTF-8, no BOM, no newline
+     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p) }
+   }
+   Write-SecretFile "$PWD\ck.txt" 'Consumer key'
+   Write-SecretFile "$PWD\cs.txt" 'Consumer secret'
+   kubectl -n mcp create secret generic my-store-woo --from-file=consumer-key=.\ck.txt --from-file=consumer-secret=.\cs.txt
+   Remove-Item .\ck.txt, .\cs.txt
+   ```
+
+   The commands contain no secret values. Since the Phase 5b review the MCP server also trims spaces, line breaks and a BOM from both values (**tested**: `apps/mcp-woocommerce/test/server.test.ts`), so a file with a trailing newline no longer breaks it; writing the file cleanly is still the safe habit. **Checked 2026-10-23:** the file-writing part of `Write-SecretFile`, with a dummy value passed in place of the prompt, wrote exactly the value's 19 bytes (no BOM, no line break). The interactive prompt and creating a Secret this way against a real store are **not tested**.
+
+   The key names must be exactly `consumer-key` and `consumer-secret`. The chart owns the namespace `mcp`: on a first install create it with Helm's ownership metadata as described under [Pre-created Secrets](#pre-created-secrets-advanced-mostly-for-production), or install first and create the Secret afterwards (the MCP pod then waits with `CreateContainerConfigError` until it exists).
+3. **Set the values** (a values file, for example appended to `deploy/values-prod.yaml`):
+
+   ```yaml
+   store:
+     enabled: false              # omit it to keep the in-cluster store as well
+   mcpWoocommerce:
+     externalStore:
+       url: https://shop.example.com        # https only, no user name or password in it
+       existingSecret: my-store-woo         # the Secret from step 2
+       extraEgressCIDRs: []                 # see "Private-network stores" below
+   storeSetup:
+     timezone: Europe/Berlin                # the time zone of THAT store
+   ```
+
+   The chart refuses to render an `http://` URL, a URL containing `user@` or `user:pass@`, a missing `existingSecret`, or `store.enabled: false` without a URL.
+4. **Time zone.** `today`, `yesterday` and `last_7_days` in `list_orders` are computed in `STORE_TIMEZONE`, which the chart takes from `storeSetup.timezone`. Set it to the external store's own time zone (WooCommerce > Settings > General or Settings > General in WordPress), or those periods start at the wrong midnight.
+5. **After rotating the key**, restart the pod, because it reads the Secret only at start: `kubectl -n mcp rollout restart deploy/mcp-woocommerce`.
+
+**What `store.enabled: false` skips.** Everything in the `store` namespace and the namespace itself: WordPress, MariaDB, the `store-setup` Job, the `wp-cron` CronJob, the store Ingress, the store Secrets (`store-db`, `store-admin`, `store-woo-api` and its copy in `mcp`), the store NetworkPolicies (default-deny, DNS, WordPress, MariaDB, wp-cron, solver) and, with TLS on, the store's redirect and HSTS Middlewares. The `mcp` and `gateway` namespaces, their policies, the other MCP servers, the gateway and the dashboard are rendered as before. The helper scripts for the local cluster (`up.ps1`, `check-mcp-woocommerce.ps1`, `get-admin-password.ps1`) assume the in-cluster store.
+
+**Egress.** With an external URL the `mcp-woocommerce` pod may reach the public internet on ports 443 and 80, with the private and special-use ranges excluded (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`, `127.0.0.0/8`), the same rule the gateway uses. It no longer has the rule to the in-cluster WordPress. Rendered, not tested against a real remote address.
+
+**Private-network stores.** If the store is on a private address (a VPN, a peered network), the internet rule excludes it. List its network under `extraEgressCIDRs` (IPv4 CIDRs such as `10.20.0.0/24`); each entry opens TCP 443 only. Keep the entries as narrow as possible: `10.0.0.0/8` would also open the cluster's own pod and service networks to that pod.
+
+**HTTPS only.** Basic sends the secret with every request, so the MCP server and the chart both refuse anything but `https://` in this mode ([security, section 17](security.md#17-an-external-woocommerce-store-phase-5b)). The certificate must be valid for the host and signed by a public CA; the server does not skip verification.
+
+**If the store answers 401 or 403**, see [troubleshooting](troubleshooting.md#the-external-store-answers-401-or-403-or-the-mcp-server-cannot-reach-it): some hosts strip the `Authorization` header before it reaches WordPress.
+
+## Registering MCP servers that run inside the cluster
+
+Phase 5b (Task 5b.6, [ADR-016 addendum](decisions/ADR-016-default-deny-network-policies.md#addendum-phase-5b-gatewayinternalupstreams)). The gateway reaches the three built-in MCP servers out of the box. An admin can also add another server that runs in this cluster (dashboard Servers > Add server, or `POST /api/servers`), but two guards block it until the chart is told about it: the gateway's SSRF allow-list (`SSRF_ALLOWED_INTERNAL_HOSTS`, default `*.mcp.svc.cluster.local`) and the default-deny NetworkPolicies. The chart value `gateway.internalUpstreams` opens both, one entry per server:
+
+```yaml
+gateway:
+  internalUpstreams:
+    - namespace: tools                       # a DNS label: the namespace the server's Service lives in
+      port: 3010                             # 1-65535: the TCP port the pod listens on
+      podLabels:                             # optional: only pods with these labels; omit it for every pod in the namespace
+        app.kubernetes.io/name: my-mcp-server
+```
+
+What each entry changes (an empty list, the default, renders exactly the objects of the release before Phase 5b):
+
+| Where | Effect |
+|---|---|
+| Gateway env `SSRF_ALLOWED_INTERNAL_HOSTS` | `*.<namespaces.mcp>.svc.cluster.local` plus `*.<namespace>.svc.cluster.local` for each unique namespace, comma-joined. It lets the URL `http://<service>.<namespace>.svc.cluster.local:<port>/mcp` through the SSRF guard; nothing else. |
+| NetworkPolicy `gateway` (namespace `gateway`) | One more egress rule: to that namespace (`kubernetes.io/metadata.name`), to the pods matching `podLabels` when given, on TCP `port` only. |
+| NetworkPolicy `mcp-internal-upstream-<n>` (namespace `mcp`) | Rendered only when `namespace` equals `namespaces.mcp` (default `mcp`): ingress to the pods matching `podLabels` (all pods when omitted) from the gateway pods only, on TCP `port`. |
+| Any other namespace | **Not touched.** Create the workload and its Service yourself; if that namespace has a default-deny policy, add a policy of your own that admits the pods labelled `app.kubernetes.io/name=gateway` from the namespace `gateway` on that port. A namespace without a policy needs nothing. |
+
+Rules and limits:
+
+- Do not list system namespaces: each entry lets the gateway reach that namespace's pods on the port you give. The chart refuses `kube-system`, `kube-public` and `kube-node-lease` (schema) and the gateway's own namespace, `namespaces.gateway`, where Postgres runs (template `fail`); **tested** by `scripts\validate-chart.ps1`. Other namespaces that are not yours, such as `default`, are not checked: leave them out.
+- The pod must speak the MCP Streamable HTTP protocol on the given port. The gateway still applies the SSRF guard to the resolved address (loopback and link-local stay refused), and the new egress rule is limited to the one port you list.
+- Apply the value with `scripts\up.ps1 -Redeploy` (put it in your values file), then add the server: dashboard Servers > Add server with the URL `http://<service>.<namespace>.svc.cluster.local:<port>/mcp`. Step by step: [run guide](run-guide.md#add-an-mcp-server-that-runs-inside-the-cluster).
+- The schema rejects a `port` outside 1-65535, a `namespace` that is not a DNS label (for example `Bad_NS`), an entry without a port, unknown keys and non-string label values.
+- Policies are enforced a few seconds after a pod starts (see [security, section 15](security.md#15-networkpolicies-phase-5)); a refresh right after a deploy can still say `connection refused`.
+
+**Verified on 2026-10-23** (local k3d, k3s v1.35.5): `scripts\validate-chart.ps1` (render rows for the empty list, an entry in `mcp`, an entry in another namespace, duplicates and the schema rejections) and the live proof `scripts\dev\test-internal-upstream.ps1`, which deploys a test server in `mcp` and another in a new namespace `tools-test`, shows both refused or unreachable before the setting and connected with 4 tools after it, makes one `tools/call` through a temporary API key, and removes everything. Results: [security, section 15](security.md#15-networkpolicies-phase-5).
+
+## When the public address changes
+
+Say the store moves from `store.localhost` to `store.example.com` (or the dashboard and gateway from `app.localhost` to a real name). You change `global.storeHost` and `global.appHost` in your values file and run `scripts\up.ps1 -Redeploy` (or `helm upgrade`). This is what follows by itself and what does not:
+
+| Thing | Automatic? | Action |
+|---|---|---|
+| Product links | yes | follow `global.storeHost` |
+| Existing media and content links | not automatic | the one-off `wp search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid` |
+| Dashboard endpoint | yes | shown from the browser address |
+| Gateway hosts, CSRF origin and invite links | yes | from `global.appHost` |
+| MCP clients' saved URL | no | each user re-adds it once (keys keep working) |
+| Upstream server addresses | unaffected | internal names |
+| External store | not applicable | its own domain ([a store hosted elsewhere](#using-a-woocommerce-store-hosted-elsewhere)) |
+
+Notes on the rows:
+
+- **Existing links.** Pages, posts and uploaded media store their absolute addresses in the database, so old content keeps pointing at the old address until you rewrite it. `--skip-columns=guid` leaves post GUIDs alone: they are identifiers, not links, and WordPress advises against changing them. Take a backup first ([backups](#12-backups)), then run the command inside a one-off pod made from the **`wp-cron` CronJob's pod template**: it has WP-CLI (`wordpress:cli`), the WordPress volume, the database settings (the password comes from the Secret by reference, it is never copied) and the labels the MariaDB NetworkPolicy admits, and it passes the `restricted` Pod Security level. Run it once, after the DNS name and TLS work.
+- **The steps** (PowerShell, from any folder, on the cluster's context). The first command copies the template and replaces only the container command with `sleep 900`, so the pod waits for you:
+
+  ```powershell
+  $t = (kubectl -n store get cronjob wp-cron -o json | ConvertFrom-Json).spec.jobTemplate.spec.template
+  $t.spec.containers[0].command = @('sleep', '900')
+  $pod = @{ apiVersion = 'v1'; kind = 'Pod'; metadata = @{ name = 'wp-search-replace'; namespace = 'store'; labels = $t.metadata.labels }; spec = $t.spec }
+  $pod | ConvertTo-Json -Depth 30 | kubectl apply -f -
+  kubectl -n store wait --for=condition=Ready pod/wp-search-replace --timeout=120s
+  # 1) Dry run: shows the counts per table, writes nothing
+  kubectl -n store exec wp-search-replace -- wp --path=/var/www/html search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid --dry-run --report-changed-only
+  # 2) For real, after the backup: the same command without --dry-run
+  kubectl -n store exec wp-search-replace -- wp --path=/var/www/html search-replace 'http://store.localhost' 'https://store.example.com' --skip-columns=guid --report-changed-only
+  kubectl -n store delete pod wp-search-replace
+  ```
+
+  Put your own old and new addresses in both commands. If the pod is not deleted, it ends by itself after 900 seconds (it stays `Completed` until you delete it).
+- **Verified 2026-10-23 on the local store** (WooCommerce 11.2.1): the steps above with the dry run (1), then the delete. Output: `wp_options option_value 3`, `wp_posts post_content 2`, `wp_users user_url 1`, `Success: 6 replacements to be made.`; the pod was created, became Ready and was deleted, and the store's pods were the same before and after. No values were printed. (An earlier dry run in Task 5b.7 used a pod copied by hand from the same `wp-cron` pod spec, with the same result.) **Not executed:** the real run (2).
+- **MCP clients.** A client stores the full gateway URL, so after the change each user runs `claude mcp remove urumi-gateway` and adds it again with the new address, or changes `URUMI_GATEWAY_URL` for a `.mcp.json` ([run guide](run-guide.md#connect-claude-code)). Keys are stored in the gateway by hash and do not depend on the address.
+- **Registered MCP servers.** The gateway reaches them by cluster-internal names (`mcp-woocommerce.mcp.svc...`), which do not change with the public address.
+
 ## Production (k3s VPS)
 
 > **Status (2026-10-23).** This guide installs the same chart on one k3s server with TLS. **No real VPS, domain or Let's Encrypt certificate has been used.** What *was* run is marked **verified**; everything else is **not executed** (it needs your cloud account, domain or registry) or **expected** (taken from the tools' documentation). Task 5.7 of Phase 5 rehearses the cluster side on a second local k3d cluster with a self-signed issuer; its results are recorded in [ADR-012](decisions/ADR-012-deployment-target-k3s-vps.md) and the [testing guide](testing.md).

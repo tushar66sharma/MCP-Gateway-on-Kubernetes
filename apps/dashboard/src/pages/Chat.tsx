@@ -1,3 +1,5 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, MessageSquarePlus, Sparkles } from 'lucide-react';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -5,7 +7,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { ErrorState } from '../components/ui/ErrorState';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Skeleton } from '../components/ui/Skeleton';
-import { useChatStatus } from '../features/chat/api';
+import { budgetLine, budgetResetAt, formatResetTime, chatStatusKey, useChatStatus } from '../features/chat/api';
 import { ChatComposer } from '../features/chat/ChatComposer';
 import { ChatError } from '../features/chat/ChatError';
 import { ChatThread } from '../features/chat/ChatThread';
@@ -35,9 +37,41 @@ function NotConfigured() {
   );
 }
 
+/** True until `resetAt` (a timestamp); the timer lifts it at that moment and calls `onReset`. */
+function useBudgetBlock(resetAt: number | null, onReset: () => void): boolean {
+  const [now, setNow] = useState(() => Date.now());
+  const reset = useRef(onReset);
+  useEffect(() => {
+    reset.current = onReset;
+  }, [onReset]);
+  useEffect(() => {
+    if (resetAt === null) return;
+    const timer = setTimeout(
+      () => {
+        setNow(Math.max(Date.now(), resetAt));
+        reset.current();
+      },
+      Math.max(0, resetAt - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [resetAt]);
+  return resetAt !== null && now < resetAt;
+}
+
 export function Chat() {
   const status = useChatStatus();
-  const chat = useChat();
+  const queryClient = useQueryClient();
+  const refetchStatus = useCallback(() => void queryClient.invalidateQueries({ queryKey: chatStatusKey }), [queryClient]);
+  // The budget line follows every turn, including one that ended in an error (it may have spent tokens).
+  const chat = useChat(refetchStatus);
+  // Locked by the 429 of this conversation, or by the status itself (so a reset or a reload keeps it locked).
+  const errorReset = budgetResetAt(chat.error);
+  const b = status.data?.budget;
+  const statusParsed = b && b.remaining <= 0 ? Date.parse(b.resetsAt) : NaN;
+  const statusReset = Number.isFinite(statusParsed) ? statusParsed : null;
+  const resetAt = errorReset === null ? statusReset : statusReset === null ? errorReset : Math.max(errorReset, statusReset);
+  const blocked = useBudgetBlock(resetAt, refetchStatus);
+  const budgetEnded = errorReset !== null && !blocked;
 
   if (status.isPending) {
     return (
@@ -50,7 +84,8 @@ export function Chat() {
       </>
     );
   }
-  if (status.isError) {
+  // A failed background refetch keeps its last data (TanStack Query v5): the conversation stays on screen.
+  if (status.isError && !status.data) {
     return (
       <>
         <PageHeader title="Chat" description={DESCRIPTION} />
@@ -71,7 +106,7 @@ export function Chat() {
     );
   }
 
-  const { provider, model } = status.data;
+  const { provider, model, budget } = status.data;
   const empty = chat.messages.length === 0;
   return (
     <>
@@ -92,6 +127,7 @@ export function Chat() {
           </>
         }
       />
+      {budget ? <p className="mb-2 text-sm text-fg-muted tabular-nums">{budgetLine(budget)}</p> : null}
       <div className="flex flex-col gap-4 rounded-card border border-border bg-surface p-4 sm:p-5">
         {empty && !chat.pending ? (
           <div className="py-6">
@@ -109,8 +145,9 @@ export function Chat() {
           </div>
         ) : null}
         <ChatThread messages={chat.messages} pending={chat.pending} />
-        {chat.error ? <ChatError error={chat.error} pending={chat.pending} onRetry={() => void chat.retry()} /> : null}
-        <ChatComposer disabled={chat.pending} onSend={(text) => void chat.send(text)} />
+        {chat.error && !budgetEnded ? <ChatError error={chat.error} pending={chat.pending} onRetry={() => void chat.retry()} /> : null}
+        <ChatComposer disabled={chat.pending} {...(blocked && { blockedText: 'Daily AI budget used up' })}
+          {...(blocked && resetAt !== null && errorReset === null && { blockedDetail: `Resets at ${formatResetTime(resetAt)}` })} onSend={(text) => void chat.send(text)} />
       </div>
     </>
   );

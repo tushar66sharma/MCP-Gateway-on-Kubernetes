@@ -20,3 +20,6 @@ deploy/.images.local.yaml
 # Playwright signed-in session (never commit)
 apps/dashboard/e2e/.auth/
 deploy/.images.*.yaml
+
+# Claude Code project config: a copy of .mcp.json.example; never commit a real key
+.mcp.json

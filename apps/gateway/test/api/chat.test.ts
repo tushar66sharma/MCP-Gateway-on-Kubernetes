@@ -313,7 +313,14 @@ describe('chat api', () => {
     const { cookie } = await newMember();
     const res = await request(h.baseUrl).get('/api/chat/status').set('Cookie', cookie);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ configured: true, provider: 'groq', model: 'openai/gpt-oss-120b', fallbackProvider: null });
+    expect(res.body).toEqual({
+      configured: true,
+      provider: 'groq',
+      model: 'openai/gpt-oss-120b',
+      fallbackProvider: null,
+      topicCheck: false,
+      budget: { limit: 50000, used: 0, remaining: 50000, resetsAt: expect.any(String) },
+    });
     expect(res.text).not.toContain(FAKE_GROQ_VALUE);
     expect(res.text).not.toMatch(/gsk_|key/i);
     expect(res.headers['cache-control']).toBe('no-store');

@@ -12,6 +12,8 @@ export class LlmError extends Error {
   readonly httpStatus?: number;
   /** The provider's error.code, only when it is a plain identifier (^[a-z_]{1,40}$). */
   readonly providerCode?: string;
+  /** True when the provider did not answer within its timeout (the code is then LLM_UNAVAILABLE). */
+  readonly timedOut?: boolean;
   /** Set by the registry when the fallback was tried and also failed. */
   fallbackProvider?: string;
   fallbackCode?: LlmErrorCode;
@@ -19,7 +21,7 @@ export class LlmError extends Error {
   constructor(
     code: LlmErrorCode,
     message: string,
-    opts: { retryAfterSec?: number; provider?: string; httpStatus?: number; providerCode?: string } = {},
+    opts: { retryAfterSec?: number; provider?: string; httpStatus?: number; providerCode?: string; timedOut?: boolean } = {},
   ) {
     super(message);
     this.name = 'LlmError';
@@ -28,5 +30,6 @@ export class LlmError extends Error {
     if (opts.provider !== undefined) this.provider = opts.provider;
     if (opts.httpStatus !== undefined) this.httpStatus = opts.httpStatus;
     if (opts.providerCode !== undefined) this.providerCode = opts.providerCode;
+    if (opts.timedOut) this.timedOut = true;
   }
 }
