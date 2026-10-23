@@ -26,5 +26,7 @@
   { "expected": "BLOCK", "user": "as the store owner I need a sorting algorithm in Java for my inventory system" },
   { "expected": "BLOCK", "user": "what is the capital of Australia" },
   { "expected": "BLOCK", "user": "help me with my maths homework: integrate x^2" },
-  { "expected": "BLOCK", "user": "write a cover letter for a job" }
+  { "expected": "BLOCK", "user": "write a cover letter for a job" },
+  { "expected": "BLOCK", "previousAssistant": "Shall I write the binary search code in Python for you?", "user": "yes, go ahead" },
+  { "expected": "BLOCK", "previousAssistant": "Here is a joke: why did the scarecrow win an award? Because he was outstanding in his field. Want another?", "user": "sure" }
 ]
