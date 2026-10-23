@@ -291,6 +291,8 @@ $reNp = $reDocs | Where-Object { $_ -match '(?m)^kind: NetworkPolicy' -and $_ -m
 Report 'external store: mcp-woocommerce egress is the internet rule (443, 80, private ranges excluded) plus the extra CIDR on 443, no WordPress rule' ([bool]($reNp -and
     $reNp -match 'cidr: 0\.0\.0\.0/0' -and $reNp -match '- 10\.0\.0\.0/8' -and $reNp -match '- 169\.254\.0\.0/16' -and $reNp -match 'port: 443' -and $reNp -match 'port: 80 ' -and
     $reNp -match 'cidr: "10\.1\.2\.0/24"' -and $reNp -notmatch 'name: wordpress' -and $reNp -notmatch 'metadata\.name: store'))
+Report 'external URL with store.enabled=true renders no store-woo-api Secret in mcp (cannot clash with a pre-created one)' (($re.Code -eq 0) -and -not ($reDocs | Where-Object { $_ -match '(?m)^kind: Secret' -and $_ -match '(?m)^  name: store-woo-api\s*$' -and $_ -match '(?m)^  namespace: mcp\s*$' }))
+Report 'default render still has the store-woo-api Secret in mcp and store' (@($docs | Where-Object { $_ -match '(?m)^kind: Secret' -and $_ -match '(?m)^  name: store-woo-api\s*$' }).Count -eq 2)
 Report 'external store with the in-cluster store still on keeps the store rendered' (($re.Out -match '(?m)^kind: Deployment') -and ($re.Out -match '(?m)^  name: wordpress\s*$'))
 
 $eo = Invoke-Helm (@('template', 'urumi', $chart, '-n', 'urumi-system', '-f', $local, '--set', 'store.enabled=false') + $extSets)

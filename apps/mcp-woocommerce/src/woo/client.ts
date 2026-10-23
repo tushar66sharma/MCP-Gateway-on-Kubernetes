@@ -22,7 +22,11 @@ export interface WooClientOptions {
 
 /** WooCommerce REST v3 client. Never retries: a retry would reuse a nonce and could duplicate writes. */
 export class WooClient implements WooApi {
-  constructor(private readonly o: WooClientOptions) {}
+  constructor(private readonly o: WooClientOptions) {
+    if (o.authMode === 'basic' && !o.baseUrl.startsWith('https://')) {
+      throw new Error('WooClient: basic auth requires an https:// base URL');
+    }
+  }
 
   get<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
     return this.request<T>('GET', path, query, undefined);

@@ -220,4 +220,14 @@ describe('WooClient basic mode', () => {
     const e = await failure(net.client.get('/products'));
     expect(e.message).not.toContain(b64);
   });
+
+  it('refuses basic mode with a non-https base URL, without echoing credentials', () => {
+    let message = '';
+    try {
+      new WooClient({ baseUrl: 'http://shop.example.com', signingBaseUrl: '', authMode: 'basic', consumerKey, consumerSecret, timeoutMs: 1000 });
+    } catch (e) { message = (e as Error).message; }
+    expect(message).toMatch(/https/);
+    expect(message).not.toContain(consumerKey);
+    expect(message).not.toContain('shop.example.com');
+  });
 });
